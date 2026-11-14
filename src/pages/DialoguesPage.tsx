@@ -32,7 +32,7 @@ export function DialoguesPage() {
 
   return (
     <div>
-      <PageHeader title="대화문" description="대화문 전체를 하나의 학습 단위로 외웁니다." />
+      <PageHeader title="외우기" description="대화문 하나를 통째로 외워요. 한 단계씩만 해도 충분해요." />
 
       <div className="mb-4 flex gap-1.5" role="tablist" aria-label="대화문 종류">
         {(
@@ -68,13 +68,13 @@ export function DialoguesPage() {
           <EmptyState icon="chat" title="대화문이 없어요" />
         </Card>
       ) : (
-        <ul className="grid gap-3 md:grid-cols-2">
+        <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {rows.map((d) => {
             const p = progressById.get(d.id);
             const video = d.videoId ? videoById.get(d.videoId) : undefined;
             const keyCount = d.lines.flatMap((l) => l.segments).filter((s) => s.kind === 'key').length;
             return (
-              <li key={d.id}>
+              <li key={d.id} className="min-w-0">
                 <Link to={`/dialogues/${d.id}`} className="block h-full">
                   <Card className="flex h-full flex-col p-4 transition-colors hover:border-line-strong">
                     <div className="flex items-start gap-2">
@@ -102,8 +102,10 @@ export function DialoguesPage() {
                     </div>
                     <p className="mt-1 line-clamp-2 text-sm text-muted">{d.situation}</p>
                     <div className="mt-auto flex items-center justify-between gap-3 pt-3">
-                      <StepDots completed={p?.highestCompletedStep ?? 0} current={p?.currentStep} />
-                      <span className="truncate text-xs text-subtle">
+                      <span className="shrink-0">
+                        <StepDots completed={p?.highestCompletedStep ?? 0} current={p?.currentStep} />
+                      </span>
+                      <span className="min-w-0 truncate text-xs text-subtle">
                         {d.lines.length}줄 · 핵심 {keyCount}
                         {video && ` · ${video.title.replace('[샘플] ', '')}`}
                       </span>

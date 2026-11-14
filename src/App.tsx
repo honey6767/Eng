@@ -14,6 +14,7 @@ import { ExpressionsPage } from '@/pages/ExpressionsPage';
 import { FavoritesPage } from '@/pages/FavoritesPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { MorePage } from '@/pages/MorePage';
+import { CollectionPage } from '@/pages/CollectionPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 
 export default function App() {
@@ -46,6 +47,7 @@ export default function App() {
             <Route path="expressions" element={<ExpressionsPage />} />
             <Route path="favorites" element={<FavoritesPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="collection" element={<CollectionPage />} />
             <Route path="more" element={<MorePage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>

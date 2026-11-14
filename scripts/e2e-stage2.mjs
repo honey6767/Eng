@@ -202,20 +202,25 @@ async function mockSuite(base) {
   check('학습 시작한 영상은 이번 회차에서 다음으로 넘어감', await textMatches(page.getByTestId('queue-current-title'), new RegExp(`^(?!${second.replace(/[[\]]/g, '\\$&')}$)`)));
   await page.screenshot({ path: `${SHOTS}/s2-04-videos-page.png`, fullPage: false });
 
-  // 대시보드에도 오늘의 영상
+  // 오늘의 신규 영상(무작위 순서)은 A단계부터 '콘텐츠 준비 > 영상' 화면에 있다. 홈은 오늘의 대화문을 보여 준다.
+  check('영상 화면: 오늘의 신규 영상 카드', await visible(page.getByTestId('study-queue').getByRole('button', { name: '이 영상 학습 시작' })));
   await page.goto(base);
-  check('대시보드: 오늘의 신규 영상 카드', await visible(page.getByTestId('study-queue').getByRole('button', { name: '학습 시작' })));
+  check('홈: 오늘의 대화문 표시', await visible(page.getByTestId('today-dialogue')));
   // 12. 기존(샘플) 데이터 보존
-  check('기존 샘플 대화문 유지 (대화문 3)', await textMatches(page.getByTestId('stat-학습한 대화문'), /^2$/) && (await visible(page.getByText('암기 완료 1 / 전체 3'))));
-  check('대시보드 학습 영상 = 124', await textMatches(page.getByTestId('stat-학습 영상'), /^124$/));
+  await page.goto(`${base}/dialogues`);
+  check('기존 샘플 대화문 유지 (대화문 3)', await textMatches(page.getByRole('tab', { name: /^영상 원본 대화문/ }), /3/));
+  await page.goto(base);
+  check('기존 암기 기록 유지 (외운 대화문 1)', await textMatches(page.getByTestId('stat-외운 대화문'), /^1$/));
+  await page.goto(`${base}/videos`);
+  check('전체 영상 = 124', await textMatches(page.getByRole('tab', { name: /^전체/ }), /124/));
 
   // 샘플 삭제 → 실제 영상 보존
   await page.goto(`${base}/settings`);
   await page.getByRole('button', { name: '샘플 데이터 삭제' }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: '샘플 삭제' }).click();
   await page.getByRole('button', { name: '샘플 데이터 다시 넣기' }).waitFor();
-  await page.goto(base);
-  check('샘플 삭제 후 실제 영상 121개 보존', await textMatches(page.getByTestId('stat-학습 영상'), /^121$/));
+  await page.goto(`${base}/videos`);
+  check('샘플 삭제 후 실제 영상 121개 보존', await textMatches(page.getByRole('tab', { name: /^전체/ }), /121/));
   await page.goto(`${base}/videos/${await page.evaluate(() => '')}`);
   await page.goto(`${base}/videos`);
   await page.getByTestId('video-list').getByText('[MOCK] 테스트 영상 5', { exact: true }).click();
@@ -224,8 +229,8 @@ async function mockSuite(base) {
   await page.goto(`${base}/settings`);
   await page.getByRole('button', { name: '샘플 데이터 다시 넣기' }).click();
   await page.getByRole('button', { name: '샘플 데이터 삭제' }).waitFor();
-  await page.goto(base);
-  check('샘플 다시 넣기 후 124개 (실제 데이터 그대로)', await textMatches(page.getByTestId('stat-학습 영상'), /^124$/));
+  await page.goto(`${base}/videos`);
+  check('샘플 다시 넣기 후 124개 (실제 데이터 그대로)', await textMatches(page.getByRole('tab', { name: /^전체/ }), /124/));
 
   // 11. 전체 학습 후 재셔플 — 작은 재생목록으로 새 브라우저에서
   const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 900 } });
