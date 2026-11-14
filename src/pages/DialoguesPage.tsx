@@ -1,0 +1,120 @@
+import { Link } from 'react-router-dom';
+import { useState } from 'react';
+import { repos } from '@/repositories';
+import { useLiveData } from '@/hooks/useLiveData';
+import { useToast } from '@/hooks/useToast';
+import { PageHeader } from '@/components/layout/PageHeader';
+import { Card } from '@/components/ui/Card';
+import { Badge } from '@/components/ui/Badge';
+import { StepDots } from '@/components/ui/ProgressBar';
+import { FavoriteButton } from '@/components/ui/FavoriteButton';
+import { PlannedNotice } from '@/components/ui/PlannedNotice';
+import { Loading } from '@/components/ui/Loading';
+import { EmptyState } from '@/components/ui/EmptyState';
+import type { DialogueKind } from '@/types/models';
+
+export function DialoguesPage() {
+  const [kind, setKind] = useState<DialogueKind>('original');
+  const toast = useToast();
+  const data = useLiveData(async () => {
+    const [dialogues, progress, videos] = await Promise.all([
+      repos.dialogues.list(),
+      repos.dialogueProgress.list(),
+      repos.videos.list(),
+    ]);
+    return { dialogues, progress, videos };
+  }, []);
+
+  if (!data) return <Loading />;
+  const progressById = new Map(data.progress.map((p) => [p.dialogueId, p]));
+  const videoById = new Map(data.videos.map((v) => [v.id, v]));
+  const rows = data.dialogues.filter((d) => d.kind === kind);
+
+  return (
+    <div>
+      <PageHeader title="대화문" description="대화문 전체를 하나의 학습 단위로 외웁니다." />
+
+      <div className="mb-4 flex gap-1.5" role="tablist" aria-label="대화문 종류">
+        {(
+          [
+            ['original', '영상 원본 대화문'],
+            ['combined', '취약 표현 조합 대화문'],
+          ] as const
+        ).map(([k, label]) => (
+          <button
+            key={k}
+            role="tab"
+            aria-selected={kind === k}
+            onClick={() => setKind(k)}
+            className={`h-9 rounded-full px-3.5 text-sm font-semibold transition-colors ${
+              kind === k ? 'bg-ink text-white' : 'border border-line bg-surface text-muted hover:text-ink'
+            }`}
+          >
+            {label} <span className="opacity-70">{data.dialogues.filter((d) => d.kind === k).length}</span>
+          </button>
+        ))}
+      </div>
+
+      {kind === 'combined' && (
+        <div className="mb-4">
+          <PlannedNotice title="누적 취약 표현으로 새 대화문 생성" stage="7단계">
+            AI API가 아직 연결되지 않았습니다. 연동 전에는 조합 대화문을 생성할 수 없습니다.
+          </PlannedNotice>
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <Card>
+          <EmptyState icon="chat" title="대화문이 없어요" />
+        </Card>
+      ) : (
+        <ul className="grid gap-3 md:grid-cols-2">
+          {rows.map((d) => {
+            const p = progressById.get(d.id);
+            const video = d.videoId ? videoById.get(d.videoId) : undefined;
+            const keyCount = d.lines.flatMap((l) => l.segments).filter((s) => s.kind === 'key').length;
+            return (
+              <li key={d.id}>
+                <Link to={`/dialogues/${d.id}`} className="block h-full">
+                  <Card className="flex h-full flex-col p-4 transition-colors hover:border-line-strong">
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap gap-1">
+                          {p?.memorized ? (
+                            <Badge tone="ok">암기 완료</Badge>
+                          ) : p && p.highestCompletedStep > 0 ? (
+                            <Badge tone="warn">학습 중</Badge>
+                          ) : (
+                            <Badge>시작 전</Badge>
+                          )}
+                          {d.isSample && <Badge>샘플</Badge>}
+                        </div>
+                        <p className="mt-1.5 font-bold">{d.title}</p>
+                      </div>
+                      <FavoriteButton
+                        active={d.isFavorite}
+                        label={d.title}
+                        onToggle={async () => {
+                          await repos.dialogues.setFavorite(d.id, !d.isFavorite);
+                          toast(d.isFavorite ? '즐겨찾기에서 해제했어요' : '즐겨찾기에 추가했어요');
+                        }}
+                      />
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-sm text-muted">{d.situation}</p>
+                    <div className="mt-auto flex items-center justify-between gap-3 pt-3">
+                      <StepDots completed={p?.highestCompletedStep ?? 0} current={p?.currentStep} />
+                      <span className="truncate text-xs text-subtle">
+                        {d.lines.length}줄 · 핵심 {keyCount}
+                        {video && ` · ${video.title.replace('[샘플] ', '')}`}
+                      </span>
+                    </div>
+                  </Card>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}

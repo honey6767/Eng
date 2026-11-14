@@ -1,0 +1,61 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo',
+    'Noto Sans KR', 'Malgun Gothic', 'Segoe UI', Roboto, sans-serif;
+
+  --color-canvas: #f6f6f3;
+  --color-surface: #ffffff;
+  --color-ink: #1f2522;
+  --color-muted: #5b6661;
+  --color-subtle: #8a948f;
+  --color-line: #e5e5df;
+  --color-line-strong: #d4d4cc;
+
+  --color-brand: #2f5d50;
+  --color-brand-strong: #244a40;
+  --color-brand-soft: #e6efeb;
+
+  --color-key: #fbefc4;
+  --color-key-ink: #6f5200;
+
+  --color-danger: #b4443a;
+  --color-danger-soft: #f8e6e3;
+  --color-warn: #a86a00;
+  --color-warn-soft: #fbf0d9;
+  --color-ok: #2f7a4f;
+  --color-ok-soft: #e3f2e8;
+  --color-info: #3b5f9a;
+  --color-info-soft: #e6edf8;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  line-height: 1.55;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+/* 영어 학습 문장 */
+.en {
+  font-feature-settings: 'kern';
+  letter-spacing: -0.003em;
+  word-break: normal;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+.pb-safe {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem);
+}
