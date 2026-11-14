@@ -1,11 +1,16 @@
 import type { StudyDatabase, TableName } from '@/db/database';
 import { TABLE_NAMES } from '@/db/database';
-import type { Expression, MetadataSource, Playlist, Transcript, Video, VideoSource } from '@/types/models';
+import type { Expression, MetadataSource, Playlist, SourceRef, Transcript, Video, VideoSource } from '@/types/models';
 import { createId } from '@/utils/id';
 import { nowISO } from '@/utils/date';
 import { normalizeExpressionKey } from '@/utils/text';
 import { reviewStateId } from '@/services/scheduler';
-import type { Repositories, TableCount, VideoUpsertResult } from './types';
+import type { KeySentencePatch, Repositories, TableCount, VideoUpsertResult } from './types';
+
+/** undefined 값은 빼고 반영 (부분 수정 시 기존 값 보존) */
+function pickDefined<T extends object>(patch: T): Partial<T> {
+  return Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
 
 /** 정보 출처 신뢰도 — 더 좋은 출처의 정보로만 덮어쓴다 */
 const SOURCE_RANK: Record<MetadataSource, number> = { youtube_api: 3, oembed: 2, rss: 2, manual: 1, sample: 0 };
@@ -183,6 +188,16 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
     expressionNotes: {
       listByVideo: async (videoId) =>
         (await db.expressionNotes.where('videoId').equals(videoId).toArray()).sort(byOrder),
+      get: (id) => db.expressionNotes.get(id),
+      add: async (note) => {
+        await db.expressionNotes.add(note);
+      },
+      update: async (id, patch) => {
+        await db.expressionNotes.update(id, { ...pickDefined(patch), updatedAt: nowISO() });
+      },
+      remove: async (id) => {
+        await db.expressionNotes.delete(id);
+      },
     },
 
     keySentences: {
@@ -193,6 +208,29 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
           .between([videoId, -Infinity], [videoId, Infinity])
           .toArray(),
       getMany: async (ids) => (await db.keySentences.bulkGet(ids)).filter((x) => x != null),
+      get: (id) => db.keySentences.get(id),
+      add: async (sentence) => {
+        await db.keySentences.add(sentence);
+      },
+      update: async (id, patch) => {
+        // 원문 보호: 허용된 필드만 반영 (english·videoId·order 등은 무시)
+        const allowed: (keyof KeySentencePatch)[] = [
+          'korean',
+          'situation',
+          'expressionIds',
+          'expressionSpans',
+          'timestampSec',
+          'status',
+          'correctCount',
+          'wrongCount',
+        ];
+        const safe: Record<string, unknown> = {};
+        for (const k of allowed) if (patch[k] !== undefined) safe[k] = patch[k];
+        await db.keySentences.update(id, { ...safe, updatedAt: nowISO() });
+      },
+      remove: async (id) => {
+        await db.keySentences.delete(id);
+      },
     },
 
     dialogues: {
@@ -266,6 +304,17 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
       setMarkedDifficult: async (id, marked) => {
         await db.expressions.update(id, { isMarkedDifficult: marked, updatedAt: nowISO() });
       },
+      removeSourceRef: (id, ref) =>
+        db.transaction('rw', db.expressions, async () => {
+          const e = await db.expressions.get(id);
+          if (!e) return;
+          const same = (r: SourceRef) =>
+            r.videoId === ref.videoId &&
+            (r.sentenceId ?? null) === (ref.sentenceId ?? null) &&
+            (r.dialogueId ?? null) === (ref.dialogueId ?? null);
+          const sourceRefs = e.sourceRefs.filter((r) => !same(r));
+          if (sourceRefs.length !== e.sourceRefs.length) await db.expressions.update(id, { sourceRefs, updatedAt: nowISO() });
+        }),
     },
 
     reviewStates: {

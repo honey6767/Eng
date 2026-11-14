@@ -187,6 +187,19 @@ export interface ExpressionNote extends BaseRecord {
 
 export type LearningStatus = 'not_started' | 'learning' | 'reviewing' | 'memorized';
 
+/**
+ * 3단계 — 핵심 문장 안에서 핵심 표현이 차지하는 위치 (english 기준 글자 위치, end는 미포함).
+ * 5단계 빈칸 위치로 사용한다. 'slipped my mind'처럼 형태가 바뀐 표현도 정확히 가리키기 위함.
+ */
+export interface ExpressionSpan {
+  expressionId: string;
+  start: number;
+  end: number;
+}
+
+/** 3단계 — 핵심 문장을 어디서 가져왔는지 */
+export type KeySentenceOrigin = 'transcript' | 'manual';
+
 export interface KeySentence extends BaseRecord {
   videoId: string;
   /** 1~5 */
@@ -200,6 +213,10 @@ export interface KeySentence extends BaseRecord {
   status: LearningStatus;
   correctCount: number;
   wrongCount: number;
+  /** 3단계(선택) — 핵심 표현 위치. 없으면 표현 텍스트로 자동 탐색 */
+  expressionSpans?: ExpressionSpan[];
+  /** 3단계(선택) — 선정 경로 */
+  origin?: KeySentenceOrigin;
 }
 
 // ─────────────────────────────────────────────
