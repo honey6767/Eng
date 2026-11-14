@@ -2,16 +2,22 @@ import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import { repos } from '@/repositories';
 import { useLiveData } from '@/hooks/useLiveData';
+import { useToast } from '@/hooks/useToast';
+import { useYouTubeStatus } from '@/hooks/useYouTubeStatus';
+import { youtubeClient } from '@/services/integrations/youtubeClient';
+import { importPlaylist } from '@/services/videoImportService';
 import { PageHeader } from '@/components/layout/PageHeader';
-import { Card } from '@/components/ui/Card';
+import { Card, SectionTitle } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { PlannedNotice } from '@/components/ui/PlannedNotice';
+import { Button } from '@/components/ui/Button';
 import { Loading } from '@/components/ui/Loading';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { VideoThumb } from '@/components/video/VideoThumb';
-import { formatDuration } from '@/utils/date';
+import { AddVideoForm } from '@/components/video/AddVideoForm';
+import { StudyQueueCard } from '@/components/video/StudyQueueCard';
+import { formatDateKo, formatDuration } from '@/utils/date';
 import { TRANSCRIPT_STATUS, VIDEO_STATUS } from '@/utils/labels';
-import type { VideoStatus } from '@/types/models';
+import type { Playlist, VideoStatus } from '@/types/models';
 
 const FILTERS: { key: VideoStatus | 'all'; label: string }[] = [
   { key: 'all', label: '전체' },
@@ -19,88 +25,210 @@ const FILTERS: { key: VideoStatus | 'all'; label: string }[] = [
   { key: 'in_progress', label: '학습 중' },
   { key: 'completed', label: '완료' },
 ];
+const PAGE = 30;
 
 export function VideosPage() {
+  const { status, refresh } = useYouTubeStatus();
   const [filter, setFilter] = useState<VideoStatus | 'all'>('all');
+  const [sourceFilter, setSourceFilter] = useState<string>('all');
+  const [limit, setLimit] = useState(PAGE);
+
   const data = useLiveData(async () => {
-    const [videos, sentences, dialogues] = await Promise.all([
+    const [videos, playlists, sentences] = await Promise.all([
       repos.videos.list(),
+      repos.playlists.list(),
       repos.keySentences.list(),
-      repos.dialogues.list('original'),
     ]);
-    const transcripts = await Promise.all(videos.map((v) => repos.transcripts.getByVideo(v.id)));
-    return videos.map((v, i) => ({
-      video: v,
-      transcript: transcripts[i],
-      sentenceCount: sentences.filter((s) => s.videoId === v.id).length,
-      dialogueCount: dialogues.filter((d) => d.videoId === v.id).length,
-    }));
+    const ts = await Promise.all(videos.map((v) => repos.transcripts.getByVideo(v.id)));
+    return {
+      playlists,
+      rows: videos.map((v, i) => ({
+        video: v,
+        transcript: ts[i],
+        sentenceCount: sentences.filter((s) => s.videoId === v.id).length,
+      })),
+    };
   }, []);
 
   if (!data) return <Loading />;
-  const rows = filter === 'all' ? data : data.filter((r) => r.video.status === filter);
+  const playlistById = new Map(data.playlists.map((p) => [p.id, p]));
+
+  const bySource = data.rows.filter(({ video }) => {
+    if (sourceFilter === 'all') return true;
+    if (sourceFilter === 'manual') return video.sources?.some((s) => s.kind === 'manual');
+    if (sourceFilter === 'sample') return video.isSample;
+    return video.sources?.some((s) => s.kind === 'playlist' && s.playlistId === sourceFilter);
+  });
+  const rows = filter === 'all' ? bySource : bySource.filter((r) => r.video.status === filter);
+  const hasManual = data.rows.some((r) => r.video.sources?.some((s) => s.kind === 'manual') && !r.video.isSample);
 
   return (
-    <div>
-      <PageHeader title="영상" description="영상별 학습 자료와 진행 상태를 확인합니다." />
+    <div className="space-y-6">
+      <PageHeader title="영상" description="재생목록이나 영상을 등록하고, 무작위 순서 또는 원하는 영상으로 학습합니다." />
 
-      <div className="mb-5">
-        <PlannedNotice title="재생목록 URL 등록 · 영상 목록 불러오기 · 무작위 학습 순서" stage="2단계">
-          지금은 샘플 영상만 표시됩니다. 2단계에서 재생목록을 등록하고 영상 정보를 저장할 수 있게 됩니다.
-        </PlannedNotice>
+      <AddVideoForm status={status} onImported={refresh} />
+      <StudyQueueCard />
+
+      {data.playlists.length > 0 && (
+        <section>
+          <SectionTitle>재생목록</SectionTitle>
+          <Card className="divide-y divide-line">
+            {data.playlists.map((p) => (
+              <PlaylistRow
+                key={p.id}
+                playlist={p}
+                videoCount={data.rows.filter((r) => r.video.sources?.some((s) => s.kind === 'playlist' && s.playlistId === p.id)).length}
+                canSync={status?.available === true}
+                onSynced={refresh}
+              />
+            ))}
+          </Card>
+        </section>
+      )}
+
+      <section>
+        <SectionTitle action={<span className="text-sm text-muted">{rows.length}개</span>}>영상 목록</SectionTitle>
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="flex gap-1.5 overflow-x-auto" role="tablist" aria-label="학습 상태 필터">
+            {FILTERS.map((f) => {
+              const count = f.key === 'all' ? bySource.length : bySource.filter((r) => r.video.status === f.key).length;
+              const active = filter === f.key;
+              return (
+                <button
+                  key={f.key}
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => {
+                    setFilter(f.key);
+                    setLimit(PAGE);
+                  }}
+                  className={`h-9 shrink-0 rounded-full px-3.5 text-sm font-semibold transition-colors ${
+                    active ? 'bg-ink text-white' : 'border border-line bg-surface text-muted hover:text-ink'
+                  }`}
+                >
+                  {f.label} <span className="ml-0.5 opacity-70">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+          <select
+            value={sourceFilter}
+            onChange={(e) => {
+              setSourceFilter(e.target.value);
+              setLimit(PAGE);
+            }}
+            aria-label="출처 필터"
+            className="h-9 rounded-xl border border-line bg-surface px-2.5 text-sm text-muted outline-none focus:border-brand sm:ml-auto sm:max-w-64"
+          >
+            <option value="all">모든 출처</option>
+            {data.playlists.map((p) => (
+              <option key={p.id} value={p.id}>
+                재생목록: {p.title}
+              </option>
+            ))}
+            {hasManual && <option value="manual">개별 등록 영상</option>}
+            {data.rows.some((r) => r.video.isSample) && <option value="sample">샘플 데이터</option>}
+          </select>
+        </div>
+
+        {rows.length === 0 ? (
+          <Card>
+            <EmptyState icon="video" title={data.rows.length === 0 ? '등록된 영상이 없어요' : '해당하는 영상이 없어요'}>
+              {data.rows.length === 0 && '위에서 재생목록이나 영상 URL을 등록해 주세요.'}
+            </EmptyState>
+          </Card>
+        ) : (
+          <>
+            <ul className="grid gap-3 md:grid-cols-2" data-testid="video-list">
+              {rows.slice(0, limit).map(({ video, transcript, sentenceCount }) => {
+                const st = VIDEO_STATUS[video.status];
+                const tsKey = transcript?.status ?? 'none';
+                const manual = video.sources?.some((s) => s.kind === 'manual');
+                const pl = video.sources?.find((s) => s.kind === 'playlist');
+                return (
+                  <li key={video.id}>
+                    <Link to={`/videos/${video.id}`} className="block h-full">
+                      <Card className="flex h-full gap-3.5 p-3.5 transition-colors hover:border-line-strong">
+                        <VideoThumb title={video.title} thumbnailUrl={video.thumbnailUrl} className="w-28 shrink-0 self-start sm:w-32" />
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <div className="flex flex-wrap gap-1">
+                            <Badge tone={st.tone}>{st.label}</Badge>
+                            {video.isSample && <Badge>샘플</Badge>}
+                            {manual && !video.isSample && <Badge tone="info">개별 등록</Badge>}
+                          </div>
+                          <p className="mt-1.5 line-clamp-2 leading-snug font-semibold">{video.title}</p>
+                          <p className="mt-auto pt-2 text-xs text-muted">
+                            {formatDuration(video.durationSec)}
+                            {video.isSample ? ` · 핵심 문장 ${sentenceCount}/5` : video.channelTitle ? ` · ${video.channelTitle}` : ''}
+                          </p>
+                          <p className={`truncate text-xs ${tsKey === 'failed' ? 'text-danger' : 'text-subtle'}`}>
+                            {TRANSCRIPT_STATUS[tsKey].label}
+                            {pl && pl.kind === 'playlist' && playlistById.get(pl.playlistId) && !video.isSample
+                              ? ` · ${playlistById.get(pl.playlistId)!.title}${pl.position != null ? ` #${pl.position + 1}` : ''}`
+                              : ''}
+                          </p>
+                        </div>
+                      </Card>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+            {rows.length > limit && (
+              <div className="mt-4 text-center">
+                <Button variant="secondary" onClick={() => setLimit((l) => l + PAGE)}>
+                  더 보기 ({rows.length - limit}개 남음)
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function PlaylistRow({ playlist, videoCount, canSync, onSynced }: { playlist: Playlist; videoCount: number; canSync: boolean; onSynced: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const s = playlist.lastSyncSummary;
+  return (
+    <div className="flex flex-col gap-2 px-4 py-3.5 sm:flex-row sm:items-center" data-testid="playlist-row">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <p className="font-semibold">{playlist.title}</p>
+          {playlist.isSample && <Badge>샘플</Badge>}
+          {playlist.syncStatus === 'failed' && <Badge tone="danger">불러오기 실패</Badge>}
+          {playlist.syncSource === 'rss' && <Badge tone="warn">일부만 (RSS 제한 모드)</Badge>}
+        </div>
+        <p className="text-xs text-muted">
+          등록 영상 {videoCount}개
+          {playlist.itemCount != null && ` · YouTube 기준 ${playlist.itemCount}개`}
+          {s && s.unavailable > 0 && ` · 불러올 수 없는 영상 ${s.unavailable}개`}
+          {playlist.lastSyncedAt && ` · 마지막 불러오기 ${formatDateKo(playlist.lastSyncedAt)}`}
+        </p>
+        {playlist.syncStatus === 'failed' && playlist.syncError && <p className="text-xs text-danger">{playlist.syncError}</p>}
       </div>
-
-      <div className="mb-4 flex gap-1.5 overflow-x-auto" role="tablist" aria-label="학습 상태 필터">
-        {FILTERS.map((f) => {
-          const count = f.key === 'all' ? data.length : data.filter((r) => r.video.status === f.key).length;
-          const active = filter === f.key;
-          return (
-            <button
-              key={f.key}
-              role="tab"
-              aria-selected={active}
-              onClick={() => setFilter(f.key)}
-              className={`h-9 shrink-0 rounded-full px-3.5 text-sm font-semibold transition-colors ${
-                active ? 'bg-ink text-white' : 'border border-line bg-surface text-muted hover:text-ink'
-              }`}
-            >
-              {f.label} <span className="ml-0.5 opacity-70">{count}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {rows.length === 0 ? (
-        <Card>
-          <EmptyState icon="video" title="해당하는 영상이 없어요" />
-        </Card>
-      ) : (
-        <ul className="grid gap-3 md:grid-cols-2">
-          {rows.map(({ video, transcript, sentenceCount, dialogueCount }) => {
-            const status = VIDEO_STATUS[video.status];
-            const ts = TRANSCRIPT_STATUS[transcript?.status ?? 'none'];
-            return (
-              <li key={video.id}>
-                <Link to={`/videos/${video.id}`} className="block h-full">
-                  <Card className="flex h-full gap-3.5 p-3.5 transition-colors hover:border-line-strong">
-                    <VideoThumb title={video.title} thumbnailUrl={video.thumbnailUrl} className="w-28 shrink-0 sm:w-32" />
-                    <div className="flex min-w-0 flex-1 flex-col">
-                      <div className="flex flex-wrap gap-1">
-                        <Badge tone={status.tone}>{status.label}</Badge>
-                        {video.isSample && <Badge>샘플</Badge>}
-                      </div>
-                      <p className="mt-1.5 line-clamp-2 leading-snug font-semibold">{video.title}</p>
-                      <p className="mt-auto pt-2 text-xs text-muted">
-                        {formatDuration(video.durationSec)} · 핵심 문장 {sentenceCount}/5 · 대화문 {dialogueCount}
-                      </p>
-                      <p className={`text-xs ${transcript?.status === 'failed' ? 'text-danger' : 'text-subtle'}`}>{ts.label}</p>
-                    </div>
-                  </Card>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+      {playlist.youtubePlaylistId && (
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={!canSync || busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const r = await importPlaylist(repos, youtubeClient, playlist.youtubePlaylistId!);
+              toast(`다시 불러왔어요 · 새 영상 ${r.added}개`);
+            } catch (e) {
+              toast(e instanceof Error ? e.message : '불러오기 실패', 'error');
+            } finally {
+              setBusy(false);
+              onSynced();
+            }
+          }}
+        >
+          {busy ? '불러오는 중…' : '새 영상 확인'}
+        </Button>
       )}
     </div>
   );

@@ -1,0 +1,13 @@
+# (선택) Cloudflare Workers 무료 플랜 배포용 예시 설정
+# 사용하려면 wrangler.toml 로 복사한 뒤:
+#   npx wrangler login
+#   npx wrangler secret put YOUTUBE_API_KEY   ← 키는 여기서만 입력 (파일에 쓰지 마세요)
+#   npx wrangler deploy
+# Free 플랜은 결제 수단 없이 사용 가능하며, 한도 초과 시 요청이 거부될 뿐 자동 과금되지 않습니다.
+name = "my-english-study-youtube"
+main = "server/worker.ts"
+compatibility_date = "2026-01-01"
+
+[vars]
+ALLOWED_ORIGIN = "https://your-app.example.com"
+YOUTUBE_DAILY_UNIT_CAP = "9000"

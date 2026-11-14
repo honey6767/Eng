@@ -68,18 +68,29 @@ export function relativeDayLabel(iso: string | null, now = new Date()): string {
   return `${-diff}일 지남`;
 }
 
+/** 영상 길이: "12분 35초", "1시간 2분 3초", "45초" */
 export function formatDuration(sec: number | null): string {
   if (sec == null) return '길이 미확인';
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = Math.floor(sec % 60);
-  const mmss = `${String(m).padStart(h ? 2 : 1, '0')}:${String(s).padStart(2, '0')}`;
-  return h ? `${h}:${mmss}` : mmss;
+  const total = Math.round(sec);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const parts: string[] = [];
+  if (h) parts.push(`${h}시간`);
+  if (m) parts.push(`${m}분`);
+  if (s || parts.length === 0) parts.push(`${s}초`);
+  return parts.join(' ');
 }
 
+/** 자막/영상 위치: "0:42", "12:05", "1:02:03" */
 export function formatTimestamp(sec: number | null): string | null {
   if (sec == null) return null;
-  return formatDuration(sec);
+  const total = Math.floor(sec);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mmss = `${h ? String(m).padStart(2, '0') : m}:${String(s).padStart(2, '0')}`;
+  return h ? `${h}:${mmss}` : mmss;
 }
 
 export function formatDateKo(iso: string | null): string {

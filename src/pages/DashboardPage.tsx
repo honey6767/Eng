@@ -14,6 +14,7 @@ import { Loading } from '@/components/ui/Loading';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { relativeDayLabel, weekdayKo } from '@/utils/date';
 import { STEP_NAMES } from '@/utils/labels';
+import { StudyQueueCard } from '@/components/video/StudyQueueCard';
 
 const PRIORITY_TONE: Record<ReviewPriority, BadgeTone> = {
   1: 'danger',
@@ -53,6 +54,8 @@ export function DashboardPage() {
           </p>
         </div>
       )}
+
+      <StudyQueueCard compact />
 
       <div className="grid gap-4 lg:grid-cols-5">
         <TodayReviewCard stats={stats} />

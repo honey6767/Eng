@@ -1,11 +1,14 @@
 import type { StudyDatabase, TableName } from '@/db/database';
 import { TABLE_NAMES } from '@/db/database';
-import type { Expression } from '@/types/models';
+import type { Expression, MetadataSource, Playlist, Transcript, Video, VideoSource } from '@/types/models';
 import { createId } from '@/utils/id';
 import { nowISO } from '@/utils/date';
 import { normalizeExpressionKey } from '@/utils/text';
 import { reviewStateId } from '@/services/scheduler';
-import type { Repositories, TableCount } from './types';
+import type { Repositories, TableCount, VideoUpsertResult } from './types';
+
+/** 정보 출처 신뢰도 — 더 좋은 출처의 정보로만 덮어쓴다 */
+const SOURCE_RANK: Record<MetadataSource, number> = { youtube_api: 3, oembed: 2, rss: 2, manual: 1, sample: 0 };
 
 export const TABLE_LABELS: Record<TableName, string> = {
   playlists: '재생목록',
@@ -28,21 +31,153 @@ const byOrder = <T extends { order: number }>(a: T, b: T) => a.order - b.order;
 export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
   return {
     playlists: {
-      list: () => db.playlists.orderBy('id').toArray(),
+      list: async () => (await db.playlists.toArray()).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
       get: (id) => db.playlists.get(id),
+      getByYouTubeId: (ytId) => db.playlists.where('youtubePlaylistId').equals(ytId).first(),
+      upsertByYouTubeId: (input) =>
+        db.transaction('rw', db.playlists, async () => {
+          const now = nowISO();
+          const existing = await db.playlists.where('youtubePlaylistId').equals(input.youtubePlaylistId).first();
+          if (existing) {
+            const updated: Playlist = {
+              ...existing,
+              url: input.url,
+              title: input.title || existing.title,
+              channelTitle: input.channelTitle ?? existing.channelTitle ?? null,
+              thumbnailUrl: input.thumbnailUrl ?? existing.thumbnailUrl ?? null,
+              itemCount: input.itemCount ?? existing.itemCount ?? null,
+              updatedAt: now,
+            };
+            await db.playlists.put(updated);
+            return { playlist: updated, created: false };
+          }
+          const created: Playlist = {
+            id: createId(),
+            createdAt: now,
+            updatedAt: now,
+            url: input.url,
+            youtubePlaylistId: input.youtubePlaylistId,
+            title: input.title,
+            channelTitle: input.channelTitle,
+            thumbnailUrl: input.thumbnailUrl,
+            itemCount: input.itemCount,
+            lastSyncedAt: null,
+            syncStatus: 'never',
+            syncSource: null,
+            lastSyncSummary: null,
+          };
+          await db.playlists.add(created);
+          return { playlist: created, created: true };
+        }),
+      update: async (id, patch) => {
+        await db.playlists.update(id, { ...patch, updatedAt: nowISO() });
+      },
     },
 
     videos: {
       list: () => db.videos.orderBy('orderIndex').toArray(),
       get: (id) => db.videos.get(id),
+      getByYouTubeId: (ytId) => db.videos.where('youtubeVideoId').equals(ytId).first(),
       listByStatus: (status) => db.videos.where('status').equals(status).sortBy('orderIndex'),
       update: async (id, patch) => {
         await db.videos.update(id, { ...patch, updatedAt: nowISO() });
       },
+      upsertFromYouTube: (items, source) =>
+        db.transaction('rw', db.videos, async () => {
+          const now = nowISO();
+          let nextOrder = ((await db.videos.orderBy('orderIndex').last())?.orderIndex ?? -1) + 1;
+          const results: VideoUpsertResult[] = [];
+          const done = new Map<string, VideoUpsertResult>();
+
+          for (const item of items) {
+            if (done.has(item.youtubeVideoId)) continue;
+            const newSource: VideoSource =
+              source.kind === 'playlist'
+                ? { kind: 'playlist', playlistId: source.playlistId, position: item.position ?? null, addedAt: now }
+                : { kind: 'manual', addedAt: now };
+            const existing = await db.videos.where('youtubeVideoId').equals(item.youtubeVideoId).first();
+
+            if (existing) {
+              const sources = [...(existing.sources ?? [])];
+              const idx = sources.findIndex((s) =>
+                s.kind === 'playlist' && newSource.kind === 'playlist' ? s.playlistId === newSource.playlistId : s.kind === newSource.kind,
+              );
+              const linked = idx === -1;
+              if (linked) sources.push(newSource);
+              else if (newSource.kind === 'playlist') sources[idx] = { ...sources[idx], position: newSource.position } as VideoSource;
+
+              const better = SOURCE_RANK[item.metadataSource] >= SOURCE_RANK[existing.metadataSource ?? 'manual'];
+              const updated: Video = {
+                ...existing,
+                // 학습 상태·완료일·자막 확인 결과 등 기존 학습 데이터는 그대로 유지
+                title: better && item.title ? item.title : existing.title,
+                channelTitle: better ? (item.channelTitle ?? existing.channelTitle) : existing.channelTitle,
+                thumbnailUrl: better ? (item.thumbnailUrl ?? existing.thumbnailUrl) : existing.thumbnailUrl,
+                durationSec: item.durationSec ?? existing.durationSec,
+                metadataSource: better ? item.metadataSource : existing.metadataSource,
+                playlistId: existing.playlistId ?? (source.kind === 'playlist' ? source.playlistId : null),
+                sources,
+                updatedAt: now,
+              };
+              await db.videos.put(updated);
+              const r = { video: updated, created: false, linked };
+              done.set(item.youtubeVideoId, r);
+              results.push(r);
+              continue;
+            }
+
+            const created: Video = {
+              id: createId(),
+              createdAt: now,
+              updatedAt: now,
+              playlistId: source.kind === 'playlist' ? source.playlistId : null,
+              youtubeVideoId: item.youtubeVideoId,
+              title: item.title,
+              url: `https://www.youtube.com/watch?v=${item.youtubeVideoId}`,
+              thumbnailUrl: item.thumbnailUrl,
+              durationSec: item.durationSec,
+              orderIndex: nextOrder++,
+              randomOrderKey: Math.random(),
+              status: 'new',
+              completedAt: null,
+              sources: [newSource],
+              channelTitle: item.channelTitle,
+              metadataSource: item.metadataSource,
+              captionCheck: null,
+              startedAt: null,
+            };
+            await db.videos.add(created);
+            const r = { video: created, created: true, linked: false };
+            done.set(item.youtubeVideoId, r);
+            results.push(r);
+          }
+          return results;
+        }),
     },
 
     transcripts: {
       getByVideo: (videoId) => db.transcripts.where('videoId').equals(videoId).first(),
+      save: (videoId, input) =>
+        db.transaction('rw', db.transcripts, db.videos, async () => {
+          const now = nowISO();
+          const video = await db.videos.get(videoId);
+          const existing = await db.transcripts.where('videoId').equals(videoId).toArray();
+          await db.transcripts.bulkDelete(existing.map((t) => t.id));
+          const record: Transcript = {
+            id: createId(),
+            createdAt: existing[0]?.createdAt ?? now,
+            updatedAt: now,
+            videoId,
+            ...input,
+            // 샘플 영상에 붙인 자막은 샘플 삭제 시 함께 정리되도록 표시
+            ...(video?.isSample ? { isSample: true } : {}),
+          };
+          await db.transcripts.add(record);
+          return record;
+        }),
+      deleteByVideo: async (videoId) => {
+        await db.transcripts.where('videoId').equals(videoId).delete();
+      },
     },
 
     expressionNotes: {

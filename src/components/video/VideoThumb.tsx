@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Icon } from '@/components/ui/Icon';
 
 const palettes = ['#2f5d50', '#3b5f9a', '#8a5a2b', '#5b4a8a', '#2d6f73'];
@@ -9,8 +10,17 @@ function hash(s: string) {
 }
 
 export function VideoThumb({ title, thumbnailUrl, className = '' }: { title: string; thumbnailUrl: string | null; className?: string }) {
-  if (thumbnailUrl) {
-    return <img src={thumbnailUrl} alt="" loading="lazy" className={`aspect-video rounded-xl bg-canvas object-cover ${className}`} />;
+  const [failed, setFailed] = useState(false);
+  if (thumbnailUrl && !failed) {
+    return (
+      <img
+        src={thumbnailUrl}
+        alt=""
+        loading="lazy"
+        onError={() => setFailed(true)}
+        className={`aspect-video rounded-xl bg-canvas object-cover ${className}`}
+      />
+    );
   }
   const color = palettes[hash(title) % palettes.length];
   return (

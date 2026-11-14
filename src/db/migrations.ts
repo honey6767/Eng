@@ -14,9 +14,12 @@ import type Dexie from 'dexie';
  * 주의: IndexedDB는 boolean 값을 인덱싱할 수 없으므로 isSample/isFavorite 등은 인덱스에 넣지 않는다.
  * 인덱스 문법: '&'=고유, '*'=배열(multiEntry), '[a+b]'=복합 인덱스
  */
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
-export function applyMigrations(db: Dexie): void {
+/**
+ * @param upTo 테스트용 — 지정한 버전까지만 정의 (마이그레이션 테스트에서 구버전 DB를 만들 때 사용)
+ */
+export function applyMigrations(db: Dexie, upTo = CURRENT_SCHEMA_VERSION): void {
   // v1 — 최초 스키마 (1단계)
   db.version(1).stores({
     playlists: 'id, youtubePlaylistId',
@@ -32,6 +35,36 @@ export function applyMigrations(db: Dexie): void {
     studyLogs: 'id, date, timestamp, activity, [itemType+itemId]',
     appMeta: 'key',
   });
+
+  if (upTo < 2) return;
+
+  // v2 — 2단계: 영상 출처(sources)·자막 확인 결과·정보 출처 필드 추가.
+  // 인덱스는 그대로 두고(기존 데이터 위험 없음) 기존 레코드에 새 필드를 채운다. 레코드는 삭제하지 않는다.
+  db.version(2)
+    .stores({
+      videos: 'id, playlistId, youtubeVideoId, status, orderIndex, randomOrderKey',
+    })
+    .upgrade(async (tx) => {
+      await tx
+        .table('videos')
+        .toCollection()
+        .modify((v: Record<string, unknown>) => {
+          if (!Array.isArray(v.sources)) {
+            v.sources = v.playlistId
+              ? [{ kind: 'playlist', playlistId: v.playlistId, position: v.orderIndex ?? null, addedAt: v.createdAt }]
+              : [{ kind: 'manual', addedAt: v.createdAt }];
+          }
+          v.channelTitle ??= null;
+          v.captionCheck ??= null;
+          v.metadataSource ??= v.isSample ? 'sample' : null;
+        });
+      await tx
+        .table('transcripts')
+        .toCollection()
+        .modify((t: Record<string, unknown>) => {
+          t.format ??= null;
+        });
+    });
 
   // 예시 — 다음 버전 추가 시:
   // db.version(2)

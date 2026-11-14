@@ -10,9 +10,16 @@ import { Loading } from '@/components/ui/Loading';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Icon } from '@/components/ui/Icon';
 import { VideoThumb } from '@/components/video/VideoThumb';
-import { formatDuration, formatTimestamp } from '@/utils/date';
-import { LEARNING_STATUS, ORIGIN, TRANSCRIPT_STATUS, VIDEO_STATUS } from '@/utils/labels';
-import type { Dialogue, DialogueComposition, ExpressionNote, KeySentence, Transcript } from '@/types/models';
+import { VideoStatusControl } from '@/components/video/VideoStatusControl';
+import { YouTubePlayer, type SeekRequest } from '@/components/video/YouTubePlayer';
+import { TranscriptPanel } from '@/components/video/TranscriptPanel';
+import { Button } from '@/components/ui/Button';
+import { useToast } from '@/hooks/useToast';
+import { useYouTubeStatus } from '@/hooks/useYouTubeStatus';
+import { startVideo } from '@/services/studyQueue';
+import { formatDateKo, formatDuration, formatTimestamp } from '@/utils/date';
+import { LEARNING_STATUS, ORIGIN, TRANSCRIPT_STATUS } from '@/utils/labels';
+import type { Dialogue, DialogueComposition, ExpressionNote, KeySentence, Playlist } from '@/types/models';
 import { NotFoundPage } from './NotFoundPage';
 
 const TABS = [
@@ -26,26 +33,32 @@ type TabKey = (typeof TABS)[number]['key'];
 export function VideoDetailPage() {
   const { id = '' } = useParams();
   const [params, setParams] = useSearchParams();
-  const tab = (TABS.find((t) => t.key === params.get('tab'))?.key ?? 'preview') as TabKey;
+  const toast = useToast();
+  const { status: proxy, refresh: refreshProxy } = useYouTubeStatus();
+  const [seek, setSeek] = useState<SeekRequest | null>(null);
+  const tabParam = TABS.find((t) => t.key === params.get('tab'))?.key as TabKey | undefined;
 
   const data = useLiveData(async () => {
     const video = await repos.videos.get(id);
     if (!video) return null;
-    const [transcript, notes, sentences, dialogues, composition] = await Promise.all([
+    const [transcript, notes, sentences, dialogues, composition, playlists] = await Promise.all([
       repos.transcripts.getByVideo(id),
       repos.expressionNotes.listByVideo(id),
       repos.keySentences.listByVideo(id),
       repos.dialogues.listByVideo(id),
       repos.compositions.getByVideo(id),
+      repos.playlists.list(),
     ]);
-    return { video, transcript, notes, sentences, dialogues, composition };
+    return { video, transcript, notes, sentences, dialogues, composition, playlists };
   }, [id]);
 
   if (data === undefined) return <Loading />;
   if (data === null) return <NotFoundPage message="영상을 찾을 수 없어요." />;
 
-  const { video, transcript, notes, sentences, dialogues, composition } = data;
-  const status = VIDEO_STATUS[video.status];
+  const { video, transcript, notes, sentences, dialogues, composition, playlists } = data;
+  const playlistById = new Map<string, Playlist>(playlists.map((p) => [p.id, p]));
+  // 실제 영상은 2단계 기능인 자막 탭을 기본으로 연다
+  const tab: TabKey = tabParam ?? (video.isSample ? 'preview' : 'transcript');
   const counts: Record<TabKey, number | null> = {
     preview: new Set(notes.map((n) => n.expression)).size,
     sentences: sentences.length,
@@ -57,19 +70,64 @@ export function VideoDetailPage() {
     <div>
       <PageHeader back={{ to: '/videos', label: '영상 목록' }} title={video.title} />
 
-      <Card className="mb-5 flex flex-col gap-4 p-4 sm:flex-row">
-        <VideoThumb title={video.title} thumbnailUrl={video.thumbnailUrl} className="w-full sm:w-48" />
-        <div className="min-w-0 flex-1 space-y-2 text-sm">
-          <div className="flex flex-wrap gap-1.5">
-            <Badge tone={status.tone}>{status.label}</Badge>
-            <Badge tone={TRANSCRIPT_STATUS[transcript?.status ?? 'none'].tone}>
-              {TRANSCRIPT_STATUS[transcript?.status ?? 'none'].label}
-            </Badge>
-            {video.isSample && <Badge>샘플 데이터</Badge>}
+      <div className="mb-5 grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+        <div>
+          {video.youtubeVideoId ? (
+            <YouTubePlayer
+              videoId={video.youtubeVideoId}
+              title={video.title}
+              thumbnailUrl={video.thumbnailUrl}
+              seek={seek}
+              onPlay={() => setSeek({ sec: 0, nonce: Date.now() })}
+            />
+          ) : (
+            <VideoThumb title={video.title} thumbnailUrl={video.thumbnailUrl} className="w-full" />
+          )}
+        </div>
+        <Card className="space-y-3 p-4 text-sm">
+          <div>
+            <p className="mb-1.5 text-xs font-semibold text-muted">학습 상태</p>
+            <VideoStatusControl video={video} />
           </div>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-muted">
+          {video.status === 'new' && (
+            <Button
+              size="sm"
+              onClick={async () => {
+                await startVideo(repos, video);
+                toast('이 영상으로 학습을 시작했어요');
+              }}
+            >
+              이 영상으로 학습 시작
+            </Button>
+          )}
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-muted">
             <dt>길이</dt>
-            <dd className="text-ink">{formatDuration(video.durationSec)}</dd>
+            <dd className="text-ink" data-testid="video-duration">
+              {formatDuration(video.durationSec)}
+            </dd>
+            {video.channelTitle && (
+              <>
+                <dt>채널</dt>
+                <dd className="text-ink">{video.channelTitle}</dd>
+              </>
+            )}
+            <dt>자막</dt>
+            <dd>
+              <Badge tone={TRANSCRIPT_STATUS[transcript?.status ?? 'none'].tone}>{TRANSCRIPT_STATUS[transcript?.status ?? 'none'].label}</Badge>
+            </dd>
+            <dt>출처</dt>
+            <dd className="space-y-0.5 text-ink" data-testid="video-sources">
+              {video.isSample && <p>샘플 데이터 (실제 YouTube 영상 아님)</p>}
+              {!video.isSample &&
+                (video.sources ?? []).map((s, i) => (
+                  <p key={i}>
+                    {s.kind === 'playlist'
+                      ? `재생목록 ‘${playlistById.get(s.playlistId)?.title ?? '알 수 없음'}’${s.position != null ? ` ${s.position + 1}번째` : ''}`
+                      : '개별 URL 등록'}{' '}
+                    <span className="text-xs text-subtle">· {formatDateKo(s.addedAt)}</span>
+                  </p>
+                ))}
+            </dd>
             <dt>원본</dt>
             <dd className="min-w-0 truncate text-ink">
               {video.url ? (
@@ -81,9 +139,15 @@ export function VideoDetailPage() {
               )}
             </dd>
           </dl>
-          <p className="text-xs text-subtle">학습 완료 여부 변경 · 영상 정보 수정은 2단계에서 제공됩니다.</p>
-        </div>
-      </Card>
+          {video.metadataSource && ['oembed', 'rss', 'manual'].includes(video.metadataSource) && (
+            <p className="rounded-lg bg-warn-soft px-2.5 py-2 text-xs text-warn">
+              {video.metadataSource === 'manual'
+                ? '서버 연결 없이 ID만으로 등록한 영상입니다. 서버를 연결한 뒤 같은 URL을 다시 등록하면 제목·길이가 보강됩니다.'
+                : 'API 키 없이 제한 모드로 가져와 영상 길이를 확인하지 못했습니다. API 키 설정 후 다시 등록하면 보강됩니다.'}
+            </p>
+          )}
+        </Card>
+      </div>
 
       <div className="sticky top-14 z-20 -mx-4 mb-4 border-b border-line bg-canvas/95 px-4 backdrop-blur sm:-mx-6 sm:px-6 lg:top-0 lg:-mx-10 lg:px-10">
         <div className="flex gap-1 overflow-x-auto" role="tablist">
@@ -107,7 +171,18 @@ export function VideoDetailPage() {
       {tab === 'preview' && <PreviewNotes notes={notes} />}
       {tab === 'sentences' && <SentenceList sentences={sentences} dialogues={dialogues} />}
       {tab === 'dialogues' && <DialogueList dialogues={dialogues} composition={composition} sentences={sentences} />}
-      {tab === 'transcript' && <TranscriptView transcript={transcript} />}
+      {tab === 'transcript' && (
+        <TranscriptPanel
+          video={video}
+          transcript={transcript}
+          proxy={proxy}
+          onUsageChanged={refreshProxy}
+          onSeek={(sec) => {
+            setSeek({ sec, nonce: Date.now() });
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -327,59 +402,5 @@ function DialogueList({
         </Card>
       )}
     </div>
-  );
-}
-
-function TranscriptView({ transcript }: { transcript: Transcript | undefined }) {
-  const [showAll, setShowAll] = useState(false);
-  if (!transcript || transcript.status === 'not_attempted') {
-    return (
-      <div className="space-y-3">
-        <Card>
-          <EmptyState icon="video" title="자막이 없어요">
-            자막 자동 가져오기를 아직 시도하지 않았습니다.
-          </EmptyState>
-        </Card>
-        <PlannedNotice title="자막 자동 가져오기 · 자막 직접 붙여넣기" stage="2단계" />
-      </div>
-    );
-  }
-  if (transcript.status === 'failed') {
-    return (
-      <div className="space-y-3">
-        <Card className="border-danger/30 p-5">
-          <Badge tone="danger">
-            <Icon name="alert" className="size-3.5" />
-            자막 가져오기 실패
-          </Badge>
-          <p className="mt-2 text-sm text-muted">{transcript.errorMessage ?? '자막을 가져오지 못했습니다.'}</p>
-        </Card>
-        <PlannedNotice title="자막 직접 붙여넣기 (타임스탬프 포함 형식 지원)" stage="2단계" />
-      </div>
-    );
-  }
-  const segs = showAll ? transcript.segments : transcript.segments.slice(0, 20);
-  return (
-    <Card className="p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <Badge tone="ok">자막 있음</Badge>
-        <span className="text-xs text-muted">
-          {transcript.source === 'manual_paste' ? '직접 붙여넣음' : 'YouTube'} · {transcript.segments.length}개 구간
-        </span>
-      </div>
-      <ol className="space-y-1.5">
-        {segs.map((s, i) => (
-          <li key={i} className="flex gap-3 text-[15px]">
-            <span className="w-12 shrink-0 pt-0.5 text-xs text-subtle tabular-nums">{formatTimestamp(s.startSec) ?? '—'}</span>
-            <span className="en">{s.text}</span>
-          </li>
-        ))}
-      </ol>
-      {transcript.segments.length > 20 && (
-        <button type="button" onClick={() => setShowAll((v) => !v)} className="mt-3 text-sm font-semibold text-brand">
-          {showAll ? '접기' : `전체 ${transcript.segments.length}개 구간 보기`}
-        </button>
-      )}
-    </Card>
   );
 }

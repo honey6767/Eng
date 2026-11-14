@@ -38,9 +38,10 @@ export class StudyDatabase extends Dexie {
   studyLogs!: EntityTable<StudyLog, 'id'>;
   appMeta!: EntityTable<AppMeta, 'key'>;
 
-  constructor(name = DB_NAME) {
+  /** @param upToVersion 테스트 전용 — 구버전 스키마로 열 때 사용 */
+  constructor(name = DB_NAME, upToVersion?: number) {
     super(name);
-    applyMigrations(this);
+    applyMigrations(this, upToVersion);
   }
 }
 

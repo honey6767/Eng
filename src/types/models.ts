@@ -22,22 +22,78 @@ export interface BaseRecord {
 // 재생목록 / 영상
 // ─────────────────────────────────────────────
 
+/** 영상/재생목록 정보를 어디서 가져왔는지 */
+export type MetadataSource =
+  /** YouTube Data API (전체 정보) */
+  | 'youtube_api'
+  /** oEmbed (API 키 없이: 제목·썸네일만, 길이 없음) */
+  | 'oembed'
+  /** 재생목록 RSS 피드 (API 키 없이: 최근 15개만) */
+  | 'rss'
+  /** 서버 연결 없이 URL에서 ID만 추출해 직접 등록 */
+  | 'manual'
+  | 'sample';
+
+export interface PlaylistSyncSummary {
+  /** 재생목록에서 확인한 항목 수 */
+  totalItems: number;
+  added: number;
+  /** 이미 등록된 영상에 출처만 연결 */
+  linked: number;
+  /** 비공개/삭제 등으로 불러올 수 없는 영상 */
+  unavailable: number;
+  /** 전체를 가져왔는지 (RSS 제한 모드는 false) */
+  complete: boolean;
+}
+
 export interface Playlist extends BaseRecord {
   url: string;
   /** YouTube 재생목록 ID (list= 파라미터) */
   youtubePlaylistId: string | null;
   title: string;
+  channelTitle?: string | null;
+  thumbnailUrl?: string | null;
+  /** YouTube가 알려준 항목 수 */
+  itemCount?: number | null;
   /** 영상 목록을 마지막으로 불러온 시각 (불러온 적 없으면 null) */
   lastSyncedAt: ISODateString | null;
   /** 마지막 동기화 결과 */
   syncStatus: 'never' | 'success' | 'failed';
   syncError?: string;
+  syncSource?: MetadataSource | null;
+  lastSyncSummary?: PlaylistSyncSummary | null;
 }
 
 /** 영상 학습 상태 */
 export type VideoStatus = 'new' | 'in_progress' | 'completed';
 
+/**
+ * 영상이 어떤 경로로 등록되었는지 (중복 영상은 하나의 레코드에 출처만 누적)
+ * - playlist: 재생목록 동기화로 등록 (position은 재생목록 내 순서, 0부터)
+ * - manual: 개별 영상 URL로 등록
+ */
+export type VideoSource =
+  | { kind: 'playlist'; playlistId: string; position: number | null; addedAt: ISODateString }
+  | { kind: 'manual'; addedAt: ISODateString };
+
+/** 자막 자동 가져오기 시도 결과 (공식 API captions.list 기준) */
+export interface CaptionCheck {
+  checkedAt: ISODateString;
+  result:
+    /** 자막 트랙은 있지만 공식 API로 내용을 내려받을 권한이 없음 (소유자/편집자만 가능) */
+    | 'tracks_found_no_permission'
+    /** 영상에 자막 트랙이 없음 */
+    | 'no_tracks'
+    /** API 키 미설정 등으로 확인 불가 */
+    | 'not_configured'
+    | 'quota_exceeded'
+    | 'error';
+  tracks: { language: string; name: string; kind: 'standard' | 'asr' | 'forced' | string }[];
+  message: string;
+}
+
 export interface Video extends BaseRecord {
+  /** 처음 등록된 재생목록 (호환용). 전체 출처는 sources 참고 */
   playlistId: string | null;
   youtubeVideoId: string | null;
   title: string;
@@ -50,6 +106,16 @@ export interface Video extends BaseRecord {
   randomOrderKey: number;
   status: VideoStatus;
   completedAt: ISODateString | null;
+  /** v2 — 등록 경로(출처) 목록 */
+  sources: VideoSource[];
+  /** v2 */
+  channelTitle: string | null;
+  /** v2 — 정보 출처 */
+  metadataSource: MetadataSource | null;
+  /** v2 — 자막 자동 가져오기 확인 결과 */
+  captionCheck: CaptionCheck | null;
+  /** v2 — 처음 학습을 시작한 시각 */
+  startedAt?: ISODateString | null;
 }
 
 // ─────────────────────────────────────────────
@@ -57,6 +123,8 @@ export interface Video extends BaseRecord {
 // ─────────────────────────────────────────────
 
 export type TranscriptSource = 'youtube' | 'manual_paste';
+/** 붙여넣은 자막의 형식 */
+export type TranscriptFormat = 'srt' | 'vtt' | 'timestamped' | 'plain';
 export type TranscriptStatus = 'not_attempted' | 'success' | 'failed';
 
 export interface TranscriptSegment {
@@ -74,6 +142,8 @@ export interface Transcript extends BaseRecord {
   rawText: string;
   segments: TranscriptSegment[];
   errorMessage?: string;
+  /** v2 */
+  format?: TranscriptFormat | null;
 }
 
 // ─────────────────────────────────────────────

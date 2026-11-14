@@ -10,7 +10,8 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "node scripts/e2e-check.mjs"
+    "e2e": "node scripts/e2e-check.mjs",
+    "e2e:stage2": "node scripts/e2e-stage2.mjs"
   },
   "dependencies": {
     "dexie": "^4.4.7",

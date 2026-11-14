@@ -22,7 +22,7 @@ import {
 import { createId } from '@/utils/id';
 import { addDays, toDateKey } from '@/utils/date';
 import { reviewStateId } from './scheduler';
-import { parseTranscript } from './transcriptParser';
+import { parseTranscriptDetailed } from './transcriptParser';
 
 export const META_INITIALIZED = 'initializedAt';
 export const META_SAMPLE_SEEDED = 'sampleSeededAt';
@@ -95,9 +95,15 @@ export async function seedSampleData(repos: Repositories, now = new Date()): Pro
       randomOrderKey: Math.random(),
       status: sv.status,
       completedAt: completed ? addDays(now, -3).toISOString() : null,
+      sources: [{ kind: 'playlist', playlistId: playlist.id, position: index, addedAt: iso }],
+      channelTitle: null,
+      metadataSource: 'sample',
+      captionCheck: null,
+      startedAt: sv.status === 'new' ? null : addDays(now, -5).toISOString(),
     });
 
     if (sv.transcript) {
+      const parsed = sv.transcript.rawText ? parseTranscriptDetailed(sv.transcript.rawText) : null;
       transcripts.push({
         id: createId(),
         ...base,
@@ -105,7 +111,8 @@ export async function seedSampleData(repos: Repositories, now = new Date()): Pro
         source: 'manual_paste',
         status: sv.transcript.status,
         rawText: sv.transcript.rawText,
-        segments: sv.transcript.rawText ? parseTranscript(sv.transcript.rawText) : [],
+        segments: parsed?.segments ?? [],
+        format: parsed?.format ?? null,
         errorMessage: sv.transcript.errorMessage,
       });
     }

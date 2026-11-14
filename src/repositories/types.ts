@@ -6,15 +6,58 @@ import type {
   Expression,
   ExpressionNote,
   KeySentence,
+  MetadataSource,
   Playlist,
   ReviewItemType,
   ReviewState,
   SourceRef,
   StudyLog,
   Transcript,
+  TranscriptFormat,
+  TranscriptSegment,
   Video,
   VideoStatus,
 } from '@/types/models';
+
+/** YouTube에서 가져온(또는 URL에서 추출한) 영상 정보 */
+export interface VideoMetadataInput {
+  youtubeVideoId: string;
+  title: string;
+  channelTitle: string | null;
+  thumbnailUrl: string | null;
+  durationSec: number | null;
+  metadataSource: MetadataSource;
+  /** 재생목록 내 순서 */
+  position?: number | null;
+}
+
+export type VideoSourceInput = { kind: 'playlist'; playlistId: string } | { kind: 'manual' };
+
+export interface VideoUpsertResult {
+  video: Video;
+  /** 새로 만든 레코드 */
+  created: boolean;
+  /** 이미 있던 영상에 새 출처를 연결 */
+  linked: boolean;
+}
+
+export interface PlaylistUpsertInput {
+  youtubePlaylistId: string;
+  url: string;
+  title: string;
+  channelTitle: string | null;
+  thumbnailUrl: string | null;
+  itemCount: number | null;
+}
+
+export interface TranscriptSaveInput {
+  source: Transcript['source'];
+  status: Transcript['status'];
+  rawText: string;
+  segments: TranscriptSegment[];
+  format: TranscriptFormat | null;
+  errorMessage?: string;
+}
 
 /**
  * 저장소(Repository) 인터페이스
@@ -27,17 +70,30 @@ import type {
 export interface PlaylistRepository {
   list(): Promise<Playlist[]>;
   get(id: string): Promise<Playlist | undefined>;
+  getByYouTubeId(youtubePlaylistId: string): Promise<Playlist | undefined>;
+  /** 같은 YouTube 재생목록 ID가 있으면 새로 만들지 않고 정보만 갱신 */
+  upsertByYouTubeId(input: PlaylistUpsertInput): Promise<{ playlist: Playlist; created: boolean }>;
+  update(id: string, patch: Partial<Omit<Playlist, 'id'>>): Promise<void>;
 }
 
 export interface VideoRepository {
   list(): Promise<Video[]>;
   get(id: string): Promise<Video | undefined>;
+  getByYouTubeId(youtubeVideoId: string): Promise<Video | undefined>;
   listByStatus(status: VideoStatus): Promise<Video[]>;
   update(id: string, patch: Partial<Omit<Video, 'id'>>): Promise<void>;
+  /**
+   * YouTube 영상 ID 기준으로 중복 없이 저장 (하나의 트랜잭션).
+   * 이미 있으면 학습 상태 등 기존 데이터는 유지하고, 정보 보강 + 출처만 연결한다.
+   */
+  upsertFromYouTube(items: VideoMetadataInput[], source: VideoSourceInput): Promise<VideoUpsertResult[]>;
 }
 
 export interface TranscriptRepository {
   getByVideo(videoId: string): Promise<Transcript | undefined>;
+  /** 영상의 자막을 저장 (기존 자막이 있으면 교체 — 호출 전에 사용자 확인 필요) */
+  save(videoId: string, input: TranscriptSaveInput): Promise<Transcript>;
+  deleteByVideo(videoId: string): Promise<void>;
 }
 
 export interface ExpressionNoteRepository {

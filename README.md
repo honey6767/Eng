@@ -10,8 +10,35 @@ npm install
 npm run dev        # 개발 서버 (http://localhost:5173)
 npm run build      # 타입 검사 + 프로덕션 빌드
 npm test           # 단위 테스트 (Vitest + fake-indexeddb)
-npm run e2e        # 빌드 후 실행: PC/모바일 브라우저 E2E 점검 (Playwright)
+npm run e2e        # 빌드 후 실행: 1단계 PC/모바일 E2E 점검 (Playwright)
+npm run e2e:stage2 # 빌드 후 실행: 2단계 E2E 점검 (가짜 YouTube 응답 사용)
 ```
+
+## YouTube 연동 (2단계) — 무료 구성
+
+```
+브라우저 ──/api/youtube/*──▶ 로컬 프록시 (npm run dev / preview 서버 안) ──X-Goog-Api-Key──▶ YouTube Data API v3
+          (키를 모름)            (.env.local 의 YOUTUBE_API_KEY 사용)
+```
+
+1. `.env.example`을 `.env.local`로 복사하고 `YOUTUBE_API_KEY=`에 키를 넣습니다. (`.env.local`은 Git에 올라가지 않음)
+2. `npm run dev`를 다시 실행합니다. 앱의 **설정 → YouTube API 키** 화면에 무료 발급 방법이 자세히 나와 있습니다.
+
+| 모드 | 조건 | 가능한 것 |
+|---|---|---|
+| API 모드 | `YOUTUBE_API_KEY` 설정 | 재생목록 전체(페이지네이션), 제목·썸네일·길이, 자막 트랙 확인 |
+| 제한 모드 | 키 없음 | 개별 영상: 제목·썸네일(oEmbed, 길이 없음) / 재생목록: 최근 15개(RSS) |
+| 서버 없음 | 정적 호스팅 등 | 영상 URL의 ID와 공식 썸네일만 저장, 제목 직접 입력 |
+
+- **비용**: YouTube Data API는 무료 할당량(기본 10,000 단위/일)을 넘으면 요청이 거부될 뿐 과금되지 않습니다.
+  앱은 자체 상한(`YOUTUBE_DAILY_UNIT_CAP`, 기본 9,000)에서 먼저 호출을 멈추고, Google이 할당량 초과를 알리면 그날은 더 호출하지 않습니다.
+  재생목록 100개 영상 ≈ 5단위, 개별 영상 1단위, 자막 확인 50단위.
+- **키 보안**: 키는 서버에서만 읽고 Google에 헤더로 전달합니다. `VITE_` 접두사가 없어 브라우저 번들에 포함되지 않습니다(빌드 결과 검사로 확인).
+  키 설정에서 **API 제한을 'YouTube Data API v3'만** 허용해 두세요.
+- **자막**: 공식 API의 자막 다운로드(`captions.download`)는 OAuth와 영상 소유자/편집 권한이 필요합니다.
+  그래서 이 앱은 `captions.list`로 자막 트랙 존재 여부만 확인하고, 내용은 사용자가 붙여넣습니다(SRT·VTT·타임스탬프 텍스트·일반 텍스트). 비공식 우회 방식은 쓰지 않습니다.
+- **배포(선택)**: 휴대폰 등에서 인터넷으로 쓰려면 정적 호스팅 + 프록시가 필요합니다. `server/worker.ts`와 `wrangler.toml.example`은
+  Cloudflare Workers **무료 플랜**용 템플릿입니다(배포하지 않았음). 배포 후 `VITE_API_BASE_URL`에 Worker 주소를 넣습니다.
 
 ## 기술 스택
 
@@ -22,6 +49,7 @@ React 19 · TypeScript · Vite · Tailwind CSS v4 · IndexedDB(Dexie) · React R
 ```
 src/
 ├─ types/models.ts          도메인 모델 (8단계 전체에 필요한 데이터 구조)
+├─ types/youtubeApi.ts      브라우저 ↔ 프록시 응답 형식
 ├─ db/
 │  ├─ database.ts           IndexedDB(Dexie) 정의 — 저장소 계층에서만 사용
 │  └─ migrations.ts         버전별 스키마/데이터 마이그레이션 (기존 데이터 보존 규칙)
@@ -33,8 +61,16 @@ src/
 │  ├─ scheduler.ts          에빙하우스 기반 간격 반복 · 복습 우선순위 (순수 함수)
 │  ├─ statsService.ts       대시보드 통계 계산
 │  ├─ seedService.ts        최초 실행 초기화 · 샘플 데이터
-│  ├─ transcriptParser.ts   자막 텍스트 파서 (타임스탬프/SRT/VTT/일반 텍스트)
-│  └─ integrations/         외부 연동 설정 · 상태 (YouTube, AI, Supabase — 현재 미연동)
+│  ├─ transcriptParser.ts   자막 파서 (SRT/VTT/타임스탬프 텍스트/일반 텍스트, 형식 자동 감지)
+│  ├─ videoImportService.ts 재생목록·개별 영상 등록(영상 ID 기준 중복 방지), 자막 트랙 확인
+│  ├─ studyQueue.ts         신규 영상 무작위 학습 순서 (회차·재셔플, IndexedDB 저장)
+│  └─ integrations/         외부 연동 설정·상태, youtubeClient(프록시 호출)
+server/
+├─ youtube/handler.ts       YouTube 프록시 핸들러 (Vite 서버·Cloudflare Worker 공용)
+├─ youtube/quota.ts         무료 할당량 추적·자체 상한
+├─ youtube/mock.ts          테스트 전용 가짜 응답 (YOUTUBE_API_MOCK=1)
+├─ vitePlugin.ts            npm run dev/preview 안에서 /api/youtube/* 처리
+└─ worker.ts                (선택) Cloudflare Workers 무료 플랜 배포용
 ├─ hooks/                   useLiveData(데이터 구독), useConfirm(확인 창), useToast, useAppInit
 ├─ components/
 │  ├─ layout/               AppShell(PC 사이드바 + 모바일 하단 탭), PageHeader
@@ -61,8 +97,8 @@ src/
 
 | 단계 | 내용 | 상태 |
 |---|---|---|
-| 1 | 기본 구조, 대시보드, 반응형, IndexedDB, 테스트 데이터 | ✅ 완료 (승인 대기) |
-| 2 | 재생목록·영상 등록, 수동 자막 입력 | 예정 |
+| 1 | 기본 구조, 대시보드, 반응형, IndexedDB, 테스트 데이터 | ✅ 완료 (승인됨) |
+| 2 | 재생목록·영상 등록, 수동 자막 입력 | ✅ 완료 (승인 대기) |
 | 3 | 주요 표현 정리, 핵심 문장 관리 | 예정 |
 | 4 | 핵심 문장 → 대화문 재구성 (최대 3개) | 예정 |
 | 5 | 대화문 5단계 암기 | 예정 |

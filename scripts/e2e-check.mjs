@@ -102,11 +102,11 @@ async function runSuite(label, contextOptions) {
 
   // 2. 영상 목록 → 상세 탭
   await nav('영상').click();
-  await page.getByRole('heading', { name: '영상' }).waitFor();
+  await page.getByRole('heading', { name: '영상', exact: true }).waitFor();
   check('영상 목록 3개', await countIs(page.locator('main ul > li'), 3));
   await checkOverflow('영상 목록');
   await page.screenshot({ path: `${SHOTS}/${label}-02-videos.png`, fullPage: true });
-  await page.getByText('[샘플] 친구와 나누는 일상 안부 표현 5가지').click();
+  await page.getByTestId('video-list').getByText('[샘플] 친구와 나누는 일상 안부 표현 5가지').click();
   await page.getByRole('tab', { name: /주요 표현/ }).waitFor();
   check('주요 표현 노트: 영상 설명/AI 보충 구분', await visible(page.getByText('AI 보충', { exact: true })));
   await page.screenshot({ path: `${SHOTS}/${label}-03-video-preview.png`, fullPage: true });
@@ -119,7 +119,7 @@ async function runSuite(label, contextOptions) {
 
   // 자막 실패 영상
   await nav('영상').click();
-  await page.getByText('[샘플] 약속 잡을 때 쓰는 표현 5가지').click();
+  await page.getByTestId('video-list').getByText('[샘플] 약속 잡을 때 쓰는 표현 5가지').click();
   check('표현 노트 없음 → "설명 내용 확인 필요"', await visible(page.getByText('설명 내용 확인 필요')));
   await page.getByRole('tab', { name: /자막/ }).click();
   check('자막 실패 상태 명확히 표시', await visible(page.getByRole('main').getByText(/샘플: 자막을 가져오지 못한/)));
