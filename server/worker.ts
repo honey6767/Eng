@@ -43,7 +43,7 @@ interface Env {
 }
 
 /** 장부 객체는 하나만 쓴다 → 모든 탭·기기의 요청 식별자가 한곳에 기록된다 */
-export const AI_LEDGER_NAME = 'ai-ledger';
+const AI_LEDGER_NAME = 'ai-ledger';
 const MAX_AI_BODY_BYTES = 2048;
 
 const store = memoryQuotaStore();
