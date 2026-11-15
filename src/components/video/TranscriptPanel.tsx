@@ -151,7 +151,9 @@ function TranscriptView({
         <h3 className="font-bold">자막</h3>
         <Badge tone="ok">자막 있음</Badge>
         <span className="text-xs text-muted" data-testid="transcript-meta">
-          {transcript.source === 'manual_paste' ? '직접 입력' : 'YouTube'}
+          {transcript.source === 'manual_paste' ? '직접 입력' : transcript.source === 'ai_transcription' ? 'AI 자막' : 'YouTube'}
+          {transcript.verification === 'needs_review' && ' · 확인 권장'}
+          {transcript.verification === 'ai_unverified' && ' · 사람이 확인하지 않음'}
           {transcript.format && ` · ${FORMAT_LABEL[transcript.format]}`} · {transcript.segments.length}개 구간
         </span>
         <div className="ml-auto flex gap-1.5">

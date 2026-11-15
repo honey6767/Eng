@@ -3,11 +3,11 @@ import { extractionController } from '@/services/extraction';
 import type { ControllerSnapshot } from '@/services/extraction/controller';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
+import { Button, LinkButton } from '@/components/ui/Button';
 
 /**
  * 자동 자막 추출 상태 (B1-b) — 진행 상황만 보여 주고, 시작·멈춤만 한다.
- * 결과는 '검토 대기' 초안으로만 저장되고, 학습 데이터에는 검토·승인(B1-d) 전까지 들어가지 않는다.
+ * 품질이 괜찮은 결과는 자동으로 학습 자료가 되고(B1-d), 문제가 있는 것만 'AI 자막 관리'의 확인 필요로 간다.
  */
 export function ExtractionStatusCard() {
   const [snap, setSnap] = useState<ControllerSnapshot>(extractionController.getSnapshot());
@@ -56,7 +56,12 @@ export function ExtractionStatusCard() {
           {untilText}
         </p>
       )}
-      <p className="text-xs text-subtle">추출한 자막은 기기에 저장돼 다시 요청하지 않아요. 검토 화면에서 확인한 뒤 학습에 쓰여요. 무료 한도 안에서만 진행해요.</p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-subtle">추출한 자막은 기기에 저장돼 다시 요청하지 않아요. 품질이 괜찮으면 자동으로 학습 자료가 돼요. 무료 한도 안에서만 진행해요.</p>
+        <LinkButton to="/extraction" size="sm" variant="ghost">
+          {s.needsAttention > 0 ? `확인 필요 ${s.needsAttention}개 보기` : '자세히'}
+        </LinkButton>
+      </div>
     </Card>
   );
 }

@@ -156,13 +156,22 @@ async function main() {
     check('자막 있는 영상·긴 영상은 요청 없음', !perVideo.ccccccccccc && !perVideo.ddddddddddd);
     const jobs = byId(after.tables.extractionJobs);
     check('긴 영상은 건너뜀(긴 영상)으로 표시', jobs['job-e2e-v4']?.status === 'skipped' && jobs['job-e2e-v4']?.lastError?.code === 'too_long');
-    check('결과는 검토 대기 초안 2개로 저장 (원본 텍스트 보존)', after.tables.extractionDrafts.length === 2 && after.tables.extractionDrafts.every((d) => d.status === 'pending_review' && d.rawText));
+    // B1-d부터: 품질이 괜찮은 결과는 자동으로 학습 자료에 연결된다
+    check('결과는 초안 2개로 저장(원본 텍스트 보존) 후 자동 적용', after.tables.extractionDrafts.length === 2 && after.tables.extractionDrafts.every((d) => d.status === 'approved' && d.rawText));
     check('요청 장부: 2건 모두 succeeded', after.tables.aiRequests.length === 2 && after.tables.aiRequests.every((r) => r.status === 'succeeded'));
     check('화면에 완료 개수 표시', /완료 2/.test(await page.getByTestId('extraction-counts').innerText()));
 
     // 기존 데이터 보존: '학습 시작'이 원래 바꾸는 값(시작한 영상의 학습 상태)과 학습 순서 설정 말고는 그대로
-    for (const t of ['playlists', 'transcripts', 'expressionNotes', 'keySentences', 'dialogues', 'dialogueCompositions', 'expressions', 'reviewStates', 'dialogueProgress', 'studyLogs']) {
+    for (const t of ['playlists', 'expressionNotes', 'keySentences', 'dialogues', 'dialogueCompositions', 'reviewStates', 'dialogueProgress', 'studyLogs']) {
       check(`기존 ${t} 그대로`, same(byId(after.tables[t]), byId(before.tables[t])));
+    }
+    // 자막·표현: 기존 레코드는 그대로이고, AI 자막·AI 표현만 새로 추가
+    for (const t of ['transcripts', 'expressions']) {
+      const a = byId(after.tables[t]);
+      const kept = Object.entries(byId(before.tables[t])).every(([id, r]) => same(a[id], r));
+      const added = after.tables[t].filter((r) => !byId(before.tables[t])[r.id]);
+      const okAdded = t === 'transcripts' ? added.length === 2 && added.every((r) => r.source === 'ai_transcription') : added.every((r) => r.origin === 'ai_extracted');
+      check(`기존 ${t} 그대로 + AI 기록만 추가`, kept && okAdded, `추가 ${added.length}개`);
     }
     const bv = byId(before.tables.videos);
     const av = byId(after.tables.videos);

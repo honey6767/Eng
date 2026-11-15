@@ -122,7 +122,8 @@ export interface Video extends BaseRecord {
 // 자막
 // ─────────────────────────────────────────────
 
-export type TranscriptSource = 'youtube' | 'manual_paste';
+/** ai_transcription: B1 — Gemini가 전사하고 앱이 자동 적용한 자막 (새로 추가한 기록에만) */
+export type TranscriptSource = 'youtube' | 'manual_paste' | 'ai_transcription';
 /** 붙여넣은 자막의 형식 */
 export type TranscriptFormat = 'srt' | 'vtt' | 'timestamped' | 'plain';
 export type TranscriptStatus = 'not_attempted' | 'success' | 'failed';
@@ -144,6 +145,10 @@ export interface Transcript extends BaseRecord {
   errorMessage?: string;
   /** v2 */
   format?: TranscriptFormat | null;
+  /** B1 — AI 자막일 때만: 사람이 확인하지 않음(ai_unverified) / 품질 경고가 있어 확인 권장(needs_review) */
+  verification?: 'ai_unverified' | 'needs_review' | null;
+  /** B1 — 이 자막을 만든 AI 초안 */
+  extractionDraftId?: string | null;
 }
 
 // ─────────────────────────────────────────────
@@ -300,6 +305,8 @@ export interface Expression extends BaseRecord {
   isFavorite: boolean;
   /** 사용자가 직접 어렵다고 표시 */
   isMarkedDifficult: boolean;
+  /** B1 — AI 추출로 새로 만든 표현에만 */
+  origin?: 'ai_extracted';
 }
 
 // ─────────────────────────────────────────────

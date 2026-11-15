@@ -46,9 +46,20 @@ async function seed(db: StudyDatabase, ids: { id: string; yt: string; dur: numbe
 }
 
 async function dumpExisting(db: StudyDatabase) {
-  const out: Record<string, unknown[]> = {};
+  const out: Record<string, Record<string, unknown>[]> = {};
   for (const t of V2_TABLE_NAMES) out[t] = (await db.table(t).toArray()).filter((r: Record<string, unknown>) => r.key !== 'extractionRun');
-  return JSON.stringify(out);
+  return out;
+}
+/** 전에 있던 레코드는 하나도 바뀌거나 사라지지 않았는지 (새로 추가된 것은 따로 돌려줌) */
+function assertOnlyAdded(before: Record<string, Record<string, unknown>[]>, after: Record<string, Record<string, unknown>[]>) {
+  const added: Record<string, number> = {};
+  for (const t of Object.keys(before)) {
+    const pk = (r: Record<string, unknown>) => String(t === 'appMeta' ? r.key : r.id);
+    const a = new Map(after[t].map((r) => [pk(r), JSON.stringify(r)]));
+    for (const r of before[t]) expect(a.get(pk(r)), `${t} ${pk(r)}`).toBe(JSON.stringify(r));
+    added[t] = after[t].length - before[t].length;
+  }
+  return added;
 }
 
 const noSleep = async () => {};
@@ -90,11 +101,15 @@ describe('자동 자막 추출 실행기 (격리된 테스트 DB + 같은 프로
     expect(srv.gemini.createCalls.sort()).toEqual(['aaaaaaaaaaa', 'bbbbbbbbbbb', 'mockSlow001']);
     const drafts = await db.extractionDrafts.toArray();
     expect(drafts).toHaveLength(3);
-    expect(drafts.every((d) => d.status === 'pending_review' && typeof d.rawText === 'string')).toBe(true);
+    // 품질이 괜찮은 결과는 자동으로 학습 자료에 연결 (B1-d)
+    expect(drafts.every((d) => d.status === 'approved' && typeof d.rawText === 'string')).toBe(true);
     const reqs = await db.aiRequests.toArray();
     expect(reqs.every((r) => r.status === 'succeeded')).toBe(true);
     expect(new Set(reqs.map((r) => r.videoId)).size).toBe(3);
-    expect(await dumpExisting(db)).toBe(before); // 기존 12개 테이블(appMeta 새 키 제외) 그대로
+    // 기존 레코드는 그대로, 자막 3개·표현 2개(같은 표현은 하나로 합침)만 새로 추가
+    const added = assertOnlyAdded(before, await dumpExisting(db));
+    expect(added).toMatchObject({ transcripts: 3, expressions: 2, videos: 0, keySentences: 0, reviewStates: 0, studyLogs: 0 });
+    expect(await db.learningItems.count()).toBe(6);
     expect((await db.appMeta.get('extractionRun'))?.value).toMatchObject({ active: false });
     // 다시 시작해도 Gemini를 부르지 않는다 (저장된 결과 재사용)
     await ctl.start();

@@ -16,6 +16,9 @@ import { SettingsPage } from '@/pages/SettingsPage';
 import { MorePage } from '@/pages/MorePage';
 import { CollectionPage } from '@/pages/CollectionPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
+import { ExtractionPage } from '@/pages/ExtractionPage';
+import { DraftReviewPage } from '@/pages/DraftReviewPage';
+import { DaysPage } from '@/pages/DaysPage';
 import { AccessGate } from '@/components/access/AccessGate';
 import { useEffect } from 'react';
 import { extractionController } from '@/services/extraction';
@@ -62,6 +65,9 @@ export default function App() {
             <Route path="settings" element={<SettingsPage />} />
             <Route path="collection" element={<CollectionPage />} />
             <Route path="more" element={<MorePage />} />
+            <Route path="extraction" element={<ExtractionPage />} />
+            <Route path="extraction/draft/:id" element={<DraftReviewPage />} />
+            <Route path="days" element={<DaysPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>

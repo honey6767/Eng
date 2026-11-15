@@ -21,6 +21,8 @@ export const SECONDARY_NAV: { title: string; items: NavItem[] }[] = [
     items: [
       { to: '/videos', label: '영상 · 핵심 표현', icon: 'video' },
       { to: '/expressions', label: '표현 노트', icon: 'book' },
+      { to: '/extraction', label: 'AI 자막 관리', icon: 'sparkle' },
+      { to: '/days', label: 'Day 정리', icon: 'clock' },
     ],
   },
   {
@@ -37,4 +39,4 @@ export const SECONDARY_NAV: { title: string; items: NavItem[] }[] = [
 export const MOBILE_TABS: NavItem[] = [...NAV_ITEMS, { to: '/more', label: '더보기', icon: 'more' }];
 
 /** '더보기' 탭이 활성으로 보일 경로 */
-export const MORE_PATHS = ['/more', '/videos', '/expressions', '/favorites', '/settings'];
+export const MORE_PATHS = ['/more', '/videos', '/expressions', '/extraction', '/days', '/favorites', '/settings'];

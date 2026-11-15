@@ -72,14 +72,16 @@ export async function syncJobs(deps: RunnerDeps): Promise<void> {
 }
 
 export async function summarize(store: ExtractionStore): Promise<JobSummary> {
-  const { jobs } = await store.readOverview();
+  const { jobs, drafts } = await store.readOverview();
+  const reviewDrafts = drafts.filter((d) => d.status === 'pending_review').length;
   const c = (f: (j: ExtractionJob) => boolean) => jobs.filter(f).length;
   return {
     total: jobs.length,
     succeeded: c((j) => j.status === 'succeeded'),
     queued: c((j) => j.status === 'queued' || j.status === 'failed_retryable'),
     running: c((j) => j.status === 'running'),
-    needsAttention: c((j) => j.status === 'failed_permanent'),
+    // 실패한 영상 + 품질 문제로 자동 적용하지 않은 초안
+    needsAttention: c((j) => j.status === 'failed_permanent') + reviewDrafts,
     longVideos: c((j) => j.status === 'skipped' && j.lastError?.code === 'too_long'),
     skipped: c((j) => j.status === 'skipped'),
   };
@@ -104,7 +106,7 @@ export type StepOutcome =
   /** 진행 중 — 잠시 뒤 같은 식별자로 다시 조회 */
   | { kind: 'pending'; created: boolean }
   /** 초안 저장 완료 */
-  | { kind: 'done' }
+  | { kind: 'done'; draftId: string }
   /** 이 영상만 멈춤 ('확인 필요' 또는 건너뜀) — 다음 영상으로 */
   | { kind: 'job_stopped'; code: string }
   /** 서버에 닿지 못함 — 같은 식별자로 나중에 다시 */
@@ -171,7 +173,7 @@ export async function stepJob(job: ExtractionJob, video: Video, deps: RunnerDeps
       model: body.model, usage: body.usage, rejectedSegments: v.rejectedSegments, edited: null, validation: v.issues, approvedRefs: [], createdAt: iso2, updatedAt: iso2,
     };
     await deps.store.saveResult({ ...job, status: 'succeeded', draftId: draft.id, model: body.model, lastError: null, updatedAt: iso2 }, doneReq, draft);
-    return { kind: 'done' };
+    return { kind: 'done', draftId: draft.id };
   }
 
   // 실패

@@ -7,6 +7,8 @@ import { SECONDARY_NAV } from '@/components/layout/navItems';
 const HINTS: Record<string, string> = {
   '/videos': '영상 등록, 자막, 핵심 표현 정리',
   '/expressions': '모은 표현과 뜻 · 어려워요 표시',
+  '/extraction': '자동 자막 추출 진행 · 확인 필요 항목',
+  '/days': '영상별 Day 번호 확정',
   '/favorites': '즐겨찾기한 대화문과 표현',
   '/settings': '데이터 · YouTube 연결 · 샘플 데이터',
 };

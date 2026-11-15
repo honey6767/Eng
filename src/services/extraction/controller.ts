@@ -1,4 +1,5 @@
 import type { ExtractionRunState, ExtractionStore } from '@/repositories/extractionStore';
+import { autoApplyPending } from './manage';
 import { CREATE_GAP_MS, pickNext, POLL_MS, RETRY_MS, stepJob, summarize, syncJobs, type JobSummary, type RunnerDeps } from './runner';
 
 /**
@@ -88,6 +89,8 @@ export function createExtractionController(deps: ControllerDeps) {
 
   async function runLoop(signal: AbortSignal) {
     await syncJobs(deps);
+    // 이전에 저장만 되고 아직 적용되지 않은 초안 중 품질이 괜찮은 것은 먼저 학습 자료로
+    await autoApplyPending(deps);
     await refresh();
     let lastCreate = 0;
     while (!signal.aborted) {
@@ -112,6 +115,8 @@ export function createExtractionController(deps: ControllerDeps) {
       emit({ status: { kind: 'running', message: next.video.title } });
       const out = await stepJob(next.job, next.video, deps);
       if (out.kind === 'pending' && out.created) lastCreate = now().getTime();
+      // B1-d: 결과가 나오면 품질 판정 후 자동으로 학습 자료에 연결 (문제가 있으면 '확인 필요'로 남김)
+      if (out.kind === 'done') await autoApplyPending(deps);
       await refresh();
       if (out.kind === 'pause') {
         await setRun({ pausedUntil: out.until, pauseReason: out.reason, pauseMessage: out.message });
