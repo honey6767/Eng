@@ -1,5 +1,6 @@
 import { db } from '@/db/database';
 import { createIndexedDbRepositories } from './indexeddb';
+import { createBackupStore, createSnapshotStore } from './backupStore';
 import type { Repositories } from './types';
 
 /**
@@ -9,3 +10,7 @@ import type { Repositories } from './types';
 export const repos: Repositories = createIndexedDbRepositories(db);
 
 export type { Repositories } from './types';
+
+/** B0 — 백업·복원 (추가 전용 쓰기) / 임시 안전 복사본 (별도 저장소) */
+export const backupStore = createBackupStore(db);
+export const snapshotStore = createSnapshotStore();
