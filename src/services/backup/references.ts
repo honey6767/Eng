@@ -1,6 +1,13 @@
 import type { TableName } from '@/db/database';
 import type {
+  AiRequest,
+  DayAssignment,
   Dialogue,
+  DialogueDraft,
+  ExtractionDraft,
+  ExtractionJob,
+  LearningItem,
+  StudySession,
   DialogueComposition,
   DialogueProgress,
   Expression,
@@ -112,6 +119,38 @@ export function referencesOf(table: TableName, row: AnyRow): RowRef[] {
       if (t) push(out, 'itemId', t, l.itemId);
       break;
     }
+    // v3 (B1) 새 테이블
+    case 'learningItems': {
+      const li = row as unknown as LearningItem;
+      push(out, 'expressionId', 'expressions', li.expressionId);
+      push(out, 'videoId', 'videos', li.videoId);
+      push(out, 'dialogueId', 'dialogues', li.dialogueId);
+      break;
+    }
+    case 'dayAssignments':
+      push(out, 'videoId', 'videos', (row as unknown as DayAssignment).videoId);
+      break;
+    case 'extractionJobs':
+      push(out, 'videoId', 'videos', (row as unknown as ExtractionJob).videoId);
+      break;
+    case 'extractionDrafts': {
+      const d = row as unknown as ExtractionDraft;
+      push(out, 'videoId', 'videos', d.videoId);
+      push(out, 'jobId', 'extractionJobs', d.jobId);
+      break;
+    }
+    case 'aiRequests':
+      push(out, 'jobId', 'extractionJobs', (row as unknown as AiRequest).jobId);
+      break;
+    case 'studySessions': {
+      const s = row as unknown as StudySession;
+      push(out, 'dialogueId', 'dialogues', s.dialogueId);
+      for (const id of s.learningItemIds ?? []) push(out, 'learningItemIds', 'learningItems', id);
+      break;
+    }
+    case 'dialogueDrafts':
+      for (const id of (row as unknown as DialogueDraft).expressionIds ?? []) push(out, 'expressionIds', 'expressions', id);
+      break;
     case 'playlists':
     case 'appMeta':
       break;
@@ -149,6 +188,14 @@ export function uniqueKeysOf(table: TableName, row: AnyRow): { label: string; ke
       break;
     case 'keySentences':
       add('videoId+order', `${String(row.videoId)}#${String(row.order)}`);
+      break;
+    // v3 (B1) — 영상당 1개, 학습 대상은 영상+종류+표현+대화문 조합이 같으면 같은 대상
+    case 'dayAssignments':
+    case 'extractionJobs':
+      add('videoId', row.videoId);
+      break;
+    case 'learningItems':
+      add('video+kind+expression+dialogue', `${String(row.videoId ?? '')}|${String(row.kind)}|${String(row.expressionId)}|${String(row.dialogueId ?? '')}`);
       break;
     default:
       break;

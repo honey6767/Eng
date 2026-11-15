@@ -28,12 +28,21 @@ export const TABLE_LABELS: Record<TableName, string> = {
   dialogueProgress: '5단계 진행도',
   studyLogs: '학습 기록',
   appMeta: '앱 설정',
+  learningItems: '학습 대상',
+  dayAssignments: 'Day 제안·확정',
+  studySessions: '학습 세션',
+  dialogueDrafts: '대화문 초안',
+  extractionJobs: '자동 추출 작업',
+  extractionDrafts: '자동 추출 초안',
+  aiRequests: 'AI 요청 기록',
 };
 
 const byOrder = <T extends { order: number }>(a: T, b: T) => a.order - b.order;
 
 /** IndexedDB(Dexie) 기반 저장소 구현 */
 export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
+  /** 이 DB에 실제로 있는 테이블만 (구버전 스키마로 연 DB에서도 안전하게) */
+  const presentTables = () => TABLE_NAMES.filter((n) => db.tables.some((t) => t.name === n));
   return {
     playlists: {
       list: async () => (await db.playlists.toArray()).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
@@ -348,7 +357,7 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
     maintenance: {
       countAll: async () => {
         const result: TableCount[] = [];
-        for (const name of TABLE_NAMES) {
+        for (const name of presentTables()) {
           const table = db.table(name);
           const total = await table.count();
           const sample = name === 'appMeta' ? 0 : await table.filter((r: { isSample?: boolean }) => r.isSample === true).count();
@@ -357,7 +366,7 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
         return result;
       },
       hasSampleData: async () => {
-        for (const name of TABLE_NAMES) {
+        for (const name of presentTables()) {
           if (name === 'appMeta') continue;
           const n = await db.table(name).filter((r: { isSample?: boolean }) => r.isSample === true).count();
           if (n > 0) return true;
@@ -366,7 +375,7 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
       },
       deleteSampleData: async () => {
         let deleted = 0;
-        const tables = TABLE_NAMES.filter((n) => n !== 'appMeta').map((n) => db.table(n));
+        const tables = presentTables().filter((n) => n !== 'appMeta').map((n) => db.table(n));
         await db.transaction('rw', tables, async () => {
           for (const table of tables) {
             deleted += await table.filter((r: { isSample?: boolean }) => r.isSample === true).delete();
@@ -389,7 +398,7 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
         });
       },
       clearAll: async () => {
-        const tables = TABLE_NAMES.map((n) => db.table(n));
+        const tables = presentTables().map((n) => db.table(n));
         await db.transaction('rw', tables, async () => {
           for (const table of tables) await table.clear();
         });

@@ -1,4 +1,6 @@
 import type Dexie from 'dexie';
+import { V2_TABLE_NAMES } from './tables';
+import { upgradeV2toV3, type V2Tables } from './upgradeV2toV3';
 
 /**
  * 스키마 마이그레이션 정의
@@ -14,7 +16,10 @@ import type Dexie from 'dexie';
  * 주의: IndexedDB는 boolean 값을 인덱싱할 수 없으므로 isSample/isFavorite 등은 인덱스에 넣지 않는다.
  * 인덱스 문법: '&'=고유, '*'=배열(multiEntry), '[a+b]'=복합 인덱스
  */
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
+
+/** v3 업그레이드 기록 (appMeta 새 키) */
+export const META_MIGRATION_LOG = 'migrationLog';
 
 /**
  * @param upTo 테스트용 — 지정한 버전까지만 정의 (마이그레이션 테스트에서 구버전 DB를 만들 때 사용)
@@ -66,10 +71,29 @@ export function applyMigrations(db: Dexie, upTo = CURRENT_SCHEMA_VERSION): void 
         });
     });
 
-  // 예시 — 다음 버전 추가 시:
-  // db.version(2)
-  //   .stores({ videos: 'id, playlistId, youtubeVideoId, status, orderIndex, randomOrderKey, isSample, lastStudiedAt' })
-  //   .upgrade(async (tx) => {
-  //     await tx.table('videos').toCollection().modify((v) => { v.lastStudiedAt ??= null; });
-  //   });
+  if (upTo < 3) return;
+
+  // v3 — B1: 새 테이블 7개만 선언한다. 기존 12개 테이블은 다시 선언하지 않아 인덱스가 그대로다.
+  // 업그레이드 함수는 기존 테이블을 읽기만 하고(쓰기 0건), 새 테이블과 appMeta 새 키(migrationLog)만 추가한다.
+  // 어느 단계에서든 예외가 나면 IndexedDB가 전체를 취소해 DB는 v2 그대로 남는다.
+  db.version(3)
+    .stores({
+      learningItems: 'id, expressionId, videoId, [sourceType+dayNumber], kind, status',
+      dayAssignments: 'id, &videoId, dayNumber, status',
+      studySessions: 'id, dialogueId, status, date',
+      dialogueDrafts: 'id, status, createdAt',
+      extractionJobs: 'id, &videoId, status, attemptAfter, updatedAt',
+      extractionDrafts: 'id, videoId, jobId, status, createdAt',
+      aiRequests: 'id, jobId, status, pacificDate',
+    })
+    .upgrade(async (tx) => {
+      const v2 = {} as V2Tables;
+      for (const name of V2_TABLE_NAMES) v2[name] = (await tx.table(name).toArray()) as Record<string, unknown>[];
+      const { newTables, log } = upgradeV2toV3(v2, new Date().toISOString());
+      for (const [name, rows] of Object.entries(newTables)) if (rows.length) await tx.table(name).bulkAdd(rows);
+      // add: 같은 키가 이미 있으면 실패 → 업그레이드 전체 취소 (덮어쓰지 않음)
+      await tx.table('appMeta').add({ key: META_MIGRATION_LOG, value: log });
+    });
+
+  // 다음 버전을 추가할 때: 위의 정의는 고치지 말고 db.version(4)를 아래에 새로 추가한다.
 }

@@ -16,7 +16,8 @@
     "e2e:stageA": "node scripts/e2e-stageA.mjs",
     "e2e:stageB0": "node scripts/e2e-stageB0.mjs",
     "e2e:deploy": "node scripts/e2e-deploy.mjs",
-    "e2e:access": "node scripts/e2e-access.mjs"
+    "e2e:access": "node scripts/e2e-access.mjs",
+    "e2e:stageB1a": "node scripts/e2e-stageB1a.mjs"
   },
   "dependencies": {
     "@fontsource-variable/plus-jakarta-sans": "^5.2.8",

@@ -1,4 +1,4 @@
-import { TABLE_NAMES, type TableName } from '@/db/database';
+import { TABLE_NAMES, type TableName } from '@/db/tables';
 import { canonicalJson } from './sha256';
 import { primaryKeyOf, referencesOf, uniqueKeysOf, type RowRef } from './references';
 import { isAuthLikeMetaKey, type BackupTables } from './backupFormat';
@@ -18,8 +18,8 @@ import { isAuthLikeMetaKey, type BackupTables } from './backupFormat';
 
 export type RestoreMode = 'empty' | 'merge';
 
-/** 기기마다 따로 관리하는 앱 설정 — 복원 대상이 아니다 (충돌로 세지 않음) */
-export const DEVICE_META_KEYS = new Set(['initializedAt', 'schemaVersion']);
+/** 기기마다 따로 관리하는 앱 설정 — 복원 대상이 아니다 (충돌로 세지 않음). migrationLog는 그 기기의 v3 업그레이드 기록 */
+export const DEVICE_META_KEYS = new Set(['initializedAt', 'schemaVersion', 'migrationLog']);
 
 /** 학습 순서(무작위 영상 순서) 설정 키 — services/studyQueue의 META_STUDY_QUEUE와 같은 값 */
 export const STUDY_QUEUE_META_KEY = 'studyQueue';
@@ -106,13 +106,13 @@ type IdIndex = Record<TableName, Map<string, Row>>;
 
 function indexById(tables: BackupTables): IdIndex {
   return Object.fromEntries(
-    TABLE_NAMES.map((t) => [t, new Map(tables[t].map((r) => [primaryKeyOf(t, r), r]))]),
+    TABLE_NAMES.map((t) => [t, new Map((tables[t] ?? []).map((r) => [primaryKeyOf(t, r), r]))]),
   ) as IdIndex;
 }
 
 /** appMeta를 뺀 모든 테이블이 비어 있으면 '빈 기기' */
 export function isEmptyDatabase(current: BackupTables): boolean {
-  return TABLE_NAMES.every((t) => t === 'appMeta' || current[t].length === 0);
+  return TABLE_NAMES.every((t) => t === 'appMeta' || (current[t] ?? []).length === 0);
 }
 
 /** 기기 DB에 원래부터 끊겨 있는 연결 목록 (내보내기 때 기록용) */
@@ -120,7 +120,7 @@ export function findBrokenLinks(tables: BackupTables): { table: TableName; id: s
   const idx = indexById(tables);
   const out: { table: TableName; id: string; missing: RowRef[] }[] = [];
   for (const t of TABLE_NAMES) {
-    for (const row of tables[t]) {
+    for (const row of tables[t] ?? []) {
       const missing = referencesOf(t, row).filter((r) => !idx[r.table].has(r.id));
       if (missing.length) out.push({ table: t, id: primaryKeyOf(t, row), missing });
     }
@@ -141,6 +141,13 @@ const TABLE_KO: Record<TableName, string> = {
   dialogueProgress: '대화문 진행',
   studyLogs: '학습 기록',
   appMeta: '앱 설정',
+  learningItems: '학습 대상',
+  dayAssignments: 'Day 제안·확정',
+  studySessions: '학습 세션',
+  dialogueDrafts: '대화문 초안',
+  extractionJobs: '자동 추출 작업',
+  extractionDrafts: '자동 추출 초안',
+  aiRequests: 'AI 요청 기록',
 };
 export const tableLabel = (t: TableName) => TABLE_KO[t];
 
@@ -149,18 +156,18 @@ export function planRestore(backup: BackupTables, current: BackupTables): Restor
   const cur = indexById(current);
   const conflicts: RestoreConflict[] = [];
   const counts = Object.fromEntries(
-    TABLE_NAMES.map((t) => [t, { table: t, inBackup: backup[t].length, add: 0, same: 0, conflict: 0, skipped: 0, replaceable: 0 }]),
+    TABLE_NAMES.map((t) => [t, { table: t, inBackup: (backup[t] ?? []).length, add: 0, same: 0, conflict: 0, skipped: 0, replaceable: 0 }]),
   ) as Record<TableName, TablePlan>;
 
   // 기기에 이미 있는 고유 값 (다른 id로 같은 대상이 있는지)
   const curUnique = new Map<string, string>();
-  for (const t of TABLE_NAMES) for (const r of current[t]) for (const u of uniqueKeysOf(t, r)) curUnique.set(u.key, primaryKeyOf(t, r));
+  for (const t of TABLE_NAMES) for (const r of current[t] ?? []) for (const u of uniqueKeysOf(t, r)) curUnique.set(u.key, primaryKeyOf(t, r));
 
   // 1) 후보 선정: 같은 id / 같은 대상 검사
   const replaceableMeta: ReplaceableMeta[] = [];
   const candidates = Object.fromEntries(TABLE_NAMES.map((t) => [t, new Map<string, Row>()])) as IdIndex;
   for (const t of TABLE_NAMES) {
-    for (const row of backup[t]) {
+    for (const row of backup[t] ?? []) {
       const id = primaryKeyOf(t, row);
       if (t === 'appMeta' && (DEVICE_META_KEYS.has(id) || isAuthLikeMetaKey(id))) {
         counts[t].skipped++;

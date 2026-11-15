@@ -11,8 +11,8 @@ import { applyAiNotesResult, parseAiNotesResponse, saveExpressionNote } from './
  * 3단계 작업이 기존 학습 기록·즐겨찾기·취약 표현·복습 기록·진행도를 바꾸지 않는지 확인한다.
  */
 describe('3단계 데이터 보존', () => {
-  it('스키마 버전은 그대로(v2) — 3단계는 선택 필드만 추가한다', () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(2);
+  it('3단계는 스키마를 바꾸지 않았다 — 스키마 변경은 B1(v3, 새 테이블만 추가)에서 처음 있다', () => {
+    expect(CURRENT_SCHEMA_VERSION).toBe(3);
   });
 
   it('핵심 문장·표현 노트 작업 후에도 기존 기록은 그대로 남는다', async () => {

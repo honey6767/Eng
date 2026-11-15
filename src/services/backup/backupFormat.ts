@@ -1,4 +1,5 @@
-import { TABLE_NAMES, type TableName } from '@/db/database';
+import { TABLE_NAMES, V2_TABLE_NAMES, tableNamesForSchema, type TableName } from '@/db/tables';
+import { upgradeV2toV3, type V2Tables } from '@/db/upgradeV2toV3';
 import { canonicalJson, sha256Hex } from './sha256';
 import { primaryKeyOf } from './references';
 
@@ -7,7 +8,12 @@ import { primaryKeyOf } from './references';
  *
  * - 내려받은 이 파일이 '실제 백업'이다. 기기 안의 임시 복사본(snapshot)과 구분한다.
  * - checksum: 키 순서를 정렬한 { schemaVersion, tables } 의 SHA-256. 파일이 손상·수정되면 복원을 거부한다.
+ * - schemaVersion별 테이블 목록(@/db/tables)으로 검사한다: v2 파일 12개, v3 파일 19개.
+ *   v2 파일은 검증값을 먼저 확인한 뒤, 메모리에서만 v3로 변환해 복원한다(파일은 바꾸지 않음).
  */
+
+/** 이 앱이 복원할 수 있는 가장 오래된 백업 파일 스키마 (백업 기능은 v2에서 생김) */
+export const MIN_RESTORABLE_SCHEMA_VERSION = 2;
 
 export const BACKUP_FORMAT = 'my-english-study-backup';
 export const BACKUP_FORMAT_VERSION = 1;
@@ -34,8 +40,28 @@ export function computeChecksum(schemaVersion: number, tables: BackupTables): st
   return sha256Hex(canonicalJson({ schemaVersion, tables }));
 }
 
-export function countTables(tables: BackupTables): Record<TableName, number> {
-  return Object.fromEntries(TABLE_NAMES.map((t) => [t, tables[t].length])) as Record<TableName, number>;
+/** schemaVersion에 해당하는 테이블만 골라 담는다 (v2 = 12개, v3 = 19개) */
+export function pickTables(tables: BackupTables, schemaVersion: number): BackupTables {
+  const names = tableNamesForSchema(schemaVersion) ?? TABLE_NAMES;
+  return Object.fromEntries(names.map((t) => [t, tables[t] ?? []])) as BackupTables;
+}
+
+export function countTables(tables: BackupTables, schemaVersion: number): Record<TableName, number> {
+  const names = tableNamesForSchema(schemaVersion) ?? TABLE_NAMES;
+  return Object.fromEntries(names.map((t) => [t, (tables[t] ?? []).length])) as Record<TableName, number>;
+}
+
+/**
+ * 검사를 통과한 백업 파일의 데이터를 지금 앱(v3)의 19개 테이블로 맞춘다.
+ * - v3 파일: 그대로
+ * - v2 파일: 기존 12개 테이블은 그대로 두고, 새 7개 테이블은 DB 업그레이드와 같은 함수(upgradeV2toV3)로 만든다.
+ *   (변환 기록 migrationLog는 기기별 기록이라 만들지 않는다)
+ */
+export function toCurrentTables(backup: BackupFile): BackupTables {
+  if (backup.schemaVersion === 3) return backup.tables;
+  const v2 = Object.fromEntries(V2_TABLE_NAMES.map((t) => [t, backup.tables[t] ?? []])) as V2Tables;
+  const { newTables } = upgradeV2toV3(v2, backup.exportedAt, backup.schemaVersion);
+  return { ...v2, ...newTables } as BackupTables;
 }
 
 export type ValidationResult = { ok: true; backup: BackupFile } | { ok: false; errors: string[] };
@@ -55,19 +81,21 @@ export function validateBackup(input: unknown, currentSchemaVersion: number): Va
     errors.push('DB 버전 정보가 없어요.');
   } else if (f.schemaVersion > currentSchemaVersion) {
     errors.push(`더 새로운 버전의 앱(DB v${f.schemaVersion})에서 만든 파일이에요. 앱을 업데이트한 뒤 복원해 주세요. (지금 앱: v${currentSchemaVersion})`);
-  } else if (f.schemaVersion < currentSchemaVersion) {
-    errors.push(`이전 버전 앱(DB v${f.schemaVersion})의 파일이에요. 이 버전 변환은 아직 지원하지 않아요. (지금 앱: v${currentSchemaVersion})`);
+  } else if (f.schemaVersion < MIN_RESTORABLE_SCHEMA_VERSION || !tableNamesForSchema(f.schemaVersion)) {
+    errors.push(`이전 버전 앱(DB v${f.schemaVersion})의 파일이에요. 이 버전 변환은 지원하지 않아요. (지금 앱: v${currentSchemaVersion})`);
   }
+  // 이 파일의 스키마에 들어 있어야 하는 테이블 목록
+  const expected: readonly TableName[] = (typeof f.schemaVersion === 'number' && tableNamesForSchema(f.schemaVersion)) || TABLE_NAMES;
 
   const tables = f.tables as Record<string, unknown> | undefined;
   if (!tables || typeof tables !== 'object' || Array.isArray(tables)) {
     errors.push('데이터(tables)가 없어요.');
     return { ok: false, errors };
   }
-  const unknownTables = Object.keys(tables).filter((t) => !(TABLE_NAMES as readonly string[]).includes(t));
+  const unknownTables = Object.keys(tables).filter((t) => !(expected as readonly string[]).includes(t));
   if (unknownTables.length) errors.push(`알 수 없는 데이터 종류가 있어요: ${unknownTables.join(', ')}`);
 
-  for (const t of TABLE_NAMES) {
+  for (const t of expected) {
     const rows = tables[t];
     if (!Array.isArray(rows)) {
       errors.push(`'${t}' 데이터가 없거나 형식이 잘못됐어요.`);

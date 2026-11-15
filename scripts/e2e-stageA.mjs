@@ -197,7 +197,7 @@ async function suite(label, device, isPortrait) {
   const tables = Object.keys(before).filter((k) => k !== 'version');
   const changed = tables.filter((t) => JSON.stringify(before[t]) !== JSON.stringify(after[t]));
   // Dexie는 IndexedDB 버전을 (Dexie 버전 × 10)으로 저장한다 → 20 = 스키마 v2
-  check('DB 스키마 버전 그대로 (v2)', before.version === after.version && after.version / 10 === 2, `IndexedDB version ${after.version} = Dexie v${after.version / 10}`);
+  check('A단계 화면 사용으로 DB 버전이 바뀌지 않음 (B1-a부터 v3)', before.version === after.version && after.version / 10 === 3, `IndexedDB version ${after.version} = Dexie v${after.version / 10}`);
   check(`모든 화면을 둘러본 전후 DB ${tables.length}개 테이블 값까지 동일`, changed.length === 0, changed.join(', '));
   check('가로 넘침·화면 축소 없음 (모든 화면)', overflow.length === 0, overflow.join(', '));
   check('브라우저 오류 없음', errors.length === 0, errors.slice(0, 3).join(' | '));

@@ -1,5 +1,6 @@
 import Dexie from 'dexie';
-import { TABLE_NAMES, type StudyDatabase, type TableName } from '@/db/database';
+import type { StudyDatabase } from '@/db/database';
+import { TABLE_NAMES, type TableName } from '@/db/tables';
 import type { BackupTables } from '@/services/backup/backupFormat';
 import { canonicalJson } from '@/services/backup/sha256';
 

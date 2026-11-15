@@ -6,6 +6,8 @@ import {
   computeChecksum,
   countTables,
   excludeAuthData,
+  pickTables,
+  toCurrentTables,
   validateBackup,
   type BackupFile,
   type BackupTables,
@@ -19,6 +21,7 @@ import { canonicalJson } from './sha256';
  *
  * - 내보내기는 읽기만 한다 (기존 데이터 변경 없음).
  * - 복원은 추가만 한다 (planRestore가 고른 레코드를 bulkAdd). 덮어쓰기·삭제 없음.
+ * - v2 백업 파일은 검증 후 메모리에서 v3로 변환해(toCurrentTables) 같은 규칙으로 복원한다.
  * - 복원 전에는 반드시 현재 상태의 백업 파일(실제 백업)과 임시 안전 복사본을 만든다.
  */
 
@@ -29,14 +32,14 @@ export async function createBackup(store: BackupStore, now = new Date()): Promis
 }
 
 export function buildBackupFile(allTables: BackupTables, schemaVersion: number, now = new Date()): BackupFile {
-  const tables = excludeAuthData(allTables);
+  const tables = excludeAuthData(pickTables(allTables, schemaVersion));
   return {
     format: BACKUP_FORMAT,
     formatVersion: BACKUP_FORMAT_VERSION,
     app: { name: 'My English Study' },
     schemaVersion,
     exportedAt: now.toISOString(),
-    counts: countTables(tables),
+    counts: countTables(tables, schemaVersion),
     integrity: { brokenLinks: findBrokenLinks(tables).length },
     checksum: { algorithm: 'SHA-256', value: computeChecksum(schemaVersion, tables) },
     tables,
@@ -60,7 +63,7 @@ export function parseBackupText(text: string, currentSchemaVersion: number): Val
 
 /** 복원 미리보기 — 아무것도 쓰지 않는다 */
 export async function previewRestore(store: BackupStore, backup: BackupFile): Promise<RestorePlan> {
-  return planRestore(backup.tables, await store.readAll());
+  return planRestore(toCurrentTables(backup), await store.readAll());
 }
 
 export interface RestoreResult {
@@ -93,7 +96,7 @@ export async function applyRestore(
   const now = options.now ?? new Date();
   const current = await store.readAll();
   const snapshotId = await saveSnapshot(snapshots, current, store.schemaVersion(), 'before_restore', now);
-  const plan = planRestore(backup.tables, current);
+  const plan = planRestore(toCurrentTables(backup), current);
   const replacements = (options.replaceMeta ?? []).flatMap((want) => {
     const r = plan.replaceableMeta.find((m) => m.key === want.key);
     if (!r || canonicalJson(r.deviceValue) !== canonicalJson(want.expectedDeviceValue)) return [];
@@ -114,13 +117,13 @@ export async function saveSnapshot(
   reason: string,
   now = new Date(),
 ): Promise<string> {
-  tables = excludeAuthData(tables);
+  tables = excludeAuthData(pickTables(tables, schemaVersion));
   const record: SnapshotRecord = {
     id: createId(),
     createdAt: now.toISOString(),
     reason,
     schemaVersion,
-    counts: countTables(tables),
+    counts: countTables(tables, schemaVersion),
     checksum: computeChecksum(schemaVersion, tables),
     tables,
   };

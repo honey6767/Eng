@@ -1,6 +1,13 @@
 import Dexie, { type EntityTable } from 'dexie';
 import type {
+  AiRequest,
   AppMeta,
+  DayAssignment,
+  DialogueDraft,
+  ExtractionDraft,
+  ExtractionJob,
+  LearningItem,
+  StudySession,
   Dialogue,
   DialogueComposition,
   DialogueProgress,
@@ -37,6 +44,14 @@ export class StudyDatabase extends Dexie {
   dialogueProgress!: EntityTable<DialogueProgress, 'id'>;
   studyLogs!: EntityTable<StudyLog, 'id'>;
   appMeta!: EntityTable<AppMeta, 'key'>;
+  // v3 (B1)
+  learningItems!: EntityTable<LearningItem, 'id'>;
+  dayAssignments!: EntityTable<DayAssignment, 'id'>;
+  studySessions!: EntityTable<StudySession, 'id'>;
+  dialogueDrafts!: EntityTable<DialogueDraft, 'id'>;
+  extractionJobs!: EntityTable<ExtractionJob, 'id'>;
+  extractionDrafts!: EntityTable<ExtractionDraft, 'id'>;
+  aiRequests!: EntityTable<AiRequest, 'id'>;
 
   /** @param upToVersion 테스트 전용 — 구버전 스키마로 열 때 사용 */
   constructor(name = DB_NAME, upToVersion?: number) {
@@ -47,20 +62,5 @@ export class StudyDatabase extends Dexie {
 
 export const db = new StudyDatabase();
 
-/** 모든 테이블 이름 (내보내기/초기화/통계용) */
-export const TABLE_NAMES = [
-  'playlists',
-  'videos',
-  'transcripts',
-  'expressionNotes',
-  'keySentences',
-  'dialogues',
-  'dialogueCompositions',
-  'expressions',
-  'reviewStates',
-  'dialogueProgress',
-  'studyLogs',
-  'appMeta',
-] as const;
-
-export type TableName = (typeof TABLE_NAMES)[number];
+/** 모든 테이블 이름 (내보내기/초기화/통계용) — 스키마 버전별 목록은 ./tables */
+export { TABLE_NAMES, V2_TABLE_NAMES, V3_NEW_TABLE_NAMES, type TableName } from './tables';

@@ -398,3 +398,132 @@ export interface AppMeta {
   key: string;
   value: unknown;
 }
+
+// ─────────────────────────────────────────────
+// B1 — DB v3 새 테이블 (기존 12개 테이블은 그대로, 여기에 기록만 추가)
+// ─────────────────────────────────────────────
+
+/** 학습 대상의 종류: 핵심 표현 · 영상 속 Chunk · 대화문 Chunk */
+export type LearningItemKind = 'key' | 'intro_chunk' | 'dialogue_chunk';
+/** Day 영상에서 왔는지(day), 그 밖의 영상인지(other) */
+export type LearningItemSourceType = 'day' | 'other';
+export type LearningItemOrigin = 'migrated' | 'user' | 'ai_extracted';
+export type LearningItemStatus = 'confirmed' | 'needs_review';
+
+/** 출처별 학습 대상 — 같은 표현이라도 출처(영상·종류·대화문)마다 하나씩 */
+export interface LearningItem extends BaseRecord {
+  expressionId: string;
+  videoId: string | null;
+  sourceType: LearningItemSourceType;
+  /** Day 번호 (sourceType=other면 null) */
+  dayNumber: number | null;
+  kind: LearningItemKind;
+  /** 대화문 Chunk일 때 */
+  dialogueId: string | null;
+  /** 영상 원문 문장 그대로 */
+  sourceText: string | null;
+  timestampSec: number | null;
+  /** 화면 자막에서만 찾음 */
+  onScreen: boolean;
+  origin: LearningItemOrigin;
+  status: LearningItemStatus;
+  /** AI 초안에서 왔을 때 */
+  extractionDraftId: string | null;
+  /** v2 핵심 문장에서 옮겨 왔을 때 (기존 핵심 문장은 그대로 둔다) */
+  legacyKeySentenceId: string | null;
+}
+
+export type DayAssignmentStatus = 'suggested' | 'confirmed';
+export type DayAssignmentSource = 'title' | 'ai' | 'user';
+
+/** 영상의 Day 번호 제안·확정 — 영상 레코드는 바꾸지 않고 여기에만 기록 (영상당 1개) */
+export interface DayAssignment extends BaseRecord {
+  videoId: string;
+  dayNumber: number;
+  status: DayAssignmentStatus;
+  source: DayAssignmentSource;
+}
+
+export type StudySessionStatus = 'in_progress' | 'completed' | 'abandoned';
+
+/** 5단계 학습 세션 (B1은 테이블만, 횟수 계산은 C단계) */
+export interface StudySession extends BaseRecord {
+  dialogueId: string;
+  /** 학습한 날짜 (YYYY-MM-DD, 기기 시간대) */
+  date: string;
+  status: StudySessionStatus;
+  learningItemIds: string[];
+  startedAt: ISODateString;
+  completedAt: ISODateString | null;
+}
+
+export type DialogueDraftStatus = 'pending_review' | 'approved' | 'rejected' | 'superseded';
+
+/** 통합 대화문 초안 (승인 전) */
+export interface DialogueDraft extends BaseRecord {
+  status: DialogueDraftStatus;
+  expressionIds: string[];
+  /** 초안 내용 (B1-d에서 형식 확정) */
+  content: unknown;
+}
+
+export type ExtractionJobStatus = 'queued' | 'running' | 'succeeded' | 'failed_retryable' | 'failed_permanent' | 'skipped';
+
+/** 영상별 자동 추출 작업 상태 (영상당 1개) */
+export interface ExtractionJob extends BaseRecord {
+  videoId: string;
+  status: ExtractionJobStatus;
+  attempts: number;
+  /** 다시 시도해도 되는 시각 */
+  attemptAfter: ISODateString | null;
+  lastError: { code: string; message: string } | null;
+  /** 진행 중인 요청 식별자 */
+  currentRequestId: string | null;
+  /** 항상 빈 배열 — 구간 분할은 구현하지 않음 */
+  segments: unknown[];
+  /** 한 탭만 실행하기 위한 점유 표시 */
+  leaseOwner: string | null;
+  leaseUntil: ISODateString | null;
+  model: string | null;
+  apiStyle: 'interactions';
+  promptVersion: string | null;
+  videoDurationSec: number | null;
+  draftId: string | null;
+}
+
+export type ExtractionDraftStatus = 'pending_review' | 'approved' | 'partially_approved' | 'rejected' | 'superseded';
+
+/** Gemini 결과 초안 (검토·수정·승인 대기) — result는 한 번 저장하면 바꾸지 않는다 */
+export interface ExtractionDraft extends BaseRecord {
+  videoId: string;
+  jobId: string;
+  /** 이 초안을 만든 요청 식별자 (요청당 초안 1개) */
+  requestId: string;
+  status: ExtractionDraftStatus;
+  result: unknown;
+  edited: unknown | null;
+  validation: unknown[];
+  approvedRefs: string[];
+}
+
+export type AiRequestStatus = 'reserved' | 'sent' | 'succeeded' | 'failed_definite' | 'failed_unknown';
+
+/** AI 요청 장부 — id는 요청 식별자(UUID v4) */
+export interface AiRequest extends BaseRecord {
+  jobId: string;
+  videoId: string;
+  status: AiRequestStatus;
+  bodyHash: string | null;
+  /** Gemini interaction id (백그라운드 실행) */
+  interactionId: string | null;
+  estVideoSec: number | null;
+  estTokens: number | null;
+  inputTokens: number | null;
+  sentAt: ISODateString | null;
+  finishedAt: ISODateString | null;
+  /** 사용량을 센 날짜 (태평양 시간 기준 YYYY-MM-DD) */
+  pacificDate: string | null;
+  httpStatus: number | null;
+  errorCode: string | null;
+  responseHash: string | null;
+}

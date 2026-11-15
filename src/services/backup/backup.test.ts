@@ -247,10 +247,11 @@ describe('파일 검사 — 문제 있으면 복원 거부', () => {
     expect(validateBackup({ format: 'other' }, CURRENT_SCHEMA_VERSION).ok).toBe(false);
     expect(validateBackup([], CURRENT_SCHEMA_VERSION).ok).toBe(false);
   });
-  it('더 새로운/이전 DB 버전 파일은 거부', async () => {
+  it('더 새로운 버전 파일, 지원하지 않는 옛 버전(v1) 파일, 버전과 테이블 목록이 맞지 않는 파일은 거부', async () => {
     const { db } = await seededDb();
     const file = await createBackup(createBackupStore(db));
-    for (const v of [CURRENT_SCHEMA_VERSION + 1, CURRENT_SCHEMA_VERSION - 1]) {
+    // v4(더 새 버전) · v1(백업 기능 이전) · v2라고 적었지만 v3 테이블 19개가 든 파일
+    for (const v of [CURRENT_SCHEMA_VERSION + 1, 1, 2]) {
       const f = { ...file, schemaVersion: v, checksum: { algorithm: 'SHA-256' as const, value: computeChecksum(v, file.tables) } };
       expect(validateBackup(f, CURRENT_SCHEMA_VERSION).ok).toBe(false);
     }
