@@ -147,3 +147,60 @@ describe('Worker — 접근 코드', () => {
     expect((await worker.fetch(req('auth', { origin: APP, code: CODE, scheme: 'http' }), env())).status).toBe(403);
   });
 });
+
+describe('Worker — AI 추출 경로 (B1-b)', () => {
+  const aiReq = (init: { method?: string; origin?: string | null; code?: string | null; key?: string; body?: string } = {}) => {
+    const headers = new Headers({ 'Content-Type': 'application/json', 'CF-Connecting-IP': `198.51.100.${Math.floor(Math.random() * 250)}` });
+    if (init.origin !== null) headers.set('Origin', init.origin ?? APP);
+    if (init.code !== null) headers.set('Authorization', `Bearer ${init.code ?? CODE}`);
+    if (init.key) headers.set('Idempotency-Key', init.key);
+    return new Request('https://proxy.example.workers.dev/api/ai/extract', { method: init.method ?? 'POST', headers, body: init.method === 'GET' || init.method === 'OPTIONS' ? undefined : init.body ?? '{"videoId":"eNODHkrNuDA","durationSec":295,"promptVersion":"v1"}' });
+  };
+  const fakeLedger = () => {
+    const seen: { key: string | null; body: string }[] = [];
+    return {
+      seen,
+      idFromName: (n: string) => n,
+      get: () => ({
+        fetch: async (r: Request) => {
+          seen.push({ key: r.headers.get('Idempotency-Key'), body: await r.text() });
+          return new Response(JSON.stringify({ ok: true, state: 'pending', requestId: 'k', interactionId: null, retryAfterSec: 15 }), { status: 202 });
+        },
+      }),
+    };
+  };
+
+  it('장부(Durable Object) 바인딩이 없으면 503, 외부 호출 0회', async () => {
+    const upstream = vi.fn();
+    vi.stubGlobal('fetch', upstream);
+    const r = await worker.fetch(aiReq({ key: '00000000-0000-4000-8000-000000000001' }), env());
+    expect(r.status).toBe(503);
+    expect(await r.json()).toMatchObject({ ok: false, code: 'ledger_unavailable', consumed: false });
+    expect(upstream).not.toHaveBeenCalled();
+  });
+  it('POST + 접근 코드 → 장부로 식별자와 본문을 그대로 넘긴다', async () => {
+    const ledger = fakeLedger();
+    const r = await worker.fetch(aiReq({ key: '00000000-0000-4000-8000-000000000002' }), { ...env(), AI_LEDGER: ledger });
+    expect(r.status).toBe(202);
+    expect(r.headers.get('Access-Control-Allow-Origin')).toBe(APP);
+    expect(ledger.seen).toEqual([{ key: '00000000-0000-4000-8000-000000000002', body: '{"videoId":"eNODHkrNuDA","durationSec":295,"promptVersion":"v1"}' }]);
+  });
+  it('Origin·접근 코드가 없으면 장부에 닿지 않는다 (403·401)', async () => {
+    const ledger = fakeLedger();
+    expect((await worker.fetch(aiReq({ origin: null }), { ...env(), AI_LEDGER: ledger })).status).toBe(403);
+    expect((await worker.fetch(aiReq({ code: null }), { ...env(), AI_LEDGER: ledger })).status).toBe(401);
+    expect(ledger.seen).toHaveLength(0);
+  });
+  it('AI 경로는 POST만(GET 405), 사전 요청은 POST·Idempotency-Key 허용, YouTube 경로는 여전히 GET만', async () => {
+    expect((await worker.fetch(aiReq({ method: 'GET' }), env())).status).toBe(405);
+    const pre = await worker.fetch(aiReq({ method: 'OPTIONS' }), env());
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get('Access-Control-Allow-Methods')).toBe('POST');
+    expect(pre.headers.get('Access-Control-Allow-Headers')).toContain('Idempotency-Key');
+    expect((await worker.fetch(req('status', { origin: APP, method: 'POST' }), env())).status).toBe(405);
+  });
+  it('너무 큰 본문은 413', async () => {
+    const r = await worker.fetch(aiReq({ key: '00000000-0000-4000-8000-000000000003', body: 'x'.repeat(5000) }), { ...env(), AI_LEDGER: fakeLedger() });
+    expect(r.status).toBe(413);
+  });
+});

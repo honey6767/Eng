@@ -17,9 +17,20 @@ import { MorePage } from '@/pages/MorePage';
 import { CollectionPage } from '@/pages/CollectionPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { AccessGate } from '@/components/access/AccessGate';
+import { useEffect } from 'react';
+import { extractionController } from '@/services/extraction';
 
 export default function App() {
   const { ready, error } = useAppInit();
+
+  // B1-b: 앱을 열 때 이전에 시작한 자동 추출이 남아 있으면 같은 요청 식별자로 이어 간다. 네트워크가 돌아와도 이어 간다.
+  useEffect(() => {
+    if (!ready) return;
+    void extractionController.resumeIfActive();
+    const onOnline = () => void extractionController.resumeIfActive();
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [ready]);
 
   if (error) {
     return (

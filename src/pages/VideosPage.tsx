@@ -15,6 +15,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { VideoThumb } from '@/components/video/VideoThumb';
 import { AddVideoForm } from '@/components/video/AddVideoForm';
 import { StudyQueueCard } from '@/components/video/StudyQueueCard';
+import { ExtractionStatusCard } from '@/components/extraction/ExtractionStatusCard';
 import { formatDateKo, formatDuration } from '@/utils/date';
 import { TRANSCRIPT_STATUS, VIDEO_STATUS } from '@/utils/labels';
 import type { Playlist, VideoStatus } from '@/types/models';
@@ -68,6 +69,7 @@ export function VideosPage() {
 
       <AddVideoForm status={status} onImported={refresh} />
       <StudyQueueCard />
+      <ExtractionStatusCard />
 
       {data.playlists.length > 0 && (
         <section>

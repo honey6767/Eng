@@ -22,6 +22,7 @@ import { formatDateKo, formatDuration } from '@/utils/date';
 import { TRANSCRIPT_STATUS } from '@/utils/labels';
 import type { Dialogue, DialogueComposition, KeySentence, Playlist } from '@/types/models';
 import { NotFoundPage } from './NotFoundPage';
+import { extractionController } from '@/services/extraction';
 
 const TABS = [
   { key: 'preview', label: '주요 표현' },
@@ -96,6 +97,7 @@ export function VideoDetailPage() {
               size="sm"
               onClick={async () => {
                 await startVideo(repos, video);
+                void extractionController.start();
                 toast('이 영상으로 학습을 시작했어요');
               }}
             >

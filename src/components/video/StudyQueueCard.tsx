@@ -19,6 +19,7 @@ import { Icon } from '@/components/ui/Icon';
 import { formatDuration } from '@/utils/date';
 import { VIDEO_STATUS } from '@/utils/labels';
 import { VideoThumb } from './VideoThumb';
+import { extractionController } from '@/services/extraction';
 
 /** 오늘의 신규 영상 (무작위 학습 순서) */
 export function StudyQueueCard({ compact = false }: { compact?: boolean }) {
@@ -112,6 +113,8 @@ export function StudyQueueCard({ compact = false }: { compact?: boolean }) {
                   onClick={() =>
                     act(async () => {
                       await startVideo(repos, v);
+                      // B1-b: 학습을 시작하면 자막이 없는 영상의 AI 추출을 백그라운드로 시작 (기다리지 않음)
+                      void extractionController.start();
                       navigate(`/videos/${v.id}`);
                     })
                   }
@@ -135,6 +138,7 @@ export function StudyQueueCard({ compact = false }: { compact?: boolean }) {
               onClick={() =>
                 act(async () => {
                   await startVideo(repos, v);
+                  void extractionController.start();
                   navigate(`/videos/${v.id}`);
                 })
               }

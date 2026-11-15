@@ -6,6 +6,11 @@ import { handleYouTubeApi } from './youtube/handler.ts';
 import { DEFAULT_LOCAL_CAP, QuotaTracker, type QuotaState, type QuotaStore } from './youtube/quota.ts';
 import { mockFetch } from './youtube/mock.ts';
 import { AUTH_CHECK_PATH, memoryFailureLimiter, verifyAccess } from './accessAuth.ts';
+import { AI_EXTRACT_PATH } from '../src/types/aiApi.ts';
+import { handleAiExtract, parseCaps } from './ai/extractHandler.ts';
+import { memoryLedgerStore } from './ai/ledger.ts';
+import { createGeminiClient } from './ai/gemini.ts';
+import { createMockGemini } from './ai/mockGemini.ts';
 
 /** 사용량을 파일에 저장해 서버를 다시 켜도 오늘 사용량이 유지되게 한다 */
 function fileQuotaStore(path: string): QuotaStore {
@@ -49,6 +54,24 @@ export function youtubeProxyPlugin(): Plugin {
     const deps = { apiKey, quota, fetch: mock ? mockFetch : fetch, mock };
     const accessCode = env.ACCESS_CODE ?? null;
     const limiter = memoryFailureLimiter();
+    // (B1-b) AI 추출 — 로컬에서는 장부를 메모리에 둔다 (서버를 끄면 사라짐, 앱의 IndexedDB 기록이 기준)
+    // AI_GEMINI_MOCK=1이면 가짜 Gemini(테스트용), 아니면 .env.local의 GEMINI_API_KEY (없으면 '키 없음'으로 거절)
+    const aiStore = memoryLedgerStore();
+    const aiGemini =
+      env.AI_GEMINI_MOCK === '1'
+        ? createMockGemini()
+        : createGeminiClient({ apiKey: env.GEMINI_API_KEY?.trim() || null, model: env.GEMINI_MODEL, fetch });
+    const aiCaps = parseCaps(env);
+    const readBody = (req: Parameters<Connect.NextHandleFunction>[0]) =>
+      new Promise<string>((resolve) => {
+        let data = '';
+        req.on('data', (c: Buffer) => {
+          data += c;
+          if (data.length > 4096) req.destroy();
+        });
+        req.on('end', () => resolve(data));
+        req.on('error', () => resolve(''));
+      });
     const sendJson = (res: Parameters<Connect.NextHandleFunction>[1], status: number, body: unknown) => {
       res.statusCode = status;
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -57,6 +80,26 @@ export function youtubeProxyPlugin(): Plugin {
     };
 
     return async (req, res, next) => {
+      if (req.url?.split('?')[0] === AI_EXTRACT_PATH) {
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.end();
+          return;
+        }
+        if (accessCode != null) {
+          const access = await verifyAccess({ authorization: req.headers.authorization ?? null, secret: accessCode, clientKey: req.socket.remoteAddress ?? 'local', limiter });
+          if (!access.ok) return sendJson(res, access.status, { ok: false, state: 'failed', requestId: null, code: access.code, message: access.message, consumed: false });
+        }
+        let body: unknown = null;
+        try {
+          body = JSON.parse(await readBody(req));
+        } catch {
+          body = null;
+        }
+        const key = req.headers['idempotency-key'];
+        const result = await handleAiExtract({ idempotencyKey: typeof key === 'string' ? key : null, body }, { store: aiStore, gemini: aiGemini, caps: aiCaps });
+        return sendJson(res, result.status, result.body);
+      }
       if (!req.url?.startsWith('/api/youtube/')) return next();
       if (req.method !== 'GET') {
         res.statusCode = 405;

@@ -501,6 +501,12 @@ export interface ExtractionDraft extends BaseRecord {
   requestId: string;
   status: ExtractionDraftStatus;
   result: unknown;
+  /** Gemini가 돌려준 원본 JSON 텍스트 (검사 전 그대로 보존) */
+  rawText?: string;
+  model?: string | null;
+  usage?: { inputTokens: number | null; outputTokens: number | null; videoTokens: number | null } | null;
+  /** 검사에서 거부한 전사 구간 (영상 길이를 넘는 시각 등) */
+  rejectedSegments?: unknown[];
   edited: unknown | null;
   validation: unknown[];
   approvedRefs: string[];
