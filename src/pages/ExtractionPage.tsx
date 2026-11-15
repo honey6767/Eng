@@ -38,7 +38,7 @@ export function ExtractionPage() {
   return (
     <div className="space-y-5" data-testid="extraction-page">
       <PageHeader title="AI 자막 관리" description="확인이 필요한 영상만 모았어요. 나머지는 자동으로 학습 자료가 됐어요." />
-      <ExtractionStatusCard />
+      <ExtractionStatusCard showWhenEmpty />
 
       <Card className="p-4">
         <p className="font-bold text-ink">자동으로 학습 자료가 된 영상 {data.applied}개</p>

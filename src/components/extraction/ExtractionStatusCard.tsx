@@ -9,7 +9,7 @@ import { Button, LinkButton } from '@/components/ui/Button';
  * 자동 자막 추출 상태 (B1-b) — 진행 상황만 보여 주고, 시작·멈춤만 한다.
  * 품질이 괜찮은 결과는 자동으로 학습 자료가 되고(B1-d), 문제가 있는 것만 'AI 자막 관리'의 확인 필요로 간다.
  */
-export function ExtractionStatusCard() {
+export function ExtractionStatusCard({ showWhenEmpty = false }: { showWhenEmpty?: boolean } = {}) {
   const [snap, setSnap] = useState<ControllerSnapshot>(extractionController.getSnapshot());
   useEffect(() => {
     const off = extractionController.subscribe(setSnap);
@@ -17,7 +17,22 @@ export function ExtractionStatusCard() {
     return off;
   }, []);
   const s = snap.summary;
-  if (!s || s.total === 0) return null;
+  if (!s || s.total === 0) {
+    if (!showWhenEmpty || !s) return null;
+    // 아직 한 번도 시작하지 않았을 때 — 'AI 자막 관리'에서 바로 시작할 수 있게
+    const busy = snap.status.kind === 'running';
+    return (
+      <Card className="flex flex-col gap-3 p-4" data-testid="extraction-status-empty">
+        <p className="font-bold text-ink">AI 자막 자동 추출</p>
+        <p className="text-sm text-muted">자막이 없는 영상의 자막과 핵심 표현을 AI가 하나씩 차례로 만들어요. 영상 화면에서 ‘학습 시작’을 눌러도 자동으로 시작돼요.</p>
+        <div>
+          <Button size="sm" disabled={busy} onClick={() => void extractionController.start()} data-testid="extraction-start-empty">
+            자막 없는 영상 자동 추출 시작
+          </Button>
+        </div>
+      </Card>
+    );
+  }
   const st = snap.status;
   const label =
     st.kind === 'running' ? { tone: 'brand' as const, text: '자막 추출 중' }
