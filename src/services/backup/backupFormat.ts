@@ -105,3 +105,17 @@ export function backupFileName(date = new Date(), prefix = 'my-english-study-bac
   const p = (n: number) => String(n).padStart(2, '0');
   return `${prefix}-${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}-${p(date.getHours())}${p(date.getMinutes())}.json`;
 }
+
+/**
+ * 인증 정보는 백업·복원 대상이 아니다.
+ * 접근 코드는 localStorage에만 있어 원래 IndexedDB(백업 대상)에 없지만, 혹시라도 앱 설정(appMeta)에
+ * 인증처럼 보이는 키가 생기면 내보내지도, 가져오지도 않도록 이름으로 한 번 더 걸러 낸다.
+ */
+const AUTH_LIKE_KEY = /access.?code|auth|token|bearer|secret|password/i;
+export function isAuthLikeMetaKey(key: string): boolean {
+  return AUTH_LIKE_KEY.test(key);
+}
+export function excludeAuthData(tables: BackupTables): BackupTables {
+  if (!tables.appMeta.some((m) => isAuthLikeMetaKey(String(m.key)))) return tables;
+  return { ...tables, appMeta: tables.appMeta.filter((m) => !isAuthLikeMetaKey(String(m.key))) };
+}

@@ -1,13 +1,18 @@
-# (선택) Cloudflare Workers 무료 플랜 배포용 예시 설정
-# 사용하려면 wrangler.toml 로 복사한 뒤:
+# (선택) Cloudflare Workers 무료 플랜 배포용 예시 설정 — YouTube 프록시
+# 사용하려면 wrangler.toml 로 복사한 뒤 (wrangler.toml 은 커밋하지 않아도 됩니다):
 #   npx wrangler login
-#   npx wrangler secret put YOUTUBE_API_KEY   ← 키는 여기서만 입력 (파일에 쓰지 마세요)
+#   npx wrangler secret put YOUTUBE_API_KEY   ← 키는 여기서만 입력 (파일·Git에 쓰지 마세요)
+#   npx wrangler secret put ACCESS_CODE       ← 기기별 접근 코드 (8자 이상, 추측하기 어려운 값). 미설정이면 모든 요청 거부
 #   npx wrangler deploy
-# Free 플랜은 결제 수단 없이 사용 가능하며, 한도 초과 시 요청이 거부될 뿐 자동 과금되지 않습니다.
+# Free 플랜은 결제 수단 없이 사용 가능하며, 한도(하루 10만 요청) 초과 시 요청이 거부될 뿐 자동 과금되지 않습니다.
+# 결제 수단 등록·Workers Paid 업그레이드는 하지 마세요.
 name = "my-english-study-youtube"
 main = "server/worker.ts"
 compatibility_date = "2026-01-01"
 
 [vars]
-ALLOWED_ORIGIN = "https://your-app.example.com"
+# 필수: 배포한 앱(Pages) 주소. 쉼표로 여러 개 가능. 비어 있으면 모든 요청을 거부합니다(닫힌 상태가 기본).
+# Origin 헤더가 없거나 다른 주소에서 온 요청도 거부합니다. (Origin 검사는 인증이 아님 — README '배포' 참고)
+ALLOWED_ORIGIN = "https://your-app.pages.dev"
+# 하루 사용 상한(단위). YouTube 무료 할당량(10,000)보다 낮게.
 YOUTUBE_DAILY_UNIT_CAP = "9000"

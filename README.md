@@ -41,6 +41,20 @@ npm run e2e:stageA # 빌드 후 실행: A단계 E2E 점검 (iPad 세로·가로 
   그래서 이 앱은 `captions.list`로 자막 트랙 존재 여부만 확인하고, 내용은 사용자가 붙여넣습니다(SRT·VTT·타임스탬프 텍스트·일반 텍스트). 비공식 우회 방식은 쓰지 않습니다.
 - **배포(선택)**: 휴대폰 등에서 인터넷으로 쓰려면 정적 호스팅 + 프록시가 필요합니다. `server/worker.ts`와 `wrangler.toml.example`은
   Cloudflare Workers **무료 플랜**용 템플릿입니다(배포하지 않았음). 배포 후 `VITE_API_BASE_URL`에 Worker 주소를 넣습니다.
+  - Worker는 `ALLOWED_ORIGIN`(앱 주소)에서 온 요청만 받습니다. 설정이 비었거나 Origin 헤더가 없거나 다른 주소면 403.
+    Origin 검사는 인증이 아니라서(위조 가능) 할당량 보호는 YouTube 무료 할당량(결제 계정 없음)·자체 상한이 함께 맡습니다.
+  - 보안 헤더: `server/securityHeaders.ts` 한 곳에서 정의 → 빌드 때 Pages용 `dist/_headers` 생성, `npm run preview`에도 같은 헤더 적용.
+  - 홈 화면 앱: `public/manifest.webmanifest` + 아이콘(`node scripts/generate-icons.mjs`로 생성). 오프라인 기능은 없습니다.
+  - 점검: `npm run build && npm run e2e:deploy` (보안 헤더·CSP 위반·매니페스트·아이콘·빌드 결과물 키 검사)
+  - **접근 코드**: Worker는 YouTube를 부르기 전에 `Authorization: Bearer <코드>`를 Secret `ACCESS_CODE`와 비교합니다
+    (`npx wrangler secret put ACCESS_CODE`, 8자 이상). Secret이 없거나 짧으면 503, 코드가 없거나 틀리면 401(YouTube 호출 0회),
+    같은 접속 주소에서 10분 안에 5번 틀리면 15분 동안 429. 확인 전용 경로 `/api/youtube/auth`는 YouTube를 부르지 않습니다.
+    - 앱은 처음 열 때 코드를 묻고, 맞으면 **이 브라우저의 localStorage에만** 저장합니다(`mes:accessCode`). 서버·IndexedDB·백업 파일에는
+      저장하지 않으며, 다른 기기·브라우저·iPad 홈 화면 앱은 각각 따로 입력합니다. 설정 → 접근 코드에서 바꾸기/지우기(로그아웃).
+    - '지금은 건너뛰기'를 고르면 학습·백업은 그대로 쓰고 영상 정보 가져오기만 막힙니다(코드는 프록시 사용 권한이지 학습 데이터 잠금이 아님).
+    - 한계: 기기를 쓸 수 있는 사람은 저장된 코드를 볼 수 있습니다. 코드를 아는 사람의 직접 호출은 막지 못하고, Origin 검사도 위조할 수 있습니다.
+      실패 횟수 제한은 Worker 메모리 기준이라 인스턴스마다 따로 셉니다. 비용 보호는 YouTube 무료 할당량(결제 계정 없음)·자체 상한이 함께 맡습니다.
+    - 로컬: `.env.local`에 `ACCESS_CODE`를 넣을 때만 미리보기도 같은 검사를 하고, 비워 두면 검사하지 않습니다. 점검: `npm run e2e:access`
 
 ## 디자인 시스템 · 홈 · 메뉴 (A단계)
 

@@ -94,7 +94,19 @@ export type YtErrorCode =
   | 'forbidden'
   | 'bad_request'
   | 'upstream_error'
-  | 'network_error';
+  | 'network_error'
+  /** 접근 코드 (server/accessAuth.ts) */
+  | 'auth_required'
+  | 'auth_invalid'
+  | 'auth_locked'
+  | 'auth_not_configured';
+
+/** GET /api/youtube/auth — 접근 코드 확인 결과 (YouTube 호출 없음) */
+export interface YtAuthResponse {
+  ok: true;
+  /** 이 서버가 접근 코드를 요구하는지 (로컬 모드는 false) */
+  required: boolean;
+}
 
 export interface YtErrorResponse {
   ok: false;

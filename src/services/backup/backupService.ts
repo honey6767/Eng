@@ -5,6 +5,7 @@ import {
   BACKUP_FORMAT_VERSION,
   computeChecksum,
   countTables,
+  excludeAuthData,
   validateBackup,
   type BackupFile,
   type BackupTables,
@@ -27,7 +28,8 @@ export async function createBackup(store: BackupStore, now = new Date()): Promis
   return buildBackupFile(tables, schemaVersion, now);
 }
 
-export function buildBackupFile(tables: BackupTables, schemaVersion: number, now = new Date()): BackupFile {
+export function buildBackupFile(allTables: BackupTables, schemaVersion: number, now = new Date()): BackupFile {
+  const tables = excludeAuthData(allTables);
   return {
     format: BACKUP_FORMAT,
     formatVersion: BACKUP_FORMAT_VERSION,
@@ -112,6 +114,7 @@ export async function saveSnapshot(
   reason: string,
   now = new Date(),
 ): Promise<string> {
+  tables = excludeAuthData(tables);
   const record: SnapshotRecord = {
     id: createId(),
     createdAt: now.toISOString(),

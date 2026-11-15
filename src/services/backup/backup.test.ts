@@ -392,3 +392,36 @@ describe('학습 순서 — 새 기기의 빈 기본값만, 확인했을 때만 
     expect(await dump(target)).toEqual(before);
   });
 });
+
+describe('인증 정보는 백업·복원 대상이 아님', () => {
+  it('앱 설정에 인증처럼 보이는 키가 있어도 백업 파일·임시 복사본에 넣지 않는다', async () => {
+    const { db } = await seededDb();
+    await db.appMeta.put({ key: 'mes:accessCode', value: 'should-never-be-exported' });
+    await db.appMeta.put({ key: 'authToken', value: 'token-value-xyz' });
+    const file = await createBackup(createBackupStore(db));
+    const text = serializeBackup(file);
+    expect(text).not.toContain('should-never-be-exported');
+    expect(text).not.toContain('token-value-xyz');
+    expect(file.tables.appMeta.map((m) => m.key)).not.toContain('mes:accessCode');
+    expect(validateBackup(JSON.parse(text), CURRENT_SCHEMA_VERSION).ok).toBe(true);
+    // 기기 DB는 그대로 (지우지 않음)
+    expect(await db.appMeta.get('mes:accessCode')).toBeTruthy();
+    const snaps = newSnapshots();
+    const id = await createSnapshot(createBackupStore(db), snaps, 'manual');
+    expect(JSON.stringify(await snaps.get(id))).not.toContain('should-never-be-exported');
+  });
+  it('조작된 백업 파일에 인증 키가 있어도 복원하지 않는다', async () => {
+    const { db } = await seededDb();
+    const file = await createBackup(createBackupStore(db));
+    const tables = { ...file.tables, appMeta: [...file.tables.appMeta, { key: 'accessCode', value: 'injected-code' }] };
+    const forged = { ...file, tables, counts: { ...file.counts, appMeta: tables.appMeta.length }, checksum: { algorithm: 'SHA-256' as const, value: computeChecksum(file.schemaVersion, tables) } };
+    const target = await emptyDeviceDb();
+    const { plan } = await applyRestore(createBackupStore(target), newSnapshots(), forged);
+    expect(await target.appMeta.get('accessCode')).toBeUndefined();
+    expect(plan.tables.find((t) => t.table === 'appMeta')?.skipped).toBe(3);
+  });
+  it('기존 앱 설정 키(학습 순서 등)는 걸러지지 않는다 — 기존 백업과 호환', async () => {
+    const { isAuthLikeMetaKey } = await import('./backupFormat');
+    for (const k of ['initializedAt', 'schemaVersion', 'sampleSeededAt', 'studyQueue']) expect(isAuthLikeMetaKey(k)).toBe(false);
+  });
+});

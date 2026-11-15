@@ -1,7 +1,7 @@
 import { TABLE_NAMES, type TableName } from '@/db/database';
 import { canonicalJson } from './sha256';
 import { primaryKeyOf, referencesOf, uniqueKeysOf, type RowRef } from './references';
-import type { BackupTables } from './backupFormat';
+import { isAuthLikeMetaKey, type BackupTables } from './backupFormat';
 
 /**
  * 복원 계획 — 실제로 쓰기 전에 무엇을 추가하고 무엇을 건너뛰는지 계산한다.
@@ -162,7 +162,7 @@ export function planRestore(backup: BackupTables, current: BackupTables): Restor
   for (const t of TABLE_NAMES) {
     for (const row of backup[t]) {
       const id = primaryKeyOf(t, row);
-      if (t === 'appMeta' && DEVICE_META_KEYS.has(id)) {
+      if (t === 'appMeta' && (DEVICE_META_KEYS.has(id) || isAuthLikeMetaKey(id))) {
         counts[t].skipped++;
         continue;
       }

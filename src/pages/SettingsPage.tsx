@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Loading } from '@/components/ui/Loading';
 import { BackupPanel } from '@/components/settings/BackupPanel';
+import { AccessCodePanel } from '@/components/access/AccessCodePanel';
 import { formatDateKo } from '@/utils/date';
 
 const STATE_BADGE = {
@@ -200,6 +201,11 @@ function SettingsBody({
             </Button>
           )}
         </Card>
+      </section>
+
+      <section id="access">
+        <SectionTitle>접근 코드</SectionTitle>
+        <AccessCodePanel />
       </section>
 
       <section id="backup">

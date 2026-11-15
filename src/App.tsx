@@ -16,6 +16,7 @@ import { SettingsPage } from '@/pages/SettingsPage';
 import { MorePage } from '@/pages/MorePage';
 import { CollectionPage } from '@/pages/CollectionPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
+import { AccessGate } from '@/components/access/AccessGate';
 
 export default function App() {
   const { ready, error } = useAppInit();
@@ -36,6 +37,7 @@ export default function App() {
   return (
     <ToastProvider>
       <ConfirmProvider>
+        <AccessGate>
         <Routes>
           <Route element={<AppShell />}>
             <Route index element={<DashboardPage />} />
@@ -52,6 +54,7 @@ export default function App() {
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>
+        </AccessGate>
       </ConfirmProvider>
     </ToastProvider>
   );
