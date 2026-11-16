@@ -2,11 +2,11 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useState } from 'react';
 import { contentStore, extractionStore, repos } from '@/repositories';
 import { StudyContentPanel } from '@/components/content/StudyContentPanel';
+import { VideoPrepStatus } from '@/components/prep/PrepStatus';
 import { useLiveData } from '@/hooks/useLiveData';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { PlannedNotice } from '@/components/ui/PlannedNotice';
 import { Loading } from '@/components/ui/Loading';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { VideoThumb } from '@/components/video/VideoThumb';
@@ -15,7 +15,8 @@ import { YouTubePlayer, type SeekRequest } from '@/components/video/YouTubePlaye
 import { TranscriptPanel } from '@/components/video/TranscriptPanel';
 import { KeySentenceManager } from '@/components/sentences/KeySentenceManager';
 import { ExpressionNotesPanel } from '@/components/sentences/ExpressionNotesPanel';
-import { Button } from '@/components/ui/Button';
+import { Button, LinkButton } from '@/components/ui/Button';
+import { DialogueView } from '@/components/dialogue/DialogueView';
 import { useToast } from '@/hooks/useToast';
 import { useYouTubeStatus } from '@/hooks/useYouTubeStatus';
 import { startVideo } from '@/services/studyQueue';
@@ -23,13 +24,13 @@ import { formatDateKo, formatDuration } from '@/utils/date';
 import { TRANSCRIPT_STATUS } from '@/utils/labels';
 import type { Dialogue, DialogueComposition, Expression, KeySentence, LearningItem, Playlist } from '@/types/models';
 import { NotFoundPage } from './NotFoundPage';
-import { extractionController } from '@/services/extraction';
+import { prepController } from '@/services/prep';
 
 const TABS = [
-  { key: 'preview', label: '주요 표현' },
-  { key: 'sentences', label: '핵심 문장·Chunk' },
+  { key: 'sentences', label: '원문·Chunk' },
   { key: 'dialogues', label: '대화문' },
   { key: 'transcript', label: '자막' },
+  { key: 'preview', label: '주요 표현' },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
 
@@ -72,7 +73,7 @@ export function VideoDetailPage() {
   };
   const playlistById = new Map<string, Playlist>(playlists.map((p) => [p.id, p]));
   // 실제 영상은 2단계 기능인 자막 탭을 기본으로 연다
-  const tab: TabKey = tabParam ?? (video.isSample ? 'preview' : 'transcript');
+  const tab: TabKey = tabParam ?? (video.isSample ? 'preview' : 'sentences');
   const counts: Record<TabKey, number | null> = {
     preview: new Set(notes.map((n) => n.expression)).size + aiItems.length,
     sentences: sentences.length,
@@ -108,7 +109,7 @@ export function VideoDetailPage() {
               size="sm"
               onClick={async () => {
                 await startVideo(repos, video);
-                void extractionController.start();
+                void prepController.enqueue([video.id]);
                 toast('이 영상으로 학습을 시작했어요');
               }}
             >
@@ -199,11 +200,27 @@ export function VideoDetailPage() {
         </div>
       )}
       {tab === 'sentences' && !video.isSample && (
-        <div className="mb-4">
-          <StudyContentPanel video={video} day={day} transcript={transcript} sentences={sentences} items={learningItems} expressions={expressions} onSeek={video.youtubeVideoId ? seekTo : undefined} />
+        <div className="mb-4 space-y-4">
+          <VideoPrepStatus videoId={video.id} />
+          <StudyContentPanel video={video} day={day} sentences={sentences} items={learningItems} expressions={expressions} dialogues={dialogues} onSeek={video.youtubeVideoId ? seekTo : undefined} />
         </div>
       )}
-      {tab === 'sentences' && (
+      {tab === 'sentences' && !video.isSample && (
+        <details className="mt-2" data-testid="manual-sentences">
+          <summary className="cursor-pointer text-sm font-semibold text-muted">직접 고른 핵심 문장 (예전 방식) {manualSentences.length}개</summary>
+          <div className="mt-3">
+            <KeySentenceManager
+              video={video}
+              transcript={transcript}
+              sentences={manualSentences}
+              dialogues={dialogues}
+              expressions={expressions}
+              onSeek={seekTo}
+            />
+          </div>
+        </details>
+      )}
+      {tab === 'sentences' && video.isSample && (
         <KeySentenceManager
           video={video}
           transcript={transcript}
@@ -216,7 +233,12 @@ export function VideoDetailPage() {
           }}
         />
       )}
-      {tab === 'dialogues' && <DialogueList dialogues={dialogues} composition={composition} sentences={sentences} />}
+      {tab === 'dialogues' && (
+        <div className="space-y-4">
+          {!video.isSample && !dialogues.some((d) => d.generatedBy === 'ai' && d.kind === 'original') && <VideoPrepStatus videoId={video.id} />}
+          <DialogueList dialogues={dialogues} composition={composition} sentences={sentences} />
+        </div>
+      )}
       {tab === 'transcript' && (
         <TranscriptPanel
           video={video}
@@ -281,10 +303,9 @@ function DialogueList({
       <div className="space-y-3">
         <Card>
           <EmptyState icon="chat" title="대화문이 아직 없어요">
-            핵심 문장 5개를 자연스러운 대화문(기본 1개, 최대 3개)으로 재구성하면 여기에 표시됩니다.
+            원문 문장과 공통 핵심 Chunk로 만든 통합 대화문이 학습 자료 자동 생성에서 만들어지면 여기에 표시돼요.
           </EmptyState>
         </Card>
-        <PlannedNotice title="핵심 문장 → 대화문 재구성" stage="4단계" />
       </div>
     );
   }
@@ -294,7 +315,10 @@ function DialogueList({
       <p className="text-sm text-muted">
         핵심 문장 {sentences.length}개를 대화문 {dialogues.length}개로 구성했습니다.
       </p>
-      {dialogues.map((d) => {
+      {dialogues.filter((d) => d.generatedBy === 'ai').map((d) => (
+        <DayDialogueInline key={d.id} dialogue={d} sentences={sentences} />
+      ))}
+      {dialogues.filter((d) => d.generatedBy !== 'ai').map((d) => {
         const keyCount = d.lines.flatMap((l) => l.segments).filter((s) => s.kind === 'key').length;
         return (
           <Link key={d.id} to={`/dialogues/${d.id}`} className="block">
@@ -323,5 +347,71 @@ function DialogueList({
         </Card>
       )}
     </div>
+  );
+}
+
+/** Day 통합 대화문 — 영상 화면에서 바로 읽고 암기로 이어 간다 */
+function DayDialogueInline({ dialogue, sentences }: { dialogue: Dialogue; sentences: KeySentence[] }) {
+  const [showKorean, setShowKorean] = useState(true);
+  const used = new Set(dialogue.lines.map((l) => l.sourceSentenceId).filter(Boolean));
+  const ai = sentences.filter((s) => s.origin === 'ai_extracted' || used.has(s.id)).sort((a, b) => (a.aiNumber ?? a.order) - (b.aiNumber ?? b.order));
+  return (
+    <Card className="space-y-3 p-4" data-testid="day-dialogue">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge tone="brand">통합 대화문</Badge>
+        {dialogue.sourceDays?.map((d) => (
+          <Badge key={d} tone="info">
+            Day {d}
+          </Badge>
+        ))}
+        <span className="ml-auto" />
+        <button type="button" className="text-sm font-semibold text-brand" onClick={() => setShowKorean((v) => !v)}>
+          한국어 {showKorean ? '숨기기' : '보기'}
+        </button>
+      </div>
+      <div>
+        <p className="font-bold">{dialogue.title}</p>
+        <p className="mt-0.5 text-sm text-muted">{dialogue.situation}</p>
+      </div>
+      <DialogueView lines={dialogue.lines} sentences={sentences} showKorean={showKorean} highlightKeys />
+      {ai.length > 0 && (
+        <div className="rounded-xl bg-canvas p-3 text-sm" data-testid="source-map">
+          <p className="mb-1 text-xs font-semibold text-subtle">원문 문장 연결</p>
+          <ul className="space-y-0.5">
+            {ai.map((s) => {
+              const lineNos = dialogue.lines.filter((l) => l.sourceSentenceId === s.id).map((l) => l.order);
+              return (
+                <li key={s.id} className={lineNos.length ? '' : 'text-subtle'}>
+                  <b>{s.aiNumber ?? s.order}</b> <span className="en">{s.english}</span> → {lineNos.length ? `대화 ${lineNos.join(', ')}번째 줄` : '대화에 쓰지 않음'}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+      {(dialogue.chunkUsages?.length ?? 0) > 0 && (
+        <ul className="space-y-2" data-testid="day-chunk-usages">
+          {dialogue.chunkUsages!.map((u) => (
+            <li key={u.learningItemId} className="rounded-xl border border-line p-3 text-sm">
+              <p>
+                <mark className="en rounded bg-key px-1 font-bold text-ink">{u.text}</mark> <span className="text-xs text-subtle">대화 속 형태: {u.usedAs}</span>
+              </p>
+              {u.meaningInContext && <p className="mt-1"><span className="text-xs font-semibold text-subtle">이 대화의 의미 · </span>{u.meaningInContext}</p>}
+              {u.nuance && <p><span className="text-xs font-semibold text-subtle">뉘앙스 · </span>{u.nuance}</p>}
+              {u.whyUsed && <p><span className="text-xs font-semibold text-subtle">쓴 이유 · </span>{u.whyUsed}</p>}
+              {u.example.en && <p className="mt-1"><span className="text-xs font-semibold text-subtle">응용 · </span><span className="en">{u.example.en}</span> <span className="text-muted">— {u.example.ko}</span></p>}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <LinkButton to={`/dialogues/${dialogue.id}/memorize`} data-testid="start-memorize">
+          5단계 암기 시작
+        </LinkButton>
+        <LinkButton to={`/dialogues/${dialogue.id}`} variant="secondary">
+          대화문 상세
+        </LinkButton>
+      </div>
+    </Card>
   );
 }

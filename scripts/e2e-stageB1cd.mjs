@@ -118,7 +118,7 @@ async function main() {
     const ctx = await browser.newContext({ ...devices['iPad (gen 7)'] });
     await ctx.route(/^https:\/\/(i\.ytimg\.com|www\.youtube(-nocookie)?\.com)\//, (r) => r.fulfill({ status: 200, body: '' }));
     const reqs = [];
-    ctx.on('request', (r) => r.url().endsWith('/api/ai/extract') && reqs.push({ key: r.headers()['idempotency-key'], video: JSON.parse(r.postData() || '{}').videoId }));
+    ctx.on('request', (r) => r.url().endsWith('/api/ai/extract') && reqs.push({ key: r.headers()['idempotency-key'], video: JSON.parse(r.postData() || '{}').videoId, task: JSON.parse(r.postData() || '{}').task ?? 'extract' }));
     const page = await ctx.newPage();
     page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
     page.on('console', (m) => m.type() === 'error' && !/Failed to load resource/.test(m.text()) && errors.push(`console: ${m.text()}`));
@@ -129,13 +129,12 @@ async function main() {
     await seed(page);
     const before = await dumpDb(page);
 
-    // ── 1. 학습 시작 한 번으로 자동 추출·자동 적용 ──
-    await page.goto(`${BASE}/videos`);
-    await page.getByText('이 영상 학습 시작').waitFor();
-    await page.getByText('이 영상 학습 시작').click();
-    const after1 = await waitFor(page, (d) => d.tables.extractionJobs.filter((j) => ['succeeded', 'failed_permanent'].includes(j.status)).length === 4, '1차 추출');
+    // ── 1. '기존 영상 자료 만들기 시작' 한 번으로 자동 추출·자동 적용 ──
+    await page.goto(`${BASE}/extraction`);
+    await page.getByTestId('prep-start-all').click();
+    const after1 = await waitFor(page, (d) => d.tables.extractionJobs.filter((j) => ['succeeded', 'failed_permanent'].includes(j.status)).length === 4 && d.tables.extractionJobs.some((j) => j.videoId === 'cd-long'), '1차 추출');
     const jobs = Object.fromEntries(after1.tables.extractionJobs.map((j) => [j.videoId, j]));
-    check('학습 시작 한 번으로 4개 영상 자동 처리 (자막 있는 영상·긴 영상 제외)', ['cd-ok', 'cd-low', 'cd-over'].every((v) => jobs[v]?.status === 'succeeded') && jobs['cd-fail']?.status === 'failed_permanent' && !jobs['cd-has'] && jobs['cd-long']?.status === 'skipped');
+    check('시작 한 번으로 4개 영상 자동 처리 (자막 있는 영상·긴 영상 제외)', ['cd-ok', 'cd-low', 'cd-over'].every((v) => jobs[v]?.status === 'succeeded') && jobs['cd-fail']?.status === 'failed_permanent' && !jobs['cd-has'] && jobs['cd-long']?.status === 'skipped');
     const drafts = Object.fromEntries(after1.tables.extractionDrafts.map((d) => [d.videoId, d]));
     check('품질이 괜찮은 결과는 자동으로 학습 자료(사용자 확인 없음)', drafts['cd-ok']?.status === 'approved' && drafts['cd-over']?.status === 'approved');
     check('전사가 부족한 결과는 자동 적용하지 않고 확인 필요', drafts['cd-low']?.status === 'pending_review');
@@ -165,15 +164,15 @@ async function main() {
     check('확인 필요 초안: Chunk를 빼고 적용 → 일부 적용, 확인 권장 표시', low?.status === 'partially_approved' && after2.tables.transcripts.some((t) => t.videoId === 'cd-low' && t.verification === 'needs_review') && !after2.tables.learningItems.some((l) => l.videoId === 'cd-low' && l.kind === 'intro_chunk'));
 
     // ── 3. 실패한 영상 모두 다시 추출 (사용자가 누를 때만) ──
-    const failKeysBefore = new Set(reqs.filter((r) => r.video === 'mockFail001').map((r) => r.key));
+    const failKeysBefore = new Set(reqs.filter((r) => r.video === 'mockFail001' && r.task === 'extract').map((r) => r.key));
     await page.getByTestId('retry-all').click();
     const after3 = await waitFor(page, (d) => {
       const j = d.tables.extractionJobs.find((x) => x.videoId === 'cd-fail');
       return j && j.status === 'failed_permanent' && j.attempts >= 2;
     }, '다시 추출');
-    const failKeys = new Set(reqs.filter((r) => r.video === 'mockFail001').map((r) => r.key));
+    const failKeys = new Set(reqs.filter((r) => r.video === 'mockFail001' && r.task === 'extract').map((r) => r.key));
     check('실패 영상 다시 추출: 새 식별자 1개로 한 번 더 요청 (자동 재요청은 없었음)', failKeysBefore.size === 1 && failKeys.size === 2, `식별자 ${failKeysBefore.size} → ${failKeys.size}`);
-    check('다른 영상은 다시 요청하지 않음', new Set(reqs.filter((r) => r.video === 'aaaaaaaaaaa').map((r) => r.key)).size === 1);
+    check('다른 영상은 다시 요청하지 않음', new Set(reqs.filter((r) => r.video === 'aaaaaaaaaaa' && r.task === 'extract').map((r) => r.key)).size === 1);
     void after3;
 
     // ── 4. Day 정리 ──

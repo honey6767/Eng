@@ -1,9 +1,12 @@
 import {
   CONTENT_LIMITS,
+  DAYPACK_LIMITS,
   DIALOGUE_LIMITS,
   type AiContentRequest,
+  type AiDayPackRequest,
   type AiDialogueRequest,
   type AiExtractRequest,
+  type AiPackRequest,
   type AiTaskRequest,
 } from '../../src/types/aiApi.ts';
 import { isValidVideoId } from '../../src/utils/youtubeUrl.ts';
@@ -18,8 +21,8 @@ import { isValidVideoId } from '../../src/utils/youtubeUrl.ts';
  * 프롬프트는 서버만 가진다(앱은 재료만 보낸다). 키·비밀정보는 여기 없다.
  */
 
-export type TaskKind = 'extract' | 'content' | 'dialogue';
-export const taskOf = (r: AiTaskRequest): TaskKind => (r.task === 'content' ? 'content' : r.task === 'dialogue' ? 'dialogue' : 'extract');
+export type TaskKind = 'extract' | 'content' | 'dialogue' | 'pack' | 'daypack';
+export const taskOf = (r: AiTaskRequest): TaskKind => r.task ?? 'extract';
 
 const str = (v: unknown, max: number, min = 1): v is string => typeof v === 'string' && v.trim().length >= min && v.length <= max;
 const REF = /^[A-Za-z0-9_:.-]{1,160}$/;
@@ -31,7 +34,8 @@ export function validateTaskRequest(raw: unknown): AiTaskRequest | null {
   if (r.task === undefined || r.task === 'extract') {
     if (typeof r.videoId !== 'string' || !isValidVideoId(r.videoId)) return null;
     if (typeof r.durationSec !== 'number' || !Number.isInteger(r.durationSec) || r.durationSec < 1 || r.durationSec > 24 * 3600) return null;
-    return { videoId: r.videoId, durationSec: r.durationSec, promptVersion: r.promptVersion } satisfies AiExtractRequest;
+    if (r.variant !== undefined && !(typeof r.variant === 'number' && Number.isInteger(r.variant) && r.variant >= 2 && r.variant <= 99)) return null;
+    return { videoId: r.videoId, durationSec: r.durationSec, promptVersion: r.promptVersion, ...(r.variant ? { variant: r.variant as number } : {}) } satisfies AiExtractRequest;
   }
   if (r.task === 'content') {
     if (typeof r.videoId !== 'string' || !isValidVideoId(r.videoId)) return null;
@@ -40,6 +44,31 @@ export function validateTaskRequest(raw: unknown): AiTaskRequest | null {
     if (r.dayNumber !== null && !(typeof r.dayNumber === 'number' && Number.isInteger(r.dayNumber) && r.dayNumber > 0 && r.dayNumber < 10_000)) return null;
     if (!str(r.transcript, CONTENT_LIMITS.transcriptChars, 20)) return null;
     return { task: 'content', videoId: r.videoId, title: r.title, seriesKind: r.seriesKind, dayNumber: r.dayNumber as number | null, transcript: r.transcript, promptVersion: r.promptVersion } satisfies AiContentRequest;
+  }
+  if (r.task === 'pack') {
+    if (typeof r.videoId !== 'string' || !isValidVideoId(r.videoId)) return null;
+    if (!str(r.title, CONTENT_LIMITS.titleChars, 0)) return null;
+    if (r.seriesKind !== 'day' && r.seriesKind !== 'general') return null;
+    if (r.dayNumber !== null && !(typeof r.dayNumber === 'number' && Number.isInteger(r.dayNumber) && r.dayNumber > 0 && r.dayNumber < 10_000)) return null;
+    if (!str(r.transcript, CONTENT_LIMITS.transcriptChars, 20)) return null;
+    return { task: 'pack', videoId: r.videoId, title: r.title, seriesKind: r.seriesKind, dayNumber: r.dayNumber as number | null, transcript: r.transcript, promptVersion: r.promptVersion } satisfies AiPackRequest;
+  }
+  if (r.task === 'daypack') {
+    const L = DAYPACK_LIMITS;
+    if (typeof r.videoId !== 'string' || !isValidVideoId(r.videoId)) return null;
+    if (!str(r.title, CONTENT_LIMITS.titleChars, 0)) return null;
+    if (r.seriesKind !== 'day' && r.seriesKind !== 'general') return null;
+    if (r.dayNumber !== null && !(typeof r.dayNumber === 'number' && Number.isInteger(r.dayNumber) && r.dayNumber > 0 && r.dayNumber < 10_000)) return null;
+    if (!Array.isArray(r.sentences) || r.sentences.length < L.minSentences || r.sentences.length > L.maxSentences) return null;
+    const sentences = [];
+    for (const x of r.sentences as Record<string, unknown>[]) {
+      if (!x || typeof x !== 'object') return null;
+      if (typeof x.number !== 'number' || !Number.isInteger(x.number) || x.number < 1 || x.number > 999) return null;
+      if (!str(x.text, L.sentenceChars) || !str(x.meaningKo, L.sentenceChars, 0)) return null;
+      if (!Array.isArray(x.chunks) || x.chunks.length > L.maxChunksPerSentence || !x.chunks.every((c) => str(c, L.chunkChars))) return null;
+      sentences.push({ number: x.number, text: x.text, meaningKo: x.meaningKo, chunks: x.chunks as string[] });
+    }
+    return { task: 'daypack', videoId: r.videoId, title: r.title, seriesKind: r.seriesKind, dayNumber: r.dayNumber as number | null, sentences, promptVersion: r.promptVersion } satisfies AiDayPackRequest;
   }
   if (r.task === 'dialogue') {
     const L = DIALOGUE_LIMITS;
@@ -62,8 +91,8 @@ export function validateTaskRequest(raw: unknown): AiTaskRequest | null {
 
 /** 같은 식별자에 같은 내용이 왔는지 비교할 문자열 (기존 자막 추출은 예전 형식 그대로 유지) */
 export function bodyHashSource(r: AiTaskRequest): string {
-  if (r.task === 'content' || r.task === 'dialogue') return JSON.stringify(r);
-  return `${r.videoId}|${r.durationSec}|${r.promptVersion}`;
+  if (r.task) return JSON.stringify(r);
+  return `${r.videoId}|${r.durationSec}|${r.promptVersion}${r.variant ? `|v${r.variant}` : ''}`;
 }
 
 // ─────────────────────────────────────────────
@@ -219,4 +248,161 @@ export function buildTextCreateBody(model: string, prompt: string, schema: unkno
     input: [{ type: 'text', text: prompt }],
     response_format: { type: 'text', mime_type: 'application/json', schema },
   };
+}
+
+// ─────────────────────────────────────────────
+// pack / daypack — 공통 핵심 Chunk + Day 통합 대화문
+// ─────────────────────────────────────────────
+
+const EXAMPLES = { type: 'array', items: { type: 'object', properties: { en: { type: 'string' }, ko: { type: 'string' } }, required: ['en', 'ko'] } } as const;
+
+/** 문장별 Chunk — parts: 문장에서 순서대로 나오는 구성 단어 (사이에 낀 부사 등은 빼고) */
+const PACK_CHUNK_SCHEMA = {
+  type: 'object',
+  properties: {
+    text: { type: 'string' },
+    parts: { type: 'array', items: { type: 'string' } },
+    meaningKo: { type: 'string' },
+    meaningInSentence: { type: 'string' },
+    nuance: { type: 'string' },
+    usage: { type: 'string' },
+    comparison: { type: 'string' },
+    examples: EXAMPLES,
+  },
+  required: ['text', 'parts', 'meaningKo', 'meaningInSentence', 'nuance', 'usage', 'comparison', 'examples'],
+} as const;
+
+const CORE_CHUNK_SCHEMA = {
+  type: 'object',
+  properties: {
+    text: { type: 'string' },
+    parts: { type: 'array', items: { type: 'string' } },
+    meaningKo: { type: 'string' },
+    nuance: { type: 'string' },
+    usage: { type: 'string' },
+    comparison: { type: 'string' },
+    examples: EXAMPLES,
+    sentenceNumbers: { type: 'array', items: { type: 'integer' } },
+  },
+  required: ['text', 'parts', 'meaningKo', 'nuance', 'usage', 'comparison', 'examples', 'sentenceNumbers'],
+} as const;
+
+const DAY_DIALOGUE_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    situation: { type: 'string' },
+    lines: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          speaker: { type: 'string', enum: ['A', 'B'] },
+          en: { type: 'string' },
+          ko: { type: 'string' },
+          sourceSentenceNumber: { type: 'integer' },
+          chunkTexts: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['speaker', 'en', 'ko', 'sourceSentenceNumber', 'chunkTexts'],
+      },
+    },
+    chunkNotes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          text: { type: 'string' },
+          usedAs: { type: 'array', items: { type: 'string' } },
+          meaningInContext: { type: 'string' },
+          nuance: { type: 'string' },
+          whyUsed: { type: 'string' },
+          example: { type: 'object', properties: { en: { type: 'string' }, ko: { type: 'string' } }, required: ['en', 'ko'] },
+        },
+        required: ['text', 'usedAs', 'meaningInContext', 'nuance', 'whyUsed', 'example'],
+      },
+    },
+  },
+  required: ['title', 'situation', 'lines', 'chunkNotes'],
+} as const;
+
+export const PACK_SCHEMA = {
+  type: 'object',
+  properties: {
+    sentences: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          number: { type: 'integer' },
+          text: { type: 'string' },
+          meaningKo: { type: 'string' },
+          timestampSec: { type: 'number' },
+          chunks: { type: 'array', items: PACK_CHUNK_SCHEMA },
+        },
+        required: ['number', 'text', 'meaningKo', 'timestampSec', 'chunks'],
+      },
+    },
+    coreChunks: { type: 'array', items: CORE_CHUNK_SCHEMA },
+    dialogue: DAY_DIALOGUE_SCHEMA,
+    notes: { type: 'string' },
+  },
+  required: ['sentences', 'coreChunks', 'dialogue', 'notes'],
+} as const;
+
+export const DAYPACK_SCHEMA = {
+  type: 'object',
+  properties: { coreChunks: { type: 'array', items: CORE_CHUNK_SCHEMA }, dialogue: DAY_DIALOGUE_SCHEMA, notes: { type: 'string' } },
+  required: ['coreChunks', 'dialogue', 'notes'],
+} as const;
+
+const PARTS_RULE = `- parts: 그 표현을 이루는 단어를 문장에 나오는 순서대로 적습니다. 사이에 부사 등이 끼어 있으면 낀 단어는 빼고 적습니다.
+  예) "I could seriously use a cup of coffee." → text "could use", parts ["could", "use"]`;
+
+const CORE_RULES = `공통 핵심 Chunk(coreChunks): 원문 문장들을 실제로 분석해, 여러 문장에 반복되거나 이 영상이 가르치는 가장 중요한 표현을 1~3개 고릅니다.
+- 모든 문장에 같은 표현이 있다고 가정하지 않습니다. 실제로 나오는 문장 번호만 sentenceNumbers에 적습니다.
+- 중간에 부사가 끼어도(could seriously use, could really use) 같은 표현으로 봅니다. text는 기본형("could use"), parts는 ["could", "use"].
+- 문장 전체를 Chunk로 쓰지 않습니다. 원문 문장은 그대로 두고, 그 안에서 학습할 Chunk만 식별합니다.
+- meaningKo(한국어 뜻), nuance(원어민이 쓸 때의 뉘앙스), usage(쓰는 상황), comparison(비슷한 표현과의 차이), examples(짧은 응용 예문 2개)`;
+
+const DIALOGUE_RULES = (dayLabel: string) => `Day 통합 대화문(dialogue): 이 영상의 원문 문장과 공통 핵심 Chunk로, 학습자가 통째로 외울 자연스러운 대화문 1개를 만듭니다.
+- 대화의 흐름과 상황이 우선입니다. 실제 원어민이 일상에서 주고받을 법한 대화로 만듭니다.
+- 원문 문장을 그대로 넣어도 되고, 자연스럽게 잇기 위해 새 문장을 더해도 됩니다. 원문 문장을 그대로(또는 거의 그대로) 쓴 줄은 sourceSentenceNumber에 그 번호를, 새로 만든 줄은 0을 적습니다.
+- 공통 핵심 Chunk의 의미와 뉘앙스를 유지하고, 가능하면 대화 안에서 여러 번 자연스럽게 씁니다(억지로 반복하지 않음).
+- 화자 A와 B가 번갈아 8~14줄. 모든 줄에 자연스러운 한국어 번역(ko).
+- chunkTexts: 그 줄에 들어간 공통 핵심 Chunk의 text (없으면 빈 배열)
+- chunkNotes: 공통 핵심 Chunk마다 하나. usedAs(대화에 실제로 쓴 형태들, en에 그대로 있는 부분), meaningInContext(이 대화에서의 의미), nuance, whyUsed(대화 속에서 쓴 이유), example(다른 상황 응용 예문 en·ko)
+- title은 짧은 한국어 제목(${dayLabel} 포함), situation은 상황과 맥락(한국어 2~3문장).`;
+
+const dayLabelOf = (r: { seriesKind: string; dayNumber: number | null; title: string }) => (r.seriesKind === 'day' && r.dayNumber ? `Day ${r.dayNumber}` : '이 영상');
+
+export function buildPackPrompt(r: AiPackRequest): string {
+  const content = buildContentPrompt({ ...r, task: 'content' });
+  const head = content.slice(0, content.indexOf('\n\n[자막]')).replace('설명은 모두 한국어로 씁니다. JSON으로만 답하세요.', '설명은 모두 한국어로 씁니다.');
+  return `${head.replace('3. notes:', '5. notes:')}
+${PARTS_RULE}
+
+3. ${CORE_RULES}
+
+4. ${DIALOGUE_RULES(dayLabelOf(r))}
+
+JSON으로만 답하세요.
+
+[자막]
+${r.transcript}`;
+}
+
+export function buildDayPackPrompt(r: AiDayPackRequest): string {
+  const list = r.sentences.map((x) => `${x.number}. ${x.text}${x.meaningKo ? ` (뜻: ${x.meaningKo})` : ''}${x.chunks.length ? ` [찾아 둔 Chunk: ${x.chunks.join(', ')}]` : ''}`).join('\n');
+  return `아래는 영어 학습 영상(${dayLabelOf(r)}, 제목: ${r.title})의 원문 핵심 문장입니다. 원문 문장은 고치지 않습니다.
+
+1. ${CORE_RULES}
+${PARTS_RULE}
+
+2. ${DIALOGUE_RULES(dayLabelOf(r))}
+
+3. notes: 확신하지 못한 부분. 없으면 빈 문자열.
+설명은 모두 한국어로 씁니다. JSON으로만 답하세요.
+
+[원문 핵심 문장]
+${list}`;
 }

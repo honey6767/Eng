@@ -43,7 +43,9 @@ export function buildCandidateGroups(ctx: CombineContext): CandidateGroup[] {
   const learned = new Set(ctx.expressionReviews.map((r) => r.itemId));
   const groups = new Map<string, CandidateGroup>();
   // Chunk를 먼저, 같은 묶음 안에서 같은 표현은 하나만
-  const items = [...ctx.items].filter((i) => i.kind === 'chunk' || i.kind === 'key').sort((a, b) => (a.kind === 'chunk' ? 0 : 1) - (b.kind === 'chunk' ? 0 : 1));
+  // 공통 핵심 Chunk → 문장별 Chunk → 핵심 표현 순으로, 같은 묶음 안에서 같은 표현은 하나만
+  const rank = (k: string) => (k === 'core' ? 0 : k === 'chunk' ? 1 : 2);
+  const items = [...ctx.items].filter((i) => i.kind === 'core' || i.kind === 'chunk' || i.kind === 'key').sort((a, b) => rank(a.kind) - rank(b.kind));
   for (const item of items) {
     const expression = exprById.get(item.expressionId);
     const video = item.videoId ? videoById.get(item.videoId) : undefined;

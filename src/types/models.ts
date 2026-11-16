@@ -257,6 +257,14 @@ export interface DialogueLine {
   speaker: Speaker;
   segments: DialogueSegment[];
   korean: string;
+  /** Day 통합 대화문 — 이 줄이 원문 문장을 그대로(또는 거의 그대로) 쓴 경우 그 핵심 문장 id */
+  sourceSentenceId?: string;
+}
+
+/** 빈칸 암기 자료 — 줄마다 단어별 빈칸 순위 (1=핵심 Chunk, 2=주요 단어, 3=나머지). 단어 순서는 wordsOf(영어 문장)과 같다 */
+export interface BlankPlan {
+  version: 1;
+  lines: Record<string, number[]>;
 }
 
 /**
@@ -291,6 +299,8 @@ export interface Dialogue extends BaseRecord {
   unusedLearningItemIds?: string[];
   /** 이 대화문을 만든 AI 요청 식별자 */
   aiRequestId?: string;
+  /** 빈칸 암기 자료 (AI 없이 기기에서 계산) */
+  blankPlan?: BlankPlan;
 }
 
 export interface DialogueChunkUsage {
@@ -397,6 +407,8 @@ export interface DialogueProgress {
   memorizedAt: ISODateString | null;
   /** 3단계 적응형 빈칸: 세그먼트별 숙련도 (키: lineId:segmentIndex) */
   blankMastery: Record<string, number>;
+  /** 빈칸 양 (0~100, 단계별) — 사용자가 조절 */
+  blankLevels?: Partial<Record<MemorizeStep, number>>;
   updatedAt: ISODateString;
   isSample?: boolean;
 }
@@ -442,7 +454,8 @@ export interface AppMeta {
 // ─────────────────────────────────────────────
 
 /** 학습 대상의 종류: 핵심 표현 · 영상 속 Chunk · 대화문 Chunk */
-export type LearningItemKind = 'key' | 'intro_chunk' | 'dialogue_chunk' | 'chunk';
+/** core = 영상(Day)의 공통 핵심 Chunk (여러 원문 문장에 반복되는 표현) */
+export type LearningItemKind = 'key' | 'intro_chunk' | 'dialogue_chunk' | 'chunk' | 'core';
 
 /** 문장 속 Chunk 설명 (AI 학습 콘텐츠) */
 export interface ChunkDetail {
@@ -454,6 +467,10 @@ export interface ChunkDetail {
   /** 비슷한 표현과의 차이 */
   comparison: string;
   examples: { en: string; ko: string }[];
+  /** 떨어진 표현의 구성 단어 (예: ["could", "use"] — "could seriously use"에도 맞음) */
+  parts?: string[];
+  /** 원문에 나온 실제 형태 (예: "could seriously use") */
+  surface?: string;
 }
 /** Day 영상에서 왔는지(day), 그 밖의 영상인지(other) */
 export type LearningItemSourceType = 'day' | 'other';
@@ -489,6 +506,8 @@ export interface LearningItem extends BaseRecord {
   selected?: boolean;
   /** 이 항목을 만든 AI 요청 식별자 (문장·Chunk 생성) */
   contentRequestId?: string;
+  /** kind='core' — 이 공통 Chunk가 나오는 원문 문장과 그 문장 속 실제 형태 */
+  occurrences?: { sentenceId: string; surface: string }[];
 }
 
 export type DayAssignmentStatus = 'suggested' | 'confirmed';
@@ -537,6 +556,10 @@ export interface ExtractionJob extends BaseRecord {
   lastError: { code: string; message: string } | null;
   /** 진행 중인 요청 식별자 */
   currentRequestId: string | null;
+  /** 사용자가 다시 시도를 누름 → 다음 새 요청의 첫 전송에 retryFailed를 붙인다 */
+  retryRequested?: boolean;
+  /** 사용자가 결과를 버리고 다시 추출한 횟수 + 1 (2부터 요청에 붙여 새 작업으로) */
+  variant?: number;
   /** 항상 빈 배열 — 구간 분할은 구현하지 않음 */
   segments: unknown[];
   /** 한 탭만 실행하기 위한 점유 표시 */

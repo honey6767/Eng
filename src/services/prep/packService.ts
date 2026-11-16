@@ -1,0 +1,368 @@
+import {
+  AI_DAYPACK_PROMPT_VERSION,
+  AI_PACK_PROMPT_VERSION,
+  CONTENT_LIMITS,
+  DAYPACK_LIMITS,
+  type AiDayPackRequest,
+  type AiPackRequest,
+} from '@/types/aiApi';
+import type { BlankPlan, DayAssignment, Dialogue, DialogueChunkUsage, DialogueLine, DialogueSegment, Expression, KeySentence, LearningItem, Transcript, Video } from '@/types/models';
+import { normalizeExpressionKey } from '@/utils/text';
+import { chunkLabel, matchAllParts, matchParts, partsFrom, wordsOf } from '@/utils/chunkMatch';
+import { planContent, seriesOf, transcriptText, validateContent, type ContentResult } from '@/services/content/contentService';
+
+/**
+ * 학습 자료(Day 하나) — 원문 문장 · 문장별 Chunk · 공통 핵심 Chunk · Day 통합 대화문 · 빈칸 자료
+ *
+ * - pack: 저장된 자막 → 전부 (Gemini 1회)
+ * - daypack: 이미 저장된 원문 문장 → 공통 핵심 Chunk + Day 통합 대화문 (Gemini 1회, 자막은 보내지 않음)
+ * - 저장은 추가만. 원문 문장은 고치지 않는다. 빈칸 자료는 AI 없이 기기에서 계산한다.
+ */
+
+// ─────────────────────────────────────────────
+// 요청
+// ─────────────────────────────────────────────
+
+export function buildPackRequest(video: Video, transcript: Transcript, day: DayAssignment | undefined): AiPackRequest {
+  const s = seriesOf(video, day);
+  return { task: 'pack', videoId: video.youtubeVideoId!, title: video.title.slice(0, CONTENT_LIMITS.titleChars), seriesKind: s.seriesKind, dayNumber: s.dayNumber, transcript: transcriptText(transcript), promptVersion: AI_PACK_PROMPT_VERSION };
+}
+
+/** 이 영상의 AI 원문 문장 (번호순) — daypack 재료 */
+export function aiSentencesOf(sentences: KeySentence[]): KeySentence[] {
+  return sentences.filter((s) => s.origin === 'ai_extracted').sort((a, b) => (a.aiNumber ?? a.order) - (b.aiNumber ?? b.order));
+}
+
+export function buildDayPackRequest(video: Video, day: DayAssignment | undefined, sentences: KeySentence[], items: LearningItem[], expressions: Map<string, Expression>): AiDayPackRequest {
+  const s = seriesOf(video, day);
+  const L = DAYPACK_LIMITS;
+  return {
+    task: 'daypack',
+    videoId: video.youtubeVideoId!,
+    title: video.title.slice(0, CONTENT_LIMITS.titleChars),
+    seriesKind: s.seriesKind,
+    dayNumber: s.dayNumber,
+    sentences: aiSentencesOf(sentences)
+      .slice(0, L.maxSentences)
+      .map((x) => ({
+        number: x.aiNumber ?? x.order,
+        text: x.english.slice(0, L.sentenceChars),
+        meaningKo: x.korean.slice(0, L.sentenceChars),
+        chunks: items
+          .filter((i) => i.kind === 'chunk' && i.sentenceId === x.id)
+          .map((i) => expressions.get(i.expressionId)?.text ?? '')
+          .filter(Boolean)
+          .map((t) => t.slice(0, L.chunkChars))
+          .slice(0, L.maxChunksPerSentence),
+      })),
+    promptVersion: AI_DAYPACK_PROMPT_VERSION,
+  };
+}
+
+// ─────────────────────────────────────────────
+// 응답 검사
+// ─────────────────────────────────────────────
+
+const txt = (v: unknown, max = 600) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+const examplesOf = (v: unknown) =>
+  (Array.isArray(v) ? (v as Record<string, unknown>[]) : [])
+    .map((e) => ({ en: txt(e?.en, 300), ko: txt(e?.ko, 300) }))
+    .filter((e) => e.en)
+    .slice(0, 3);
+
+export interface CoreChunk {
+  text: string;
+  parts: string[];
+  meaningKo: string;
+  nuance: string;
+  usage: string;
+  comparison: string;
+  examples: { en: string; ko: string }[];
+}
+
+export interface DayDialogueLine {
+  speaker: 'A' | 'B';
+  en: string;
+  ko: string;
+  /** 원문 문장 번호 (새로 만든 줄은 null) */
+  sourceNumber: number | null;
+}
+
+export interface ChunkNote {
+  meaningInContext: string;
+  nuance: string;
+  whyUsed: string;
+  example: { en: string; ko: string };
+}
+
+export interface DayPackResult {
+  core: CoreChunk[];
+  /** 공통 Chunk의 normalizedKey → 대화 속 설명 */
+  notes: Map<string, ChunkNote>;
+  title: string;
+  situation: string;
+  lines: DayDialogueLine[];
+  extraNotes: string;
+}
+
+export type PackValidation = { ok: true; content: ContentResult | null; pack: DayPackResult; issues: string[] } | { ok: false; error: string };
+
+/** 비교용 단어 목록 */
+const wordList = (s: string) => wordsOf(s).map((t) => t.w);
+
+/** 줄이 원문 문장을 그대로(또는 거의 그대로) 썼는지 — 원문 단어의 80% 이상이 순서대로 들어 있으면 */
+export function usesSentence(line: string, sentence: string): boolean {
+  const a = wordList(sentence);
+  const b = wordList(line);
+  if (!a.length) return false;
+  let j = 0;
+  let hit = 0;
+  for (const w of a) {
+    const k = b.indexOf(w, j);
+    if (k >= 0) {
+      hit++;
+      j = k + 1;
+    }
+  }
+  return hit / a.length >= 0.8;
+}
+
+function validateDayPackObject(raw: Record<string, unknown>, sentences: { number: number; text: string }[], issues: string[]): DayPackResult | string {
+  const core: CoreChunk[] = [];
+  const seen = new Set<string>();
+  for (const c of Array.isArray(raw.coreChunks) ? (raw.coreChunks as Record<string, unknown>[]) : []) {
+    const text = txt(c?.text, 120);
+    const key = normalizeExpressionKey(text);
+    if (!text || !key || seen.has(key)) continue;
+    const parts = partsFrom(text, c.parts);
+    // 실제로 원문 문장에 나오는 공통 Chunk만 (모든 문장에 있다고 가정하지 않음)
+    if (!sentences.some((s) => matchParts(s.text, parts))) {
+      issues.push(`공통 Chunk '${text}'는 원문 문장에서 찾지 못해 뺐어요.`);
+      continue;
+    }
+    seen.add(key);
+    core.push({ text, parts, meaningKo: txt(c.meaningKo, 200), nuance: txt(c.nuance), usage: txt(c.usage), comparison: txt(c.comparison), examples: examplesOf(c.examples) });
+  }
+  const d = (raw.dialogue ?? {}) as Record<string, unknown>;
+  const numbers = new Map(sentences.map((s) => [s.number, s.text]));
+  const lines: DayDialogueLine[] = [];
+  for (const l of Array.isArray(d.lines) ? (d.lines as Record<string, unknown>[]) : []) {
+    const en = txt(l?.en, 500);
+    if (!en) continue;
+    let sourceNumber: number | null = typeof l.sourceSentenceNumber === 'number' && l.sourceSentenceNumber > 0 ? l.sourceSentenceNumber : null;
+    if (sourceNumber !== null && !(numbers.has(sourceNumber) && usesSentence(en, numbers.get(sourceNumber)!))) {
+      issues.push(`대화 ${lines.length + 1}번째 줄의 원문 출처(${sourceNumber}번)가 실제 문장과 달라 연결하지 않았어요.`);
+      sourceNumber = null;
+    }
+    lines.push({ speaker: l.speaker === 'B' ? 'B' : 'A', en, ko: txt(l.ko, 500), sourceNumber });
+  }
+  if (lines.length < 2) return '대화 줄이 너무 적어요.';
+  if (lines.some((l) => !l.ko)) issues.push('한국어 번역이 빠진 줄이 있어요.');
+  const notes = new Map<string, ChunkNote>();
+  for (const n of Array.isArray(d.chunkNotes) ? (d.chunkNotes as Record<string, unknown>[]) : []) {
+    const key = normalizeExpressionKey(txt(n?.text, 120));
+    if (!key || notes.has(key)) continue;
+    const ex = (n.example ?? {}) as Record<string, unknown>;
+    notes.set(key, { meaningInContext: txt(n.meaningInContext), nuance: txt(n.nuance), whyUsed: txt(n.whyUsed), example: { en: txt(ex.en, 300), ko: txt(ex.ko, 300) } });
+  }
+  return { core, notes, title: txt(d.title, 100), situation: txt(d.situation, 800), lines, extraNotes: txt(raw.notes, 1000) };
+}
+
+export function validatePack(text: string, durationSec: number | null): PackValidation {
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { ok: false, error: 'JSON 형식이 아니에요.' };
+  }
+  const c = validateContent(JSON.stringify({ sentences: raw.sentences, notes: raw.notes }), durationSec);
+  if (!c.ok) return c;
+  const issues = [...c.issues];
+  const pack = validateDayPackObject(raw, c.result.sentences, issues);
+  if (typeof pack === 'string') return { ok: false, error: pack };
+  return { ok: true, content: c.result, pack, issues };
+}
+
+export function validateDayPack(text: string, sentences: { number: number; text: string }[]): PackValidation {
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { ok: false, error: 'JSON 형식이 아니에요.' };
+  }
+  const issues: string[] = [];
+  const pack = validateDayPackObject(raw, sentences, issues);
+  if (typeof pack === 'string') return { ok: false, error: pack };
+  return { ok: true, content: null, pack, issues };
+}
+
+// ─────────────────────────────────────────────
+// 빈칸 자료 (AI 없음)
+// ─────────────────────────────────────────────
+
+const STOP = new Set(
+  "a an the and or but so of to in on at by for with from up as is am are was were be been being i you he she it we they me him her us them my your his its our their this that these those do does did have has had will would can could shall should may might must not no yes oh ok okay just very really too also then there here what who how when where why which if than well".split(
+    ' ',
+  ),
+);
+
+/** 줄마다 단어별 빈칸 순위: 1 = 핵심 Chunk, 2 = 주요 단어(동사·명사·형용사 등), 3 = 나머지 */
+export function buildBlankPlan(lines: DialogueLine[]): BlankPlan {
+  const out: BlankPlan = { version: 1, lines: {} };
+  for (const line of lines) {
+    const en = line.segments.map((s) => s.text).join(' ');
+    // 세그먼트를 이어 붙인 문장에서 Chunk 위치
+    const spans: [number, number][] = [];
+    let pos = 0;
+    line.segments.forEach((seg, i) => {
+      if (i > 0) pos += 1;
+      if (seg.kind === 'key' && seg.learningItemId) spans.push([pos, pos + seg.text.length]);
+      pos += seg.text.length;
+    });
+    out.lines[line.id] = wordsOf(en).map((t) => (spans.some(([s, e]) => t.start >= s && t.end <= e) ? 1 : t.w.length >= 3 && !STOP.has(t.w) ? 2 : 3));
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────
+// 저장 계획 (추가만)
+// ─────────────────────────────────────────────
+
+export interface PackContext {
+  video: Video;
+  dayNumber: number | null;
+  /** pack이면 원문 문장·Chunk 결과 (이미 저장돼 있으면 null) */
+  content: ContentResult | null;
+  pack: DayPackResult;
+  requestId: string;
+  existingSentences: KeySentence[];
+  existingItems: LearningItem[];
+  existingDialogues: Dialogue[];
+  expressionIdByKey: Map<string, string>;
+  now: string;
+  newId: () => string;
+}
+
+export interface PackPlan {
+  sentences: KeySentence[];
+  expressions: Expression[];
+  items: LearningItem[];
+  dialogue: Dialogue | null;
+  /** 공통 Chunk 수 · 대화문 줄 수 · 원문을 쓴 줄 수 */
+  summary: { sentences: number; chunks: number; core: number; lines: number; sourcedLines: number };
+}
+
+export const coreItemId = (requestId: string, expressionId: string) => `li-core-${requestId}-${expressionId}`;
+export const dayDialogueId = (requestId: string) => `dlg-day-${requestId}`;
+
+/** 이 영상의 AI Day 통합 대화문이 이미 있는지 */
+export function hasDayDialogue(dialogues: Dialogue[], videoId: string): boolean {
+  return dialogues.some((d) => d.videoId === videoId && d.kind === 'original' && d.generatedBy === 'ai');
+}
+
+/** 영어 문장을 Chunk 부분(key)과 나머지(connector)로 나눈다 */
+function segmentBySpans(en: string, spans: { s: number; e: number; id: string }[]): DialogueSegment[] {
+  const sorted = [...spans].sort((a, b) => a.s - b.s).filter((x, i, arr) => i === 0 || x.s >= arr[i - 1].e);
+  const out: DialogueSegment[] = [];
+  let pos = 0;
+  for (const sp of sorted) {
+    const before = en.slice(pos, sp.s).trim();
+    if (before) out.push({ kind: 'connector', text: before });
+    out.push({ kind: 'key', text: en.slice(sp.s, sp.e), learningItemId: sp.id });
+    pos = sp.e;
+  }
+  const rest = en.slice(pos).trim();
+  if (rest) out.push({ kind: 'connector', text: rest });
+  return out.length ? out : [{ kind: 'connector', text: en }];
+}
+
+export function planPack(ctx: PackContext): PackPlan {
+  const { video, pack, requestId, now } = ctx;
+  const sourceType = ctx.dayNumber ? 'day' : 'other';
+  let sentences: KeySentence[] = [];
+  let expressions: Expression[] = [];
+  let items: LearningItem[] = [];
+  let byKey = new Map(ctx.expressionIdByKey);
+  const allSentences = [...ctx.existingSentences];
+  let idByNumber = new Map<number, string>();
+
+  if (ctx.content) {
+    const c = planContent({ video, dayNumber: ctx.dayNumber, result: ctx.content, requestId, existingSentences: ctx.existingSentences, existingItems: ctx.existingItems, expressionIdByKey: byKey, now, newId: ctx.newId });
+    sentences = c.sentences;
+    expressions = c.expressions;
+    items = c.items;
+    byKey = c.expressionIdByKey;
+    idByNumber = c.sentenceIdByNumber;
+    allSentences.push(...c.sentences);
+  } else {
+    for (const s of aiSentencesOf(ctx.existingSentences)) if (!idByNumber.has(s.aiNumber ?? s.order)) idByNumber.set(s.aiNumber ?? s.order, s.id);
+  }
+  const sentenceById = new Map(allSentences.map((s) => [s.id, s]));
+  const ordered = [...idByNumber.entries()].sort((a, b) => a[0] - b[0]).map(([, id]) => sentenceById.get(id)).filter((s): s is KeySentence => !!s);
+
+  // 공통 핵심 Chunk
+  const existingCore = new Set(ctx.existingItems.filter((i) => i.kind === 'core').map((i) => i.expressionId));
+  const coreItems: { item: LearningItem; core: CoreChunk }[] = [];
+  for (const core of pack.core) {
+    const key = normalizeExpressionKey(core.text);
+    let exprId = byKey.get(key);
+    if (!exprId) {
+      exprId = ctx.newId();
+      expressions.push({ id: exprId, createdAt: now, updatedAt: now, normalizedKey: key, text: core.text, meaningKo: core.meaningKo, sourceRefs: [{ videoId: video.id }], isFavorite: false, isMarkedDifficult: false, origin: 'ai_extracted' });
+      byKey.set(key, exprId);
+    }
+    if (existingCore.has(exprId)) continue;
+    existingCore.add(exprId);
+    const occurrences = ordered.flatMap((s) => {
+      const m = matchParts(s.english, core.parts);
+      return m ? [{ sentenceId: s.id, surface: m.surface }] : [];
+    });
+    const first = occurrences[0];
+    const item: LearningItem = {
+      id: coreItemId(requestId, exprId), createdAt: now, updatedAt: now, expressionId: exprId, videoId: video.id, sourceType, dayNumber: ctx.dayNumber,
+      kind: 'core', dialogueId: null, sourceText: first ? (sentenceById.get(first.sentenceId)?.english ?? null) : null, timestampSec: first ? (sentenceById.get(first.sentenceId)?.timestampSec ?? null) : null,
+      onScreen: false, origin: 'ai_extracted', status: 'confirmed', extractionDraftId: null, legacyKeySentenceId: null, sentenceId: first?.sentenceId ?? null,
+      chunk: { meaningInSentence: core.meaningKo, nuance: core.nuance, usage: core.usage, comparison: core.comparison, examples: core.examples, parts: core.parts, surface: first?.surface },
+      occurrences, selected: false, contentRequestId: requestId,
+    };
+    items.push(item);
+    coreItems.push({ item, core });
+  }
+
+  // Day 통합 대화문
+  let dialogue: Dialogue | null = null;
+  if (!hasDayDialogue(ctx.existingDialogues, video.id)) {
+    const usedForms = new Map<string, string[]>();
+    const lines: DialogueLine[] = pack.lines.map((l, i) => {
+      const spans = coreItems.flatMap(({ item, core }) =>
+        matchAllParts(l.en, core.parts).flatMap((m) => {
+          usedForms.set(item.id, [...(usedForms.get(item.id) ?? []), m.surface]);
+          return m.spans.map(([s, e]) => ({ s, e, id: item.id }));
+        }),
+      );
+      const sourceSentenceId = l.sourceNumber !== null ? idByNumber.get(l.sourceNumber) : undefined;
+      return { id: `line-${requestId}-${i}`, order: i + 1, speaker: l.speaker, segments: segmentBySpans(l.en, spans), korean: l.ko, ...(sourceSentenceId ? { sourceSentenceId } : {}) };
+    });
+    const usages: DialogueChunkUsage[] = coreItems
+      .filter(({ item }) => usedForms.has(item.id))
+      .map(({ item, core }) => {
+        const n = pack.notes.get(normalizeExpressionKey(core.text));
+        const forms = [...new Set(usedForms.get(item.id))];
+        return {
+          learningItemId: item.id, expressionId: item.expressionId, text: chunkLabel(core.text, core.parts, [...forms, ...(item.occurrences ?? []).map((o) => o.surface)]), usedAs: forms.join(' / '),
+          dayNumber: ctx.dayNumber, videoId: video.id, meaningInContext: n?.meaningInContext || core.meaningKo, nuance: n?.nuance || core.nuance, whyUsed: n?.whyUsed ?? '', example: n?.example ?? core.examples[0] ?? { en: '', ko: '' },
+        };
+      });
+    const sourced = lines.filter((l) => l.sourceSentenceId).length;
+    const order = Math.max(0, ...ctx.existingDialogues.filter((d) => d.videoId === video.id).map((d) => d.orderInVideo)) + 1;
+    const label = ctx.dayNumber ? `Day ${ctx.dayNumber}` : '이 영상';
+    dialogue = {
+      id: dayDialogueId(requestId), createdAt: now, updatedAt: now, kind: 'original', videoId: video.id, sourceVideoIds: [video.id], orderInVideo: order,
+      title: pack.title || `${label} 통합 대화문`, situation: pack.situation, lines, expressionIds: usages.map((u) => u.expressionId), generatedBy: 'ai',
+      compositionNote: [`${label} 원문 문장 ${ordered.length}개 중 ${new Set(lines.map((l) => l.sourceSentenceId).filter(Boolean)).size}개를 그대로 사용`, `공통 Chunk ${usages.map((u) => `${u.text} ×${usedForms.get(u.learningItemId)?.length ?? 0}`).join(', ') || '없음'}`, pack.extraNotes].filter(Boolean).join(' · '),
+      isFavorite: false, chunkUsages: usages, sourceDays: ctx.dayNumber ? [ctx.dayNumber] : [], aiRequestId: requestId, blankPlan: buildBlankPlan(lines),
+    };
+    return { sentences, expressions, items, dialogue, summary: { sentences: ordered.length, chunks: items.filter((i) => i.kind === 'chunk').length, core: coreItems.length, lines: lines.length, sourcedLines: sourced } };
+  }
+  return { sentences, expressions, items, dialogue, summary: { sentences: ordered.length, chunks: items.filter((i) => i.kind === 'chunk').length, core: coreItems.length, lines: 0, sourcedLines: 0 } };
+}

@@ -18,7 +18,7 @@ export function DialogueView({
   showEnglish?: boolean;
   highlightKeys?: boolean;
 }) {
-  const orderById = new Map(sentences.map((s) => [s.id, s.order]));
+  const orderById = new Map(sentences.map((s) => [s.id, s.aiNumber ?? s.order]));
 
   return (
     <ol className="flex flex-col gap-3">
@@ -39,12 +39,18 @@ export function DialogueView({
                 isA ? 'rounded-tl-md bg-brand-soft' : 'rounded-tr-md border border-line bg-surface'
               }`}
             >
+              {line.sourceSentenceId && orderById.get(line.sourceSentenceId) !== undefined && (
+                <p className="mb-1 text-[11px] font-bold text-brand" data-testid="line-source">
+                  원문 {orderById.get(line.sourceSentenceId)}번 문장
+                </p>
+              )}
               {showEnglish && (
                 <p className="en text-[16.5px] leading-relaxed text-ink">
                   {line.segments.map((seg, i) => {
                     const sep = i > 0 ? ' ' : '';
                     if (seg.kind === 'key' && highlightKeys) {
-                      const n = seg.keySentenceId ? orderById.get(seg.keySentenceId) : undefined;
+                      // 통합 대화문의 Chunk 부분에는 문장 번호를 붙이지 않는다
+                      const n = seg.keySentenceId && !seg.learningItemId ? orderById.get(seg.keySentenceId) : undefined;
                       return (
                         <span key={i}>
                           {sep}

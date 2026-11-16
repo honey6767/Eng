@@ -14,7 +14,8 @@ export type AiTransportResult =
   /** 접근 코드 문제 */
   | { kind: 'auth_error'; httpStatus: number; message: string };
 
-export type AiClient = { extract(requestId: string, req: AiTaskRequest): Promise<AiTransportResult> };
+/** retryFailed: 사용자가 '실패만 다시 시도'를 눌렀을 때 첫 요청에만 붙인다 (서버가 결과를 모르는 실패도 다시 생성) */
+export type AiClient = { extract(requestId: string, req: AiTaskRequest & { retryFailed?: boolean }): Promise<AiTransportResult> };
 
 export const aiClient: AiClient = {
   async extract(requestId, req) {

@@ -2,6 +2,7 @@ import { parseDayNumber } from '@/db/upgradeV2toV3';
 import { AI_CONTENT_PROMPT_VERSION, CONTENT_LIMITS, type AiContentRequest, type SeriesKind } from '@/types/aiApi';
 import type { ChunkDetail, DayAssignment, Expression, KeySentence, LearningItem, Transcript, Video } from '@/types/models';
 import { normalizeExpressionKey } from '@/utils/text';
+import { matchParts, partsFrom } from '@/utils/chunkMatch';
 
 /**
  * AI 학습 콘텐츠 — 저장된 자막에서 ① 원문 문장 ② 문장 속 Chunk 를 만든다.
@@ -108,7 +109,10 @@ export function validateContent(text: string, durationSec: number | null): Conte
       const ct = txt(c?.text, 120);
       if (!ct) continue;
       const lk = loose(ct);
-      if (!loose(en).includes(lk)) {
+      // 붙어 있는 형태 → 그대로, 아니면 parts로 떨어진 형태(could … use) 확인
+      const parts = partsFrom(ct, c.parts);
+      const m = loose(en).includes(lk) ? null : matchParts(en, parts);
+      if (!loose(en).includes(lk) && !m) {
         issues.push(`문장 ${number}: '${ct}'는 문장에 없어서 뺐어요.`);
         continue;
       }
@@ -127,6 +131,8 @@ export function validateContent(text: string, durationSec: number | null): Conte
         usage: txt(c.usage),
         comparison: txt(c.comparison),
         examples,
+        ...(m && parts.length > 1 ? { parts } : {}),
+        ...(m ? { surface: m.surface } : {}),
       });
     }
     sentences.push({ number, text: en, meaningKo: txt(s.meaningKo, 500), timestampSec: ts, chunks });
@@ -162,6 +168,10 @@ export interface ContentPlan {
   reusedSentences: number;
   /** 같은 영상에 이미 있는 Chunk라 다시 만들지 않은 수 */
   skippedChunks: number;
+  /** 영상 번호 → 핵심 문장 id (새로 만든 것과 기존 문장에 연결한 것 모두) */
+  sentenceIdByNumber: Map<number, string>;
+  /** 새로 만든 표현까지 포함한 normalizedKey → 표현 id */
+  expressionIdByKey: Map<string, string>;
 }
 
 export const contentSentenceId = (requestId: string, number: number, i: number) => `ks-ai-${requestId}-${number}-${i}`;
@@ -186,6 +196,7 @@ export function planContent(ctx: ContentContext): ContentPlan {
   const items: LearningItem[] = [];
   let reused = 0;
   let skipped = 0;
+  const sentenceIdByNumber = new Map<number, string>();
 
   result.sentences.forEach((s, i) => {
     let sentenceId: string;
@@ -221,6 +232,7 @@ export function planContent(ctx: ContentContext): ContentPlan {
         selected: false, contentRequestId: requestId,
       });
     }
+    if (!sentenceIdByNumber.has(s.number)) sentenceIdByNumber.set(s.number, sentenceId);
     for (const { exprId, c } of chunkRows) {
       // 같은 영상·같은 표현의 Chunk는 하나만 (처음 나온 문장에 연결)
       if (chunkExpr.has(exprId)) {
@@ -232,10 +244,10 @@ export function planContent(ctx: ContentContext): ContentPlan {
         id: contentChunkId(requestId, exprId), createdAt: now, updatedAt: now, expressionId: exprId, videoId: video.id, sourceType, dayNumber: ctx.dayNumber,
         kind: 'chunk', dialogueId: null, sourceText: s.text, timestampSec: s.timestampSec, onScreen: false, origin: 'ai_extracted', status: 'confirmed',
         extractionDraftId: null, legacyKeySentenceId: null, sentenceId,
-        chunk: { meaningInSentence: c.meaningInSentence, nuance: c.nuance, usage: c.usage, comparison: c.comparison, examples: c.examples },
+        chunk: { meaningInSentence: c.meaningInSentence, nuance: c.nuance, usage: c.usage, comparison: c.comparison, examples: c.examples, ...(c.parts ? { parts: c.parts } : {}), ...(c.surface ? { surface: c.surface } : {}) },
         selected: false, contentRequestId: requestId,
       });
     }
   });
-  return { sentences, expressions, items, reusedSentences: reused, skippedChunks: skipped };
+  return { sentences, expressions, items, reusedSentences: reused, skippedChunks: skipped, sentenceIdByNumber, expressionIdByKey: byKey };
 }

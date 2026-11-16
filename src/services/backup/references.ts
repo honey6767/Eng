@@ -89,6 +89,8 @@ export function referencesOf(table: TableName, row: AnyRow): RowRef[] {
           push(out, 'lines.segments.keySentenceId', 'keySentences', seg.keySentenceId);
           push(out, 'lines.segments.learningItemId', 'learningItems', seg.learningItemId);
         }
+      for (const line of d.lines ?? []) push(out, 'lines.sourceSentenceId', 'keySentences', line.sourceSentenceId);
+      for (const u of d.chunkUsages ?? []) push(out, 'chunkUsages.learningItemId', 'learningItems', u.learningItemId);
       break;
     }
     case 'dialogueCompositions': {
@@ -129,6 +131,7 @@ export function referencesOf(table: TableName, row: AnyRow): RowRef[] {
       push(out, 'videoId', 'videos', li.videoId);
       push(out, 'dialogueId', 'dialogues', li.dialogueId);
       push(out, 'sentenceId', 'keySentences', li.sentenceId);
+      for (const o of li.occurrences ?? []) push(out, 'occurrences.sentenceId', 'keySentences', o.sentenceId);
       break;
     }
     case 'dayAssignments':

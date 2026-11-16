@@ -125,6 +125,7 @@ export async function stepJob(job: ExtractionJob, video: Video, deps: RunnerDeps
   const t = clock();
   const iso = t.toISOString();
   let created = false;
+  let sendRetry = false;
   let req: AiRequest | undefined = job.currentRequestId ? await deps.store.getRequest(job.currentRequestId) : undefined;
 
   if (!req) {
@@ -134,7 +135,9 @@ export async function stepJob(job: ExtractionJob, video: Video, deps: RunnerDeps
       estVideoSec: video.durationSec, estTokens: video.durationSec ? video.durationSec * 100 : null, inputTokens: null, sentAt: null, finishedAt: null,
       pacificDate: pacificDate(t), httpStatus: null, errorCode: null, responseHash: null, createdAt: iso, updatedAt: iso,
     };
-    job = { ...job, status: 'running', currentRequestId: req.id, attempts: job.attempts + 1, attemptAfter: null, lastError: null, updatedAt: iso };
+    const retryFailed = !!job.retryRequested;
+    job = { ...job, status: 'running', currentRequestId: req.id, attempts: job.attempts + 1, attemptAfter: null, lastError: null, retryRequested: false, updatedAt: iso };
+    sendRetry = retryFailed;
     await deps.store.beginRequest(job, req);
     created = true;
   }
@@ -154,7 +157,7 @@ export async function stepJob(job: ExtractionJob, video: Video, deps: RunnerDeps
     await deps.store.putRequest(req);
   }
 
-  const r = await deps.client.extract(req.id, { videoId: video.youtubeVideoId!, durationSec: video.durationSec!, promptVersion: AI_PROMPT_VERSION });
+  const r = await deps.client.extract(req.id, { videoId: video.youtubeVideoId!, durationSec: video.durationSec!, promptVersion: AI_PROMPT_VERSION, ...(job.variant && job.variant > 1 ? { variant: job.variant } : {}), ...(sendRetry ? { retryFailed: true } : {}) });
   const iso2 = clock().toISOString();
   if (r.kind === 'transport_error') return { kind: 'retry', message: r.message, httpStatus: r.httpStatus ?? null };
   if (r.kind === 'auth_error') return { kind: 'pause', reason: 'auth', until: null, message: r.message, httpStatus: r.httpStatus, code: 'auth' };

@@ -3,15 +3,14 @@ import { useState } from 'react';
 import { extractionStore } from '@/repositories';
 import { useLiveData } from '@/hooks/useLiveData';
 import { useToast } from '@/hooks/useToast';
-import { extractionController } from '@/services/extraction';
+import { prepController } from '@/services/prep';
 import { retryAllFailed, retryJob, reviewOverview } from '@/services/extraction/manage';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button, LinkButton } from '@/components/ui/Button';
-import { PendingContentCard } from '@/components/content/PendingContentCard';
 import { Loading } from '@/components/ui/Loading';
-import { ExtractionStatusCard } from '@/components/extraction/ExtractionStatusCard';
+import { PrepStatusCard } from '@/components/prep/PrepStatus';
 import { errorText, issueText } from '@/components/extraction/labels';
 
 /**
@@ -24,12 +23,14 @@ export function ExtractionPage() {
   const data = useLiveData(() => reviewOverview(extractionStore), []);
   if (!data) return <Loading />;
 
-  const retry = async (fn: () => Promise<unknown>, msg: string) => {
+  const retry = async (fn: () => Promise<unknown>, msg: string, videoIds: string[]) => {
     setBusy(true);
     try {
       await fn();
       toast(msg);
-      void extractionController.start();
+      // 자막을 다시 추출할 영상은 자료 생성 대기열에서 이어서 처리 (실패 기록을 지우고 다시 시도)
+      await prepController.enqueue(videoIds);
+      void prepController.retryFailed(videoIds);
     } finally {
       setBusy(false);
     }
@@ -38,9 +39,9 @@ export function ExtractionPage() {
 
   return (
     <div className="space-y-5" data-testid="extraction-page">
-      <PageHeader title="AI 자막 관리" description="확인이 필요한 영상만 모았어요. 나머지는 자동으로 학습 자료가 됐어요." />
-      <ExtractionStatusCard showWhenEmpty />
-      <PendingContentCard />
+      <PageHeader title="자료 생성" description="영상마다 자막 → 원문 문장·Chunk → 공통 Chunk·Day 대화문을 자동으로 만들어요. 실패한 것만 다시 시도할 수 있어요." />
+      <PrepStatusCard full />
+      <h2 className="pt-2 font-bold">AI 자막 확인</h2>
 
       <Card className="p-4">
         <p className="font-bold text-ink">자동으로 학습 자료가 된 영상 {data.applied}개</p>
@@ -82,7 +83,7 @@ export function ExtractionPage() {
         <section data-testid="failed-list">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h2 className="font-bold">추출하지 못한 영상 {data.failed.length}개</h2>
-            <Button size="sm" variant="secondary" disabled={busy} onClick={() => retry(() => retryAllFailed({ store: extractionStore }), '실패한 영상을 다시 추출할게요')} data-testid="retry-all">
+            <Button size="sm" variant="secondary" disabled={busy} onClick={() => retry(() => retryAllFailed({ store: extractionStore }), '실패한 영상을 다시 추출할게요', data.failed.map((f) => f.job.videoId))} data-testid="retry-all">
               모두 다시 추출
             </Button>
           </div>
@@ -95,7 +96,7 @@ export function ExtractionPage() {
                     {errorText(job.lastError?.code)} · 시도 {job.attempts}번
                   </p>
                 </div>
-                <Button size="sm" variant="ghost" disabled={busy} onClick={() => retry(() => retryJob({ store: extractionStore }, job.id), '다시 추출할게요')}>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => retry(() => retryJob({ store: extractionStore }, job.id), '다시 추출할게요', [job.videoId])}>
                   다시 추출
                 </Button>
               </div>

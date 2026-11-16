@@ -1,4 +1,4 @@
-import type { AiContentRequest, AiDialogueRequest } from '../../src/types/aiApi.ts';
+import type { AiContentRequest, AiDayPackRequest, AiDialogueRequest, AiPackRequest } from '../../src/types/aiApi.ts';
 import type { GeminiClient, GeminiGetResult } from './gemini.ts';
 
 const MOCK_CHUNKS = ['could use', 'a little break', 'right now', 'sounds like', 'a good idea', 'figure out', 'get back to', 'running late', 'catch up', 'no big deal', 'make it'];
@@ -31,6 +31,63 @@ export function mockContentResult(r: AiContentRequest) {
     })),
     notes: '',
   };
+}
+
+/** parts가 순서대로(사이 단어 2개까지) 문장에 있으면 그 실제 형태 */
+function findForm(sentence: string, parts: string[]): string | null {
+  const words = sentence.split(/\s+/);
+  const clean = (w: string) => w.toLowerCase().replace(/[^a-z']/g, '');
+  for (let i = 0; i < words.length; i++) {
+    if (clean(words[i]) !== parts[0]) continue;
+    let j = i;
+    let ok = true;
+    for (const p of parts.slice(1)) {
+      let k = j + 1;
+      while (k < words.length && k - j <= 3 && clean(words[k]) !== p) k++;
+      if (k >= words.length || k - j > 3) {
+        ok = false;
+        break;
+      }
+      j = k;
+    }
+    if (ok) return words.slice(i, j + 1).join(' ').replace(/[.,!?]+$/, '');
+  }
+  return null;
+}
+
+/** 가짜 공통 Chunk + Day 대화문: 문장들에 가장 많이 나오는 아는 표현(사이 부사 허용)을 공통 Chunk로, 원문 문장을 그대로 쓴 줄 + 연결 문장 */
+function mockDayPack(sentences: { number: number; text: string }[], dayLabel: string) {
+  const counts = MOCK_CHUNKS.map((c) => ({ c, parts: c.split(' '), hits: sentences.filter((s) => findForm(s.text, c.split(' '))) }));
+  const best = counts.filter((x) => x.hits.length > 0).sort((a, b) => b.hits.length - a.hits.length)[0];
+  const core = best
+    ? [{ text: best.c, parts: best.parts, meaningKo: `${best.c}의 뜻`, nuance: '부드럽게 바람을 말하는 느낌', usage: '지칠 때·도움이 필요할 때', comparison: 'need보다 덜 직접적', examples: [{ en: `I ${best.c} a hand.`, ko: '도움이 좀 필요해.' }, { en: `You ${best.c} some sleep.`, ko: '너 좀 자야겠다.' }], sentenceNumbers: best.hits.map((s) => s.number) }]
+    : [];
+  const lines: { speaker: 'A' | 'B'; en: string; ko: string; sourceSentenceNumber: number; chunkTexts: string[] }[] = [];
+  sentences.forEach((s, i) => {
+    lines.push({ speaker: i % 2 === 0 ? 'A' : 'B', en: s.text, ko: `(번역) ${s.text}`, sourceSentenceNumber: s.number, chunkTexts: core.length && findForm(s.text, core[0].parts) ? [core[0].text] : [] });
+    if (i === 0) lines.push({ speaker: 'B', en: 'Same here, honestly.', ko: '나도 그래, 솔직히.', sourceSentenceNumber: 0, chunkTexts: [] });
+  });
+  const usedAs = core.length ? [...new Set(sentences.map((s) => findForm(s.text, core[0].parts)).filter((x): x is string => !!x))] : [];
+  return {
+    coreChunks: core,
+    dialogue: {
+      title: `${dayLabel} 카페에서`,
+      situation: '퇴근 후 지친 두 동료가 카페에서 이야기합니다.',
+      lines,
+      chunkNotes: core.map((c) => ({ text: c.text, usedAs, meaningInContext: `여기서는 ${c.meaningKo}`, nuance: '편한 사이의 말투', whyUsed: '피곤함을 부드럽게 말하려고', example: { en: `I ${c.text} a break.`, ko: '좀 쉬고 싶다.' } })),
+    },
+    notes: '',
+  };
+}
+
+export function mockPackResult(r: AiPackRequest) {
+  const c = mockContentResult({ ...r, task: 'content' });
+  const sentences = c.sentences.map((s) => ({ ...s, chunks: s.chunks.map((k) => ({ ...k, parts: k.text.split(' ') })) }));
+  return { sentences, ...mockDayPack(sentences, r.dayNumber ? `Day ${r.dayNumber}` : '영상'), notes: '' };
+}
+
+export function mockDayPackResult(r: AiDayPackRequest) {
+  return mockDayPack(r.sentences, r.dayNumber ? `Day ${r.dayNumber}` : '영상');
 }
 
 /** 가짜 통합 대화문: Chunk마다 한 줄씩, 마지막 하나는 쓰지 않음(unusedRefs 확인용) */
@@ -68,12 +125,19 @@ export function createMockGemini(): GeminiClient & { createCalls: string[]; getC
     createCalls,
     getCalls,
     async create(input) {
-      if (input.task === 'content' || input.task === 'dialogue') {
-        const tag = input.task === 'content' ? `content:${input.videoId}` : 'dialogue';
+      if (input.task === 'content' || input.task === 'dialogue' || input.task === 'pack' || input.task === 'daypack') {
+        const tag = input.task === 'dialogue' ? 'dialogue' : `${input.task}:${input.videoId}`;
         createCalls.push(tag);
-        if (input.task === 'content' && input.videoId.startsWith('mockBad')) return { kind: 'rejected', httpStatus: 400, reason: 'invalid', message: '가짜 거부' };
+        if (input.task !== 'dialogue' && input.videoId.startsWith('mockBad')) return { kind: 'rejected', httpStatus: 400, reason: 'invalid', message: '가짜 거부' };
+        if (input.task !== 'dialogue' && input.videoId.startsWith('mockFail')) {
+          const id = `mock-interaction-${++seq}-${tag}`;
+          jobs.set(id, { videoId: 'mockFail', durationSec: 0, polls: 0 });
+          return { kind: 'created', interactionId: id, status: 'in_progress' };
+        }
+        const text =
+          input.task === 'content' ? mockContentResult(input) : input.task === 'dialogue' ? mockDialogueResult(input) : input.task === 'pack' ? mockPackResult(input) : mockDayPackResult(input);
         const id = `mock-interaction-${++seq}-${tag}`;
-        jobs.set(id, { videoId: tag, durationSec: 0, polls: 0, text: JSON.stringify(input.task === 'content' ? mockContentResult(input) : mockDialogueResult(input)) });
+        jobs.set(id, { videoId: tag, durationSec: 0, polls: 0, text: JSON.stringify(text) });
         return { kind: 'created', interactionId: id, status: 'in_progress' };
       }
       const { videoId, durationSec } = input;

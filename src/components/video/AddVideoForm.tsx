@@ -4,6 +4,7 @@ import { repos } from '@/repositories';
 import { youtubeClient, YouTubeApiError, type ProxyStatus } from '@/services/integrations/youtubeClient';
 import { importPlaylist, importVideo, importVideoWithoutProxy, type ImportOutcome } from '@/services/videoImportService';
 import { parseYouTubeUrl } from '@/utils/youtubeUrl';
+import { enqueueNewVideos } from '@/services/prep';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Icon } from '@/components/ui/Icon';
@@ -26,7 +27,10 @@ export function AddVideoForm({ status, onImported }: { status: ProxyStatus | nul
     setError(null);
     setResult(null);
     try {
+      const before = new Set((await repos.videos.list()).map((v) => v.id));
       const r = await fn();
+      // 새로 등록된 영상은 학습 자료 자동 생성 대기열에 넣는다 (기존 영상은 그대로)
+      void enqueueNewVideos(before, (await repos.videos.list()).map((v) => v.id));
       setResult(r);
       setInput('');
       setPending(null);

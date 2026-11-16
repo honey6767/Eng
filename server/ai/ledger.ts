@@ -37,8 +37,19 @@ export interface UsageRow {
   requests: number;
 }
 
+/** 생성 결과 보관 (작업 키별, 영구) — 다른 기기가 같은 작업을 요청하면 Gemini 없이 이 결과를 돌려준다 */
+export interface ResultRow {
+  workKey: string;
+  resultText: string;
+  model: string | null;
+  usageJson: string | null;
+  createdAt: number;
+}
+
 export interface LedgerStore {
   get(key: string): LedgerRow | null;
+  getResult(workKey: string): ResultRow | null;
+  putResult(row: ResultRow): void;
   put(row: LedgerRow): void;
   getUsage(pacificDate: string): UsageRow;
   putUsage(row: UsageRow): void;
@@ -51,8 +62,14 @@ export interface LedgerStore {
 export function memoryLedgerStore(): LedgerStore & { rows: Map<string, LedgerRow> } {
   const rows = new Map<string, LedgerRow>();
   const usage = new Map<string, UsageRow>();
+  const results = new Map<string, ResultRow>();
   return {
     rows,
+    getResult: (k) => {
+      const r = results.get(k);
+      return r ? { ...r } : null;
+    },
+    putResult: (r) => void (results.has(r.workKey) || results.set(r.workKey, { ...r })),
     get: (k) => {
       const r = rows.get(k);
       return r ? { ...r } : null;

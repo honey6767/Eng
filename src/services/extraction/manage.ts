@@ -74,7 +74,7 @@ export async function reviewOverview(store: ExtractionStore): Promise<ReviewOver
 export async function retryJob(deps: ManageDeps, jobId: string): Promise<boolean> {
   const job = await deps.store.getJob(jobId);
   if (!job || job.status !== 'failed_permanent') return false;
-  await deps.store.putJob({ ...job, status: 'queued', currentRequestId: null, attemptAfter: null, lastError: null, updatedAt: nowIso(deps) });
+  await deps.store.putJob({ ...job, status: 'queued', currentRequestId: null, attemptAfter: null, lastError: null, retryRequested: true, updatedAt: nowIso(deps) });
   return true;
 }
 
@@ -93,7 +93,8 @@ export async function rejectDraftAndRetry(deps: ManageDeps, draftId: string): Pr
   if (!job) return false;
   const now = nowIso(deps);
   await deps.store.putDraft({ ...draft, status: 'rejected', updatedAt: now });
-  await deps.store.putJob({ ...job, status: 'queued', currentRequestId: null, draftId: null, attemptAfter: null, lastError: null, updatedAt: now });
+  // 같은 작업이면 서버가 보관 결과(버린 결과)를 다시 주므로, 다른 작업(variant)으로 새로 요청
+  await deps.store.putJob({ ...job, status: 'queued', currentRequestId: null, draftId: null, attemptAfter: null, lastError: null, variant: (job.variant ?? 1) + 1, updatedAt: now });
   return true;
 }
 

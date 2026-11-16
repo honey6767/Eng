@@ -147,15 +147,23 @@ async function main() {
     await seed(page);
     const before = await dumpDb(page);
 
-    // ── Day 11: 문장·Chunk 만들기 ──
+    // ── 자료 생성: 기존 영상 자료 만들기 시작 (대기열이 차례로 처리) ──
+    await page.goto(`${BASE}/extraction`);
+    await page.getByTestId('prep-start-all').click();
+    for (let i = 0; i < 90; i++) {
+      await page.waitForTimeout(1000);
+      const t = (await page.getByTestId('prep-counts').count()) ? await page.getByTestId('prep-counts').innerText() : '';
+      if (/완료 5 · 대기 0/.test(t)) break;
+    }
+    check('자료 생성: 5개 영상 차례로 완료', /완료 5 · 대기 0/.test(await page.getByTestId('prep-counts').innerText()), await page.getByTestId('prep-counts').innerText());
+
+    // ── Day 11: 원문 문장·Chunk ──
     await page.goto(`${BASE}/videos/c11?tab=sentences`);
-    await page.getByTestId('content-start').click();
-    const p11 = await waitPhase(page, 'content-status');
-    check('Day 11: 버튼 → 요청 → 저장 완료 표시', p11 === 'succeeded', await page.getByTestId('content-status').innerText());
+    await page.getByTestId('study-content').waitFor();
     const sentences = await page.getByTestId('content-sentence').allInnerTexts();
     check('Day 11: 번호별 원문 문장 4개가 그대로 보임', sentences.length === 4 && sentences[0].startsWith('1') && sentences[0].includes('I could use a little break right now.') && sentences[3].includes('I am running late again.'), sentences.map((s) => s.split('\n')[1]).join(' | '));
     const chunkTexts = await page.getByTestId('content-chunk').allInnerTexts();
-    check('Day 11: 문장 속 Chunk가 따로 보임 (could use · a little break · right now …)', ['could use', 'a little break', 'right now'].every((c) => chunkTexts.some((t) => t.startsWith(c))), `Chunk ${chunkTexts.length}개`);
+    check('Day 11: 문장 속 Chunk가 따로 보임 (a little break · right now …)', ['a little break', 'right now'].every((c) => chunkTexts.some((t) => t.startsWith(c))), `Chunk ${chunkTexts.length}개`);
     await page.getByTestId('content-chunk').first().locator('summary').click();
     const detail = await page.getByTestId('content-chunk').first().innerText();
     check('Chunk 설명: 문장 속 의미·뉘앙스·쓰는 상황·비슷한 표현·예문', ['문장 속 의미', '뉘앙스', '쓰는 상황', '비슷한 표현'].every((k) => detail.includes(k)) && /—/.test(detail));
@@ -164,20 +172,6 @@ async function main() {
     await page.waitForTimeout(500);
     check('문장과 Chunk를 각각 고를 수 있음', /고른 문장 1 · 고른 Chunk 1/.test(await page.getByTestId('content-counts').innerText()));
     await page.screenshot({ path: `${SHOTS}/content-01-day11.png`, fullPage: true });
-    await page.getByTestId('content-start').count().then((n) => check('이미 만든 영상은 다시 만들기 버튼 없음', n === 0));
-
-    // ── AI 자막 관리: 나머지 한꺼번에 ──
-    await page.goto(`${BASE}/extraction`);
-    await page.getByTestId('pending-content').waitFor();
-    const pendingText = await page.getByTestId('pending-content').innerText();
-    check('AI 자막 관리: 문장·Chunk 없는 영상 4개 안내', /4개/.test(pendingText));
-    await page.getByTestId('pending-content-start').click();
-    for (let i = 0; i < 60; i++) {
-      await page.waitForTimeout(1000);
-      const t = (await page.getByTestId('pending-content-progress').count()) ? await page.getByTestId('pending-content-progress').innerText() : '';
-      if (/^4\/4/.test(t)) break;
-    }
-    check('한꺼번에 만들기 4/4 완료', /^4\/4/.test(await page.getByTestId('pending-content-progress').innerText()));
 
     // ── 일반 영상 ──
     await page.goto(`${BASE}/videos/g01?tab=sentences`);
@@ -195,7 +189,7 @@ async function main() {
 
     // ── 통합 대화문 ──
     await page.goto(`${BASE}/dialogues`);
-    await page.getByRole('tab', { name: /통합 대화문/ }).click();
+    await page.getByRole('tab', { name: /여러 Day 조합/ }).click();
     await page.getByTestId('combine-cta').getByRole('link', { name: '만들기' }).click();
     await page.getByTestId('combine-page').waitFor();
     const pressed = async (k) => (await page.getByTestId(`group-${k}`).getAttribute('aria-pressed')) === 'true';
@@ -229,7 +223,7 @@ async function main() {
     const chunks = after.tables.learningItems.filter((i) => i.kind === 'chunk');
     const ks = byId(after.tables.keySentences);
     check('저장: Chunk는 원본 문장·영상·Day와 연결', chunks.length > 0 && chunks.every((c) => ks[c.sentenceId] && c.videoId && (c.dayNumber || c.videoId === 'g01')));
-    check('AI 요청: 문장·Chunk 5번(영상당 1번) + 대화문 1개 식별자', new Set(tasks.filter((t) => t.task === 'content').map((t) => t.key)).size === 5 && new Set(tasks.filter((t) => t.task === 'dialogue').map((t) => t.key)).size === 1);
+    check('AI 요청: 학습 자료 5번(영상당 1번) + 대화문 1개 식별자', new Set(tasks.filter((t) => t.task === 'pack').map((t) => t.key)).size === 5 && new Set(tasks.filter((t) => t.task === 'dialogue').map((t) => t.key)).size === 1);
 
     // 기존 데이터 보존
     for (const t of ['videos', 'transcripts', 'reviewStates', 'dialogueProgress', 'studyLogs', 'playlists', 'expressionNotes']) check(`기존 ${t} 그대로`, same(byId(after.tables[t]), byId(before.tables[t])));

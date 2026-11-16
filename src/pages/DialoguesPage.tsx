@@ -37,8 +37,8 @@ export function DialoguesPage() {
       <div className="mb-4 flex gap-1.5" role="tablist" aria-label="대화문 종류">
         {(
           [
-            ['original', '영상 원본 대화문'],
-            ['combined', '통합 대화문'],
+            ['original', 'Day 대화문'],
+            ['combined', '여러 Day 조합'],
           ] as const
         ).map(([k, label]) => (
           <button

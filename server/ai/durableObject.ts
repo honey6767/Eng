@@ -48,7 +48,17 @@ function toRow(r: Record<string, unknown>): LedgerRow {
 export function sqliteLedgerStore(sql: DoStorage['sql']): LedgerStore {
   sql.exec(`CREATE TABLE IF NOT EXISTS requests (key TEXT PRIMARY KEY, body_hash TEXT NOT NULL, video_id TEXT NOT NULL, duration_sec INTEGER NOT NULL, state TEXT NOT NULL, interaction_id TEXT, lease_until INTEGER, pacific_date TEXT NOT NULL, counted INTEGER NOT NULL, failure_code TEXT, failure_message TEXT, consumed INTEGER NOT NULL, result_text TEXT, model TEXT, usage_json TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS usage (pacific_date TEXT PRIMARY KEY, video_sec INTEGER NOT NULL, requests INTEGER NOT NULL)`);
+  // 생성 결과 보관 (작업 키별, 영구·정리 안 함) — 기기 간 공유. 기존 표는 그대로
+  sql.exec(`CREATE TABLE IF NOT EXISTS results (work_key TEXT PRIMARY KEY, result_text TEXT NOT NULL, model TEXT, usage_json TEXT, created_at INTEGER NOT NULL)`);
   return {
+    getResult: (k) => {
+      const rows = sql.exec('SELECT work_key, result_text, model, usage_json, created_at FROM results WHERE work_key = ?', k).toArray();
+      if (!rows.length) return null;
+      const r = rows[0];
+      return { workKey: String(r.work_key), resultText: String(r.result_text), model: (r.model as string | null) ?? null, usageJson: (r.usage_json as string | null) ?? null, createdAt: Number(r.created_at) };
+    },
+    // 먼저 저장된 결과를 유지 (같은 작업 키는 한 번만)
+    putResult: (r) => void sql.exec('INSERT OR IGNORE INTO results (work_key, result_text, model, usage_json, created_at) VALUES (?, ?, ?, ?, ?)', r.workKey, r.resultText, r.model, r.usageJson, r.createdAt),
     get: (key) => {
       const rows = sql.exec(`SELECT ${COLS} FROM requests WHERE key = ?`, key).toArray();
       return rows.length ? toRow(rows[0]) : null;

@@ -21,7 +21,7 @@ export const SECONDARY_NAV: { title: string; items: NavItem[] }[] = [
     items: [
       { to: '/videos', label: '영상 · 핵심 표현', icon: 'video' },
       { to: '/expressions', label: '표현 노트', icon: 'book' },
-      { to: '/extraction', label: 'AI 자막 관리', icon: 'sparkle' },
+      { to: '/extraction', label: '자료 생성', icon: 'sparkle' },
       { to: '/days', label: 'Day 정리', icon: 'clock' },
     ],
   },

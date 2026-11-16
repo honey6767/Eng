@@ -46,14 +46,16 @@ function hintFor(code: string, body: AiTaskRequest): string {
   return '';
 }
 
-export async function runAiTask(key: string, makeBody: () => AiTaskRequest, deps: TaskDeps, onProgress: (p: TaskProgress) => void, signal?: AbortSignal): Promise<TaskOutcome> {
+export async function runAiTask(key: string, makeBody: () => AiTaskRequest, deps: TaskDeps, onProgress: (p: TaskProgress) => void, signal?: AbortSignal, opts: { retryFailed?: boolean } = {}): Promise<TaskOutcome> {
   const now = deps.now ?? (() => new Date());
   const sleep = deps.sleep ?? defaultSleep;
   const pollMs = deps.pollMs ?? 5_000;
   let st = await deps.store.getTask(key);
   if (st?.status === 'succeeded' && st.resultText) return { ok: true, requestId: st.requestId, text: st.resultText, reused: true };
 
+  let sendRetry = false;
   if (!st || st.status === 'failed' || st.status === 'applied') {
+    sendRetry = !!opts.retryFailed;
     const iso = now().toISOString();
     st = { requestId: (deps.newId ?? (() => crypto.randomUUID()))(), body: makeBody(), status: 'sent', startedAt: iso, updatedAt: iso, resultText: null, error: null };
     await deps.store.putTask(key, st);
@@ -68,7 +70,9 @@ export async function runAiTask(key: string, makeBody: () => AiTaskRequest, deps
 
   let transportFails = 0;
   while (!signal?.aborted) {
-    const r = await deps.client.extract(st.requestId, st.body);
+    // '다시 시도'는 새로 만든 요청의 첫 전송에만 (그 뒤 조회에는 붙이지 않음 → 같은 작업을 두 번 생성하지 않음)
+    const r = await deps.client.extract(st.requestId, sendRetry ? { ...st.body, retryFailed: true } : st.body);
+    sendRetry = false;
     if (r.kind === 'transport_error') {
       if (++transportFails > MAX_TRANSPORT_RETRIES) return { ok: false, httpStatus: r.httpStatus ?? null, code: 'network', message: `${r.message} 다시 누르면 같은 요청으로 이어서 확인해요(새로 생성하지 않음).` };
       onProgress({ phase: 'processing', since: st.startedAt, note: `${r.message} 다시 확인하는 중… (${transportFails}/${MAX_TRANSPORT_RETRIES})` });

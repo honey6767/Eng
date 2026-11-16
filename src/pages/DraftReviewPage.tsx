@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { extractionStore, repos } from '@/repositories';
 import { useLiveData } from '@/hooks/useLiveData';
 import { useToast } from '@/hooks/useToast';
-import { extractionController } from '@/services/extraction';
+import { prepController } from '@/services/prep';
 import { applyDraft, rejectDraftAndRetry, skipDraft } from '@/services/extraction/manage';
 import { assessDraft } from '@/services/extraction/applyDraft';
 import type { ExtractionResult, ValidationIssue } from '@/services/extraction/validateResult';
@@ -47,7 +47,10 @@ export function DraftReviewPage() {
     try {
       await fn();
       toast(msg);
-      if (restart) void extractionController.start();
+      if (restart) {
+        await prepController.enqueue([draft.videoId]);
+        void prepController.retryFailed([draft.videoId]);
+      }
       navigate('/extraction');
     } finally {
       setBusy(false);

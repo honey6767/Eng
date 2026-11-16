@@ -7,7 +7,8 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { Card, SectionTitle } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { FavoriteButton } from '@/components/ui/FavoriteButton';
-import { PlannedButton, PlannedNotice } from '@/components/ui/PlannedNotice';
+import { PlannedNotice } from '@/components/ui/PlannedNotice';
+import { LinkButton } from '@/components/ui/Button';
 import { Loading } from '@/components/ui/Loading';
 import { Icon } from '@/components/ui/Icon';
 import { DialogueView } from '@/components/dialogue/DialogueView';
@@ -25,7 +26,10 @@ export function DialogueDetailPage() {
   const data = useLiveData(async () => {
     const dialogue = await repos.dialogues.get(id);
     if (!dialogue) return null;
-    const keyIds = dialogue.lines.flatMap((l) => l.segments).flatMap((s) => (s.keySentenceId ? [s.keySentenceId] : []));
+    const keyIds = [
+      ...dialogue.lines.flatMap((l) => l.segments).flatMap((s) => (s.keySentenceId ? [s.keySentenceId] : [])),
+      ...dialogue.lines.flatMap((l) => (l.sourceSentenceId ? [l.sourceSentenceId] : [])),
+    ];
     const [sentences, expressions, progress, review, video] = await Promise.all([
       repos.keySentences.getMany(keyIds),
       repos.expressions.getMany(dialogue.expressionIds),
@@ -212,7 +216,9 @@ export function DialogueDetailPage() {
                 다음 복습: <b className="text-ink">{relativeDayLabel(review.nextReviewAt)}</b>
               </p>
             )}
-            <PlannedButton label="암기 시작" stage="5단계" className="mt-4 w-full" />
+            <LinkButton to={`/dialogues/${dialogue.id}/memorize`} className="mt-4 w-full">
+              {completed > 0 ? '이어서 암기' : '5단계 암기 시작'}
+            </LinkButton>
           </Card>
           <PlannedNotice title="듣고 따라 읽기(음성 재생)" stage="추후">
             음성 기능은 아직 구현되지 않았습니다. 지금은 화면의 문장을 소리 내어 읽어 보세요.

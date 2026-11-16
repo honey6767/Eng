@@ -117,13 +117,11 @@ async function main() {
     const before = await dumpDb(page);
     check('준비: 새 기기 v3(30) + 테스트 영상 4개', before.version === 30 && before.tables.videos.filter((v) => v.id.startsWith('e2e-')).length === 4);
 
-    await page.goto(`${BASE}/videos`);
-    await page.getByText('이 영상 학습 시작').waitFor();
-    const startedTitle = await page.getByTestId('queue-current-title').innerText();
-    await page.getByText('이 영상 학습 시작').click();
-    // 첫 생성 요청이 나갈 때까지
+    // 영상 화면에서 '이 영상으로 학습 시작' → 그 영상만 자료 생성 대기열에 들어감
+    await page.goto(`${BASE}/videos/e2e-v1`);
+    await page.getByRole('button', { name: '이 영상으로 학습 시작' }).click();
     for (let i = 0; i < 40 && keys.length === 0; i++) await page.waitForTimeout(250);
-    check("'학습 시작'을 누르면 자막 추출 요청이 백그라운드로 시작", keys.length > 0, startedTitle);
+    check("'학습 시작'을 누르면 그 영상의 자료 생성이 백그라운드로 시작", keys.length > 0);
     const mid = await dumpDb(page);
     check('진행 중 작업·요청 기록이 기기에 저장됨', mid.tables.extractionJobs.some((j) => j.status === 'running') && mid.tables.aiRequests.length >= 1);
 
@@ -131,46 +129,51 @@ async function main() {
     await page.reload();
     await page.locator('main').first().waitFor();
     await page.goto(`${BASE}/videos`);
-    await page.getByTestId('extraction-status').waitFor({ timeout: 15000 });
+    await page.getByTestId('prep-status').waitFor({ timeout: 15000 });
     await page.screenshot({ path: `${SHOTS}/sB1b-01-extracting.png`, fullPage: true });
 
-    // 완료까지 (가짜 Gemini: 영상당 조회 1~2번, 15초 간격)
+    // 완료까지 (가짜 Gemini: 자막 조회 1~2번 15초 간격 → 학습 자료)
     let done = null;
     for (let i = 0; i < 80; i++) {
       await page.waitForTimeout(2000);
       const d = await dumpDb(page);
-      if (d.tables.extractionJobs.filter((j) => j.status === 'succeeded').length === 2) {
+      if (d.tables.dialogues.some((x) => x.videoId === 'e2e-v1' && x.generatedBy === 'ai')) {
         done = d;
         break;
       }
     }
-    check('새로고침 뒤에도 이어서 2개 영상 모두 완료', !!done);
+    check('새로고침 뒤에도 이어서 자막 → 학습 자료(대화문)까지 완료', !!done);
     await page.waitForTimeout(500);
     await page.screenshot({ path: `${SHOTS}/sB1b-02-done.png`, fullPage: true });
     const after = done ?? (await dumpDb(page));
 
-    const distinct = [...new Set(keys.map((k) => k.key))];
     const perVideo = {};
-    for (const k of keys) perVideo[JSON.parse(k.body).videoId] = new Set([...(perVideo[JSON.parse(k.body).videoId] ?? []), k.key]);
-    check('영상마다 요청 식별자 1개 (새로고침 뒤에도 같은 식별자로 조회)', distinct.length === 2 && Object.values(perVideo).every((s) => s.size === 1), `요청 ${keys.length}번 · 식별자 ${distinct.length}개`);
-    check('자막 있는 영상·긴 영상은 요청 없음', !perVideo.ccccccccccc && !perVideo.ddddddddddd);
-    const jobs = byId(after.tables.extractionJobs);
-    check('긴 영상은 건너뜀(긴 영상)으로 표시', jobs['job-e2e-v4']?.status === 'skipped' && jobs['job-e2e-v4']?.lastError?.code === 'too_long');
-    // B1-d부터: 품질이 괜찮은 결과는 자동으로 학습 자료에 연결된다
-    check('결과는 초안 2개로 저장(원본 텍스트 보존) 후 자동 적용', after.tables.extractionDrafts.length === 2 && after.tables.extractionDrafts.every((d) => d.status === 'approved' && d.rawText));
-    check('요청 장부: 2건 모두 succeeded', after.tables.aiRequests.length === 2 && after.tables.aiRequests.every((r) => r.status === 'succeeded'));
-    check('화면에 완료 개수 표시', /완료 2/.test(await page.getByTestId('extraction-counts').innerText()));
+    for (const k of keys) {
+      const b = JSON.parse(k.body);
+      const id = `${b.task ?? 'extract'}:${b.videoId}`;
+      perVideo[id] = new Set([...(perVideo[id] ?? []), k.key]);
+    }
+    check('영상·단계마다 요청 식별자 1개 (새로고침 뒤에도 같은 식별자로 조회)', Object.values(perVideo).every((s) => s.size === 1) && !!perVideo['extract:eNODHkrNuDA'], Object.keys(perVideo).join(','));
+    check('다른 영상은 요청 없음 (기존 영상은 수동 시작 전까지 처리 안 함)', Object.keys(perVideo).every((k) => k.endsWith(':eNODHkrNuDA')));
+    check('결과는 초안으로 저장(원본 텍스트 보존) 후 자동 적용', after.tables.extractionDrafts.length === 1 && after.tables.extractionDrafts.every((d) => d.status === 'approved' && d.rawText));
+    check('요청 장부: 자막 1건 succeeded', after.tables.aiRequests.length === 1 && after.tables.aiRequests.every((r) => r.status === 'succeeded'));
+    await page.goto(`${BASE}/extraction`);
+    check('자료 생성 화면에 완료 개수 표시', /완료 1/.test(await page.getByTestId('prep-counts').innerText()));
 
     // 기존 데이터 보존: '학습 시작'이 원래 바꾸는 값(시작한 영상의 학습 상태)과 학습 순서 설정 말고는 그대로
-    for (const t of ['playlists', 'expressionNotes', 'keySentences', 'dialogues', 'dialogueCompositions', 'reviewStates', 'dialogueProgress', 'studyLogs']) {
+    for (const t of ['playlists', 'expressionNotes', 'dialogueCompositions', 'reviewStates', 'dialogueProgress', 'studyLogs']) {
       check(`기존 ${t} 그대로`, same(byId(after.tables[t]), byId(before.tables[t])));
     }
     // 자막·표현: 기존 레코드는 그대로이고, AI 자막·AI 표현만 새로 추가
+    for (const t of ['keySentences', 'dialogues']) {
+      const a = byId(after.tables[t]);
+      check(`기존 ${t} 그대로 + AI 자료만 추가`, Object.entries(byId(before.tables[t])).every(([id, r]) => same(a[id], r)) && after.tables[t].filter((r) => !byId(before.tables[t])[r.id]).every((r) => r.origin === 'ai_extracted' || r.generatedBy === 'ai'));
+    }
     for (const t of ['transcripts', 'expressions']) {
       const a = byId(after.tables[t]);
       const kept = Object.entries(byId(before.tables[t])).every(([id, r]) => same(a[id], r));
       const added = after.tables[t].filter((r) => !byId(before.tables[t])[r.id]);
-      const okAdded = t === 'transcripts' ? added.length === 2 && added.every((r) => r.source === 'ai_transcription') : added.every((r) => r.origin === 'ai_extracted');
+      const okAdded = t === 'transcripts' ? added.length === 1 && added.every((r) => r.source === 'ai_transcription') : added.every((r) => r.origin === 'ai_extracted');
       check(`기존 ${t} 그대로 + AI 기록만 추가`, kept && okAdded, `추가 ${added.length}개`);
     }
     const bv = byId(before.tables.videos);
@@ -183,14 +186,14 @@ async function main() {
     });
     check("영상: '학습 시작'으로 바뀐 학습 상태·시작 시각 1개 말고는 그대로", changed.length <= 1 && onlyStatus && Object.keys(av).length === Object.keys(bv).length, changed.join(','));
     const metaKeys = (rows) => new Set(rows.map((m) => m.key));
-    check('appMeta: 기존 키 유지, 새로 생긴 키는 extractionRun', [...metaKeys(before.tables.appMeta)].every((k) => metaKeys(after.tables.appMeta).has(k)) && [...metaKeys(after.tables.appMeta)].filter((k) => !metaKeys(before.tables.appMeta).has(k)).every((k) => k === 'extractionRun'));
+    check('appMeta: 기존 키 유지, 새로 생긴 키는 자료 생성 상태뿐', [...metaKeys(before.tables.appMeta)].every((k) => metaKeys(after.tables.appMeta).has(k)) && [...metaKeys(after.tables.appMeta)].filter((k) => !metaKeys(before.tables.appMeta).has(k)).every((k) => ['extractionRun', 'prepState', 'aiTasks'].includes(k)));
 
     // 다시 시작해도 재요청 없음
     const n = keys.length;
-    await page.goto(`${BASE}/videos`);
-    await page.getByText('이 영상 학습 시작').first().click().catch(() => {});
+    await page.goto(`${BASE}/videos/e2e-v1`);
+    await page.getByRole('button', { name: '이 영상으로 학습 시작' }).click().catch(() => {});
     await page.waitForTimeout(3000);
-    check('완료 뒤 다시 학습을 시작해도 추출 요청 없음 (저장된 결과 재사용)', keys.length === n);
+    check('완료 뒤 다시 들어와도 요청 없음 (저장된 자료 사용)', keys.length === n);
 
     check('브라우저 오류 없음', errors.length === 0, errors.slice(0, 3).join(' | '));
   } finally {

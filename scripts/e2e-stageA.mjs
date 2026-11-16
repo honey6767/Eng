@@ -111,7 +111,7 @@ async function suite(label, device, isPortrait) {
     const links = (await page.getByRole('navigation', { name: '주 메뉴' }).getByRole('link').allTextContents()).map((t) => t.trim());
     check(
       '가로: 사이드바 = 학습 메뉴 4 + 콘텐츠 준비·기록·설정',
-      JSON.stringify(links) === JSON.stringify(['홈', '외우기', '복습', '컬렉션', '영상 · 핵심 표현', '표현 노트', 'AI 자막 관리', 'Day 정리', '즐겨찾기', '설정']),
+      JSON.stringify(links) === JSON.stringify(['홈', '외우기', '복습', '컬렉션', '영상 · 핵심 표현', '표현 노트', '자료 생성', 'Day 정리', '즐겨찾기', '설정']),
       links.join(','),
     );
     check('가로: 하단 탭 숨김', !(await page.getByRole('navigation', { name: '하단 메뉴' }).isVisible()));
@@ -174,11 +174,11 @@ async function suite(label, device, isPortrait) {
   check('영상(콘텐츠 준비): 기존 영상 3개 유지', (await page.getByTestId('video-list').locator('li').count()) === 3);
   await look('07-videos');
   await page.getByTestId('video-list').getByText('[샘플] 친구와 나누는 일상 안부 표현 5가지').click();
-  for (const [tab, name] of [['주요 표현', '08-video-notes'], ['핵심 문장', '09-video-sentences'], ['대화문', '10-video-dialogues'], ['자막', '11-video-transcript']]) {
+  for (const [tab, name] of [['주요 표현', '08-video-notes'], ['원문·Chunk', '09-video-sentences'], ['대화문', '10-video-dialogues'], ['자막', '11-video-transcript']]) {
     await page.getByRole('tab', { name: new RegExp(`^${tab}`) }).click();
     await look(name);
   }
-  check('영상 상세: 3단계 핵심 문장 화면 유지', (await page.getByRole('tab', { name: /^핵심 문장/ }).count()) === 1);
+  check('영상 상세: 3단계 핵심 문장 화면 유지', (await page.getByRole('tab', { name: /^원문·Chunk/ }).count()) === 1);
   await goSecondary('표현 노트');
   await page.getByRole('heading', { name: '표현 노트' }).waitFor();
   await look('12-expressions');

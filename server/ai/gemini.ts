@@ -10,7 +10,7 @@
  */
 
 import type { AiTaskRequest } from '../../src/types/aiApi.ts';
-import { buildContentPrompt, buildDialoguePrompt, buildTextCreateBody, CONTENT_SCHEMA, DIALOGUE_SCHEMA } from './tasks.ts';
+import { buildContentPrompt, buildDayPackPrompt, buildDialoguePrompt, buildPackPrompt, buildTextCreateBody, CONTENT_SCHEMA, DAYPACK_SCHEMA, DIALOGUE_SCHEMA, PACK_SCHEMA } from './tasks.ts';
 
 export const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash';
@@ -118,6 +118,8 @@ export function buildCreateBody(model: string, videoId: string, durationSec: num
 export function createBodyFor(model: string, input: AiTaskRequest) {
   if (input.task === 'content') return buildTextCreateBody(model, buildContentPrompt(input), CONTENT_SCHEMA);
   if (input.task === 'dialogue') return buildTextCreateBody(model, buildDialoguePrompt(input), DIALOGUE_SCHEMA);
+  if (input.task === 'pack') return buildTextCreateBody(model, buildPackPrompt(input), PACK_SCHEMA);
+  if (input.task === 'daypack') return buildTextCreateBody(model, buildDayPackPrompt(input), DAYPACK_SCHEMA);
   return buildCreateBody(model, input.videoId, input.durationSec);
 }
 

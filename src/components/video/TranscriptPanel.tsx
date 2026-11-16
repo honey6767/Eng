@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { repos } from '@/repositories';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useToast } from '@/hooks/useToast';
@@ -11,10 +11,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Icon } from '@/components/ui/Icon';
 import { formatDateKo, formatTimestamp } from '@/utils/date';
-import { extractionController } from '@/services/extraction';
-import type { SingleProgress } from '@/services/extraction/controller';
-import { contentDeps, contentProgress } from '@/services/content';
-import { ContentStatus, useContentProgress } from '@/components/content/StudyContentPanel';
+import { VideoPrepStatus } from '@/components/prep/PrepStatus';
 
 const FORMAT_LABEL: Record<TranscriptFormat, string> = {
   srt: 'SRT',
@@ -43,7 +40,7 @@ export function TranscriptPanel({
 
   return (
     <div className="space-y-4">
-      {!video.isSample && <AiExtractSection video={video} hasContent={hasContent} />}
+      {!video.isSample && <VideoPrepStatus videoId={video.id} />}
       <AutoFetchSection video={video} proxy={proxy} onUsageChanged={onUsageChanged} />
       {hasContent && !editing ? (
         <TranscriptView video={video} transcript={transcript!} onSeek={onSeek} onReplace={() => setEditing(true)} />
@@ -57,111 +54,6 @@ export function TranscriptPanel({
         />
       )}
     </div>
-  );
-}
-
-// 영상별 진행 상태 — 화면을 옮겨도 진행은 계속되고, 돌아오면 마지막 상태를 다시 보여 준다
-const singleState = new Map<string, SingleProgress>();
-const singleRunning = new Set<string>();
-const singleListeners = new Set<() => void>();
-const setSingle = (videoId: string, p: SingleProgress) => {
-  singleState.set(videoId, p);
-  singleListeners.forEach((l) => l());
-};
-
-function useSingleProgress(videoId: string) {
-  const [, force] = useState(0);
-  useEffect(() => {
-    const l = () => force((n) => n + 1);
-    singleListeners.add(l);
-    return () => void singleListeners.delete(l);
-  }, []);
-  return { progress: singleState.get(videoId) ?? null, running: singleRunning.has(videoId) };
-}
-
-function elapsed(since: string) {
-  const s = Math.max(0, Math.round((Date.now() - Date.parse(since)) / 1000));
-  return s < 60 ? `${s}초` : `${Math.floor(s / 60)}분 ${s % 60}초`;
-}
-
-/** Gemini로 이 영상의 자막 만들기 — YouTube 공식 자막 확인과는 별개 */
-function AiExtractSection({ video, hasContent }: { video: Video; hasContent: boolean }) {
-  const { progress, running } = useSingleProgress(video.id);
-  const content = useContentProgress(video.id);
-  const [, tick] = useState(0);
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(() => tick((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, [running]);
-
-  const start = () => {
-    if (singleRunning.has(video.id)) return;
-    singleRunning.add(video.id);
-    setSingle(video.id, { phase: 'sending' });
-    void extractionController
-      .extractOne(video.id, (p) => setSingle(video.id, p))
-      .then((p) => {
-        // 자막이 저장되면 이어서 원문 문장·Chunk를 만든다 (저장된 자막 텍스트만 보냄)
-        if (p.phase === 'succeeded' && p.transcriptSaved) void contentProgress.start(contentDeps, video.id);
-      })
-      .finally(() => {
-        singleRunning.delete(video.id);
-        singleListeners.forEach((l) => l());
-      });
-  };
-
-  const p = progress;
-  return (
-    <Card className="p-4" data-testid="ai-extract">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-bold">AI로 자막 만들기 (Gemini)</h3>
-        {hasContent ? <Badge tone="ok">자막 있음</Badge> : <Badge>자막 없음</Badge>}
-      </div>
-      <p className="mt-1.5 text-sm text-muted">
-        Gemini가 YouTube 영상 주소를 보고 자막과 핵심 표현을 만들어 이 기기에 저장해요. 아래 ‘YouTube 공식 자막 확인’과는 별개라서, 공식 자막을 내려받지 못해도 사용할 수 있어요.
-      </p>
-      {p && (
-        <div className="mt-3 rounded-xl bg-canvas px-3 py-2.5 text-sm" role="status" data-testid="ai-extract-status" data-phase={p.phase}>
-          {p.phase === 'sending' && <p className="font-semibold text-brand">요청 보내는 중…</p>}
-          {p.phase === 'processing' && (
-            <>
-              <p className="font-semibold text-brand">처리 중 · {elapsed(p.since)} 경과</p>
-              {p.note && <p className="mt-1 text-xs text-subtle">{p.note}</p>}
-            </>
-          )}
-          {p.phase === 'already' && <p className="font-semibold text-ok">이미 자막이 저장돼 있어 다시 요청하지 않았어요.</p>}
-          {p.phase === 'succeeded' && (
-            <>
-              <p className="font-semibold text-ok">
-                성공{p.reused ? ' (이전에 받은 결과 사용 · 새 요청 없음)' : ''} — {p.transcriptSaved ? `자막 ${p.segments}줄 저장` : '자막은 저장하지 않음'} · 핵심 표현 {p.keyExpressions}개
-              </p>
-              {p.needsReview && <p className="mt-1 text-xs text-warn">품질 확인이 필요해 자동 적용하지 않았어요. ‘AI 자막 관리’에서 확인해 주세요.</p>}
-            </>
-          )}
-          {p.phase === 'failed' && (
-            <>
-              <p className="font-semibold text-danger" data-testid="ai-extract-error">
-                실패{p.httpStatus ? ` · HTTP ${p.httpStatus}` : ''} · {p.code}
-              </p>
-              <p className="mt-1 text-xs text-muted">{p.message}</p>
-            </>
-          )}
-        </div>
-      )}
-      {content.progress && (
-        <div className="mt-2">
-          <p className="mb-1 text-xs font-semibold text-subtle">이어서: 원문 문장·Chunk 만들기 (‘핵심 문장·Chunk’ 탭에서 확인)</p>
-          <ContentStatus p={content.progress} />
-        </div>
-      )}
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={running || hasContent || !video.youtubeVideoId} onClick={start} data-testid="ai-extract-start">
-          {running ? '진행 중…' : hasContent ? '이미 저장됨' : p?.phase === 'failed' ? '다시 시도' : 'AI로 자막 만들기'}
-        </Button>
-        <span className="text-xs text-subtle">무료 한도 안에서만 요청해요. 같은 영상은 한 번만 생성해요.</span>
-      </div>
-    </Card>
   );
 }
 
@@ -196,7 +88,7 @@ function AutoFetchSection({ video, proxy, onUsageChanged }: { video: Video; prox
       <p className="mt-1.5 text-sm text-muted">
         YouTube 공식 API는 <b className="text-ink">영상 소유자(또는 편집 권한자)</b>만 자막 내용을 내려받을 수 있습니다. 이 앱은 자막 트랙이
         있는지만 확인하고, 내용을 가져오지 못하면 성공으로 표시하지 않습니다. 비공식 우회 방식은 사용하지 않습니다. 여기서 ‘권한 없음’이 나와도
-        위의 AI 자막 만들기에는 영향이 없습니다.
+        위의 학습 자료 자동 생성에는 영향이 없습니다.
       </p>
       {check && (
         <div className="mt-3 rounded-xl bg-canvas px-3 py-2.5 text-sm">

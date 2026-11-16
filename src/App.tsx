@@ -10,6 +10,7 @@ import { VideoDetailPage } from '@/pages/VideoDetailPage';
 import { DialoguesPage } from '@/pages/DialoguesPage';
 import { DialogueDetailPage } from '@/pages/DialogueDetailPage';
 import { CombineDialoguePage } from '@/pages/CombineDialoguePage';
+import { MemorizePage } from '@/pages/MemorizePage';
 import { ReviewPage } from '@/pages/ReviewPage';
 import { ExpressionsPage } from '@/pages/ExpressionsPage';
 import { FavoritesPage } from '@/pages/FavoritesPage';
@@ -22,18 +23,23 @@ import { DraftReviewPage } from '@/pages/DraftReviewPage';
 import { DaysPage } from '@/pages/DaysPage';
 import { AccessGate } from '@/components/access/AccessGate';
 import { useEffect } from 'react';
-import { extractionController } from '@/services/extraction';
+import { prepController } from '@/services/prep';
 
 export default function App() {
   const { ready, error } = useAppInit();
 
-  // B1-b: 앱을 열 때 이전에 시작한 자동 추출이 남아 있으면 같은 요청 식별자로 이어 간다. 네트워크가 돌아와도 이어 간다.
+  // 학습 자료 자동 생성: 앱을 열 때·네트워크가 돌아올 때·다시 화면에 보일 때 대기열을 이어 간다 (같은 요청 식별자로 이어서 확인)
   useEffect(() => {
     if (!ready) return;
-    void extractionController.resumeIfActive();
-    const onOnline = () => void extractionController.resumeIfActive();
-    window.addEventListener('online', onOnline);
-    return () => window.removeEventListener('online', onOnline);
+    void prepController.resume();
+    const again = () => void prepController.resume();
+    const onVisible = () => document.visibilityState === 'visible' && again();
+    window.addEventListener('online', again);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('online', again);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [ready]);
 
   if (error) {
@@ -60,6 +66,7 @@ export default function App() {
             <Route path="videos/:id" element={<VideoDetailPage />} />
             <Route path="dialogues" element={<DialoguesPage />} />
             <Route path="dialogues/combine" element={<CombineDialoguePage />} />
+            <Route path="dialogues/:id/memorize" element={<MemorizePage />} />
             <Route path="dialogues/:id" element={<DialogueDetailPage />} />
             <Route path="review" element={<ReviewPage />} />
             <Route path="expressions" element={<ExpressionsPage />} />

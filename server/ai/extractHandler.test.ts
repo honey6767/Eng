@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
-import { handleAiExtract, sweepLedger, type AiCaps } from './extractHandler.ts';
+import { handleAiExtract, sweepLedger, workKeyForBody, type AiCaps } from './extractHandler.ts';
 import { memoryLedgerStore, pacificDate, nextPacificMidnight, type LedgerStore } from './ledger.ts';
 import { createMockGemini } from './mockGemini.ts';
 import { sqliteLedgerStore } from './durableObject.ts';
@@ -59,10 +59,13 @@ for (const [label, makeStore] of [['메모리 장부', () => memoryLedgerStore()
       expect(all.every((r) => r.body.ok && (r.body.state === 'pending' || r.body.state === 'succeeded'))).toBe(true);
     });
 
-    it('같은 식별자에 다른 내용은 409, 식별자 없음·형식 오류는 400 — Gemini 호출 없음', async () => {
+    it('배포 전 예전 기록(식별자 키)에 다른 내용은 409, 식별자 없음·형식 오류는 400 — Gemini 호출 없음', async () => {
       const g = createMockGemini();
-      const { run } = setup(g);
+      const { run, store } = setup(g);
       await run(KEY(3));
+      // 예전 방식으로 저장된 기록(키 = 식별자)을 흉내 낸다
+      const w = (await workKeyForBody(body()))!;
+      store.put({ ...store.get(w)!, key: KEY(3) });
       expect((await run(KEY(3), body('eNODHkrNuDA', 300))).status).toBe(409);
       expect((await run(null)).status).toBe(400);
       expect((await run('not-a-uuid')).status).toBe(400);
@@ -112,19 +115,20 @@ for (const [label, makeStore] of [['메모리 장부', () => memoryLedgerStore()
       const { run, store } = setup(never, () => t);
       void run(KEY(50)); // 응답이 오지 않는 생성
       await new Promise((r) => setTimeout(r, 20));
-      expect(store.get(KEY(50))?.state).toBe('creating');
+      const w50 = (await workKeyForBody(body()))!;
+      expect(store.get(w50)?.state).toBe('creating');
       expect((await run(KEY(50))).body.state).toBe('pending');
       t += 3 * 60_000;
       expect((await run(KEY(50))).body).toMatchObject({ code: 'unknown', consumed: true });
       // 정리 함수도 같은 결과 (여러 번 실행해도 같음)
       const store2 = makeStore();
-      store2.put({ ...store.get(KEY(50))!, state: 'creating', leaseUntil: T });
+      store2.put({ ...store.get(w50)!, state: 'creating', leaseUntil: T });
       sweepLedger(store2, T + 10 * 60_000, { resultMs: 86_400_000, rowMs: 7 * 86_400_000 });
       sweepLedger(store2, T + 10 * 60_000, { resultMs: 86_400_000, rowMs: 7 * 86_400_000 });
-      expect(store2.get(KEY(50))).toMatchObject({ state: 'failed', failureCode: 'unknown', consumed: true });
+      expect(store2.get(w50)).toMatchObject({ state: 'failed', failureCode: 'unknown', consumed: true });
     });
 
-    it('Gemini 실패·보관 기간 지남(404)은 consumed=true, 결과 본문은 24시간 뒤 정리되어 expired', async () => {
+    it('Gemini 실패·보관 기간 지남(404)은 consumed=true, 성공 결과는 24시간 뒤에도 보관 결과로 다시 받음', async () => {
       const g = createMockGemini();
       let t = T;
       const { run, store } = setup(g, () => t);
@@ -141,7 +145,52 @@ for (const [label, makeStore] of [['메모리 장부', () => memoryLedgerStore()
       await run(KEY(62));
       t += 25 * 3_600_000;
       sweepLedger(store, t, { resultMs: 24 * 3_600_000, rowMs: 7 * 24 * 3_600_000 });
-      expect((await run(KEY(62))).body).toMatchObject({ code: 'expired' });
+      expect((await run(KEY(62))).body).toMatchObject({ state: 'succeeded' });
+      // 기록이 7일 뒤 지워져도 보관 결과는 남는다 (다시 생성하지 않음)
+      t += 8 * 24 * 3_600_000;
+      sweepLedger(store, t, { resultMs: 24 * 3_600_000, rowMs: 7 * 24 * 3_600_000 });
+      const before = g.createCalls.length;
+      expect((await run(KEY(63))).body).toMatchObject({ state: 'succeeded' });
+      expect(g.createCalls.length).toBe(before);
+    });
+
+    it('여러 기기: 식별자가 달라도 같은 작업이면 생성 1회 — 진행 중이면 기다리고, 끝나면 보관 결과를 받음', async () => {
+      const g = createMockGemini();
+      const { run } = setup(g);
+      const a = await Promise.all([run(KEY(70)), run(KEY(71)), run(KEY(72))]); // 세 기기가 동시에
+      expect(g.createCalls).toHaveLength(1);
+      expect(a.every((r) => r.body.ok)).toBe(true);
+      expect(a.map((r) => r.body.requestId)).toEqual([KEY(70), KEY(71), KEY(72)]); // 응답 식별자는 각자 보낸 것
+      let done = await run(KEY(71));
+      if (done.body.state !== 'succeeded') done = await run(KEY(71));
+      expect(done.body.state).toBe('succeeded');
+      const later = await run(KEY(73)); // 나중에 연 다른 기기
+      expect(later.body).toMatchObject({ state: 'succeeded' });
+      expect(g.createCalls).toHaveLength(1);
+    });
+
+    it('결과를 모르는 실패는 같은 작업을 다시 보내도 재생성 없음, 사용자가 다시 시도(retryFailed)할 때만 1회 재생성', async () => {
+      let calls = 0;
+      const g: GeminiClient = { create: async () => (calls++, calls === 1 ? { kind: 'unknown', httpStatus: 503, message: 'x' } : { kind: 'created', interactionId: 'i2', status: 'in_progress' }), get: async () => ({ kind: 'running', status: 'in_progress' }) };
+      const { run } = setup(g);
+      expect((await run(KEY(80))).body).toMatchObject({ code: 'unknown', consumed: true });
+      expect((await run(KEY(81))).body).toMatchObject({ code: 'unknown' }); // 다른 기기·새 식별자여도
+      expect(calls).toBe(1);
+      expect((await run(KEY(82), { ...body(), retryFailed: true })).body).toMatchObject({ state: 'pending' });
+      expect((await run(KEY(83), { ...body(), retryFailed: true })).body).toMatchObject({ state: 'pending' }); // 이미 진행 중 → 조회만
+      expect(calls).toBe(2);
+    });
+
+    it('무료 한도(429) 실패는 초기화 시각 전에는 다시 생성하지 않고, 지나면 이어서 생성', async () => {
+      const g = createMockGemini();
+      let t = T;
+      const { run } = setup(g, () => t);
+      await run(KEY(90), body('mockQuota02', 300));
+      await run(KEY(91), body('mockQuota02', 300));
+      expect(g.createCalls).toHaveLength(1);
+      t = Date.parse(nextPacificMidnight(T)) + 1000;
+      await run(KEY(92), body('mockQuota02', 300));
+      expect(g.createCalls).toHaveLength(2);
     });
   });
 }

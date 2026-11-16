@@ -130,7 +130,7 @@ async function run() {
   await page.getByRole('button', { name: '자막 저장' }).click();
   check('자막 저장', await visible(page.getByTestId('transcript-segments')));
 
-  await page.getByRole('tab', { name: /^핵심 문장/ }).click();
+  await page.getByRole('tab', { name: /^원문·Chunk/ }).click();
   check('핵심 문장 0/5 표시', await textMatches(page.getByTestId('key-sentence-count'), /^0$/));
   await page.screenshot({ path: `${SHOTS}/s3-01-sentences-empty.png` });
 
@@ -244,7 +244,7 @@ async function run() {
 
   // 새로고침 후 유지 + 저장 내용 확인
   await page.reload();
-  await page.getByRole('tab', { name: /^핵심 문장/ }).click();
+  await page.getByRole('tab', { name: /^원문·Chunk/ }).click();
   check('새로고침 후 5개 유지', await textMatches(page.getByTestId('key-sentence-count'), /^5$/));
   check('AI 번역은 빈 칸만 채움', await visible(page.getByText('이따 간단히 뭐 좀 먹을래?')));
   const after = await readDb(page);
@@ -273,7 +273,7 @@ async function run() {
   // 선정 취소: 대화문에서 쓰인 샘플 문장은 불가
   await page.goto(`${BASE}/videos`);
   await page.getByText('[샘플] 친구와 나누는 일상 안부 표현 5가지', { exact: true }).first().click();
-  await page.getByRole('tab', { name: /^핵심 문장/ }).click();
+  await page.getByRole('tab', { name: /^원문·Chunk/ }).click();
   const used = page.getByTestId('key-sentence-card').first();
   check('대화문에서 쓰인 문장은 선정 취소 불가', (await used.getByRole('button', { name: '선정 취소' }).isDisabled()) && (await visible(used.getByText(/대화문에서 사용 중/))));
   // "I'm running a bit behind" — 표현(running behind) 사이에 다른 단어가 있어 자동으로 찾지 못함 → 직접 지정 안내

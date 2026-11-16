@@ -66,7 +66,9 @@ describe('장부: content·dialogue도 식별자당 생성 1회, 요청 수만 �
     expect(g.createCalls).toEqual(['dialogue']);
     const usage = store.getUsage('2026-11-16');
     expect(usage).toEqual({ pacificDate: '2026-11-16', videoSec: 0, requests: 1 });
-    const conflict = await handleAiExtract({ idempotencyKey: key, body: { ...dialogue, lineCount: 10 } }, deps);
-    expect(conflict.status).toBe(409);
+    // 같은 내용이면 다른 식별자(다른 기기)여도 보관 결과를 받는다 — 생성 없음
+    const other = await handleAiExtract({ idempotencyKey: '22222222-2222-4222-8222-222222222222', body: dialogue }, deps);
+    expect(other.body.state).toBe('succeeded');
+    expect(g.createCalls).toEqual(['dialogue']);
   });
 });

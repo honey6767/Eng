@@ -13,6 +13,8 @@ export const AI_PROMPT_VERSION = 'v1';
 export interface AiExtractRequest {
   /** 생략 = 영상에서 자막 추출 */
   task?: 'extract';
+  /** 사용자가 결과를 버리고 다시 추출할 때 2, 3… — 다른 작업으로 취급해 새로 생성 (없으면 1) */
+  variant?: number;
   /** YouTube 영상 ID (11자) */
   videoId: string;
   /** 영상 길이(초) — 사용량 계산과 타임스탬프 검사 기준 */
@@ -58,7 +60,43 @@ export interface AiDialogueRequest {
   promptVersion: string;
 }
 
-export type AiTaskRequest = AiExtractRequest | AiContentRequest | AiDialogueRequest;
+/** 학습 자료 전체 (자막 → 원문 문장·문장별 Chunk·공통 핵심 Chunk·Day 통합 대화문) */
+export const AI_PACK_PROMPT_VERSION = 'p1';
+/** 이미 저장된 원문 문장 → 공통 핵심 Chunk·Day 통합 대화문 */
+export const AI_DAYPACK_PROMPT_VERSION = 'dp1';
+
+export interface AiPackRequest {
+  task: 'pack';
+  videoId: string;
+  title: string;
+  seriesKind: SeriesKind;
+  dayNumber: number | null;
+  /** "MM:SS 문장" 줄들 */
+  transcript: string;
+  promptVersion: string;
+}
+
+export interface AiDayPackSentence {
+  number: number;
+  text: string;
+  meaningKo: string;
+  /** 이 문장에서 이미 찾은 Chunk (참고용) */
+  chunks: string[];
+}
+
+export interface AiDayPackRequest {
+  task: 'daypack';
+  videoId: string;
+  title: string;
+  seriesKind: SeriesKind;
+  dayNumber: number | null;
+  sentences: AiDayPackSentence[];
+  promptVersion: string;
+}
+
+export type AiTaskRequest = AiExtractRequest | AiContentRequest | AiDialogueRequest | AiPackRequest | AiDayPackRequest;
+
+export const DAYPACK_LIMITS = { minSentences: 1, maxSentences: 20, sentenceChars: 500, chunkChars: 120, maxChunksPerSentence: 8 } as const;
 
 export const CONTENT_LIMITS = { transcriptChars: 60_000, titleChars: 300 } as const;
 export const DIALOGUE_LIMITS = { minChunks: 2, maxChunks: 15, textChars: 120, meaningChars: 200, sourceChars: 200, minLines: 4, maxLines: 20 } as const;
