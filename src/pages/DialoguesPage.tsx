@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { StepDots } from '@/components/ui/ProgressBar';
 import { FavoriteButton } from '@/components/ui/FavoriteButton';
-import { PlannedNotice } from '@/components/ui/PlannedNotice';
+import { LinkButton } from '@/components/ui/Button';
 import { Loading } from '@/components/ui/Loading';
 import { EmptyState } from '@/components/ui/EmptyState';
 import type { DialogueKind } from '@/types/models';
@@ -38,7 +38,7 @@ export function DialoguesPage() {
         {(
           [
             ['original', '영상 원본 대화문'],
-            ['combined', '취약 표현 조합 대화문'],
+            ['combined', '통합 대화문'],
           ] as const
         ).map(([k, label]) => (
           <button
@@ -56,11 +56,15 @@ export function DialoguesPage() {
       </div>
 
       {kind === 'combined' && (
-        <div className="mb-4">
-          <PlannedNotice title="누적 취약 표현으로 새 대화문 생성" stage="7단계">
-            AI API가 아직 연결되지 않았습니다. 연동 전에는 조합 대화문을 생성할 수 없습니다.
-          </PlannedNotice>
-        </div>
+        <Card className="mb-4 flex flex-wrap items-center justify-between gap-3 p-4" data-testid="combine-cta">
+          <div className="min-w-0">
+            <p className="font-bold">여러 Day의 Chunk로 통합 대화문 만들기</p>
+            <p className="text-sm text-muted">최근 학습한 Day 2~3개의 Chunk를 한 상황의 자연스러운 대화로 엮어요.</p>
+          </div>
+          <LinkButton to="/dialogues/combine" size="sm">
+            만들기
+          </LinkButton>
+        </Card>
       )}
 
       {rows.length === 0 ? (
@@ -106,7 +110,8 @@ export function DialoguesPage() {
                         <StepDots completed={p?.highestCompletedStep ?? 0} current={p?.currentStep} />
                       </span>
                       <span className="min-w-0 truncate text-xs text-subtle">
-                        {d.lines.length}줄 · 핵심 {keyCount}
+                        {d.lines.length}줄 · {d.kind === 'combined' ? 'Chunk' : '핵심'} {keyCount}
+                        {d.sourceDays?.length ? ` · Day ${d.sourceDays.join(', ')}` : ''}
                         {video && ` · ${video.title.replace('[샘플] ', '')}`}
                       </span>
                     </div>

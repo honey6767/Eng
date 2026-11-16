@@ -1,5 +1,6 @@
 import type { AiExtractRequest, AiExtractResponse, AiFailureCode } from '../../src/types/aiApi.ts';
 import { isValidVideoId } from '../../src/utils/youtubeUrl.ts';
+import { bodyHashSource, taskOf, validateTaskRequest } from './tasks.ts';
 import type { GeminiClient } from './gemini.ts';
 import { CREATE_LEASE_MS, nextPacificMidnight, pacificDate, type LedgerRow, type LedgerStore } from './ledger.ts';
 
@@ -103,9 +104,13 @@ export async function handleAiExtract(input: { idempotencyKey: string | null; bo
   const now = deps.now ?? Date.now;
   const key = input.idempotencyKey?.trim() ?? '';
   if (!UUID.test(key)) return fail(null, 'bad_request', 'Idempotency-Key(요청 식별자, UUID v4)가 필요해요.', false, 400);
-  const req = validateRequest(input.body);
+  const req = validateTaskRequest(input.body);
   if (!req) return fail(key, 'bad_request', '요청 형식이 올바르지 않아요.', false, 400);
-  const bodyHash = await sha256(`${req.videoId}|${req.durationSec}|${req.promptVersion}`);
+  const bodyHash = await sha256(bodyHashSource(req));
+  // 자막 추출만 영상 분량을 쓴다. 문장·Chunk·대화문은 텍스트만 보내므로 요청 수만 센다
+  const task = taskOf(req);
+  const ledgerVideoId = req.task === 'dialogue' ? 'dialogue' : req.videoId;
+  const videoSec = req.task === 'content' || req.task === 'dialogue' ? 0 : req.durationSec;
   const { store, caps } = deps;
 
   // ── 한 덩어리 (await 없음): 조회·예약 ──
@@ -125,22 +130,22 @@ export async function handleAiExtract(input: { idempotencyKey: string | null; bo
 
   const date = pacificDate(t);
   const base: LedgerRow = {
-    key, bodyHash, videoId: req.videoId, durationSec: req.durationSec, state: 'creating', interactionId: null, leaseUntil: t + CREATE_LEASE_MS,
+    key, bodyHash, videoId: ledgerVideoId, durationSec: videoSec, state: 'creating', interactionId: null, leaseUntil: t + CREATE_LEASE_MS,
     pacificDate: date, counted: false, failureCode: null, failureMessage: null, consumed: false, resultText: null, model: null, usageJson: null, createdAt: t, updatedAt: t,
   };
-  if (req.durationSec > caps.maxVideoSec) {
+  if (task === 'extract' && videoSec > caps.maxVideoSec) {
     const row = { ...base, state: 'failed' as const, leaseUntil: null, failureCode: 'too_long', failureMessage: `한 번에 처리할 수 있는 길이(${Math.round(caps.maxVideoSec / 60)}분)를 넘는 영상이에요.` };
     store.put(row);
     return respond(row);
   }
   const usage = store.getUsage(date);
-  if (usage.requests + 1 > caps.dailyRequests || usage.videoSec + req.durationSec > caps.dailyVideoSec) {
+  if (usage.requests + 1 > caps.dailyRequests || usage.videoSec + videoSec > caps.dailyVideoSec) {
     const row = { ...base, state: 'failed' as const, leaseUntil: null, failureCode: 'daily_cap', failureMessage: '오늘 사용 상한에 도달했어요. 태평양 시간 자정 이후 다시 시작해요.' };
     store.put(row);
     return respond(row);
   }
   store.put({ ...base, counted: true });
-  store.putUsage({ pacificDate: date, videoSec: usage.videoSec + req.durationSec, requests: usage.requests + 1 });
+  store.putUsage({ pacificDate: date, videoSec: usage.videoSec + videoSec, requests: usage.requests + 1 });
 
   // ── Gemini 생성 요청 — 정확히 1회 ──
   const created = await deps.gemini.create(req);

@@ -1,6 +1,7 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useState } from 'react';
-import { extractionStore, repos } from '@/repositories';
+import { contentStore, extractionStore, repos } from '@/repositories';
+import { StudyContentPanel } from '@/components/content/StudyContentPanel';
 import { useLiveData } from '@/hooks/useLiveData';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
@@ -26,7 +27,7 @@ import { extractionController } from '@/services/extraction';
 
 const TABS = [
   { key: 'preview', label: '주요 표현' },
-  { key: 'sentences', label: '핵심 문장' },
+  { key: 'sentences', label: '핵심 문장·Chunk' },
   { key: 'dialogues', label: '대화문' },
   { key: 'transcript', label: '자막' },
 ] as const;
@@ -43,7 +44,7 @@ export function VideoDetailPage() {
   const data = useLiveData(async () => {
     const video = await repos.videos.get(id);
     if (!video) return null;
-    const [transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems] = await Promise.all([
+    const [transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems, contentCtx] = await Promise.all([
       repos.transcripts.getByVideo(id),
       repos.expressionNotes.listByVideo(id),
       repos.keySentences.listByVideo(id),
@@ -52,16 +53,23 @@ export function VideoDetailPage() {
       repos.playlists.list(),
       repos.expressions.list(),
       extractionStore.listLearningItems(id),
+      contentStore.readVideo(id),
     ]);
-    return { video, transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems };
+    return { video, transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems, day: contentCtx?.day };
   }, [id]);
 
   if (data === undefined) return <Loading />;
   if (data === null) return <NotFoundPage message="영상을 찾을 수 없어요." />;
 
-  const { video, transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems } = data;
+  const { video, transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems, day } = data;
   // AI가 뽑은 핵심 표현 (B1-d로 자동 적용된 것) — 기존 표현 노트와 따로 보여 준다
-  const aiItems = learningItems.filter((li) => li.origin === 'ai_extracted' && li.kind === 'key');
+  const aiItems = learningItems.filter((li) => li.origin === 'ai_extracted' && (li.kind === 'key' || li.kind === 'chunk'));
+  // 직접 고른 핵심 문장(5개 선정 화면)과 AI 원문 문장은 따로 보여 준다
+  const manualSentences = sentences.filter((s) => s.origin !== 'ai_extracted');
+  const seekTo = (sec: number) => {
+    setSeek({ sec, nonce: Date.now() });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   const playlistById = new Map<string, Playlist>(playlists.map((p) => [p.id, p]));
   // 실제 영상은 2단계 기능인 자막 탭을 기본으로 연다
   const tab: TabKey = tabParam ?? (video.isSample ? 'preview' : 'transcript');
@@ -190,11 +198,16 @@ export function VideoDetailPage() {
           <ExpressionNotesPanel video={video} notes={notes} sentences={sentences} expressions={expressions} />
         </div>
       )}
+      {tab === 'sentences' && !video.isSample && (
+        <div className="mb-4">
+          <StudyContentPanel video={video} day={day} transcript={transcript} sentences={sentences} items={learningItems} expressions={expressions} onSeek={video.youtubeVideoId ? seekTo : undefined} />
+        </div>
+      )}
       {tab === 'sentences' && (
         <KeySentenceManager
           video={video}
           transcript={transcript}
-          sentences={sentences}
+          sentences={manualSentences}
           dialogues={dialogues}
           expressions={expressions}
           onSeek={(sec) => {

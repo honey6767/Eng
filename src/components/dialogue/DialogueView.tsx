@@ -50,7 +50,7 @@ export function DialogueView({
                           {sep}
                           <mark
                             className="rounded bg-key px-0.5 text-ink [box-decoration-break:clone]"
-                            title={n ? `핵심 문장 ${n}` : '핵심 문장'}
+                            title={seg.learningItemId ? '배운 Chunk' : n ? `핵심 문장 ${n}` : '핵심 문장'}
                           >
                             {seg.text}
                           </mark>

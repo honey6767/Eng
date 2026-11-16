@@ -44,7 +44,8 @@ interface Env {
 
 /** 장부 객체는 하나만 쓴다 → 모든 탭·기기의 요청 식별자가 한곳에 기록된다 */
 const AI_LEDGER_NAME = 'ai-ledger';
-const MAX_AI_BODY_BYTES = 2048;
+/** 문장·Chunk 생성은 자막 텍스트(최대 6만 자)를 보낸다 */
+const MAX_AI_BODY_BYTES = 256 * 1024;
 
 const store = memoryQuotaStore();
 const failures = memoryFailureLimiter();

@@ -200,7 +200,7 @@ describe('Worker — AI 추출 경로 (B1-b)', () => {
     expect((await worker.fetch(req('status', { origin: APP, method: 'POST' }), env())).status).toBe(405);
   });
   it('너무 큰 본문은 413', async () => {
-    const r = await worker.fetch(aiReq({ key: '00000000-0000-4000-8000-000000000003', body: 'x'.repeat(5000) }), { ...env(), AI_LEDGER: fakeLedger() });
+    const r = await worker.fetch(aiReq({ key: '00000000-0000-4000-8000-000000000003', body: 'x'.repeat(256 * 1024 + 1) }), { ...env(), AI_LEDGER: fakeLedger() });
     expect(r.status).toBe(413);
   });
 });

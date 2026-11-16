@@ -9,6 +9,9 @@
  * - YouTube 공개 영상 주소만 넘긴다(Google 공식 기능). 자막 직접 추출·영상 다운로드는 하지 않는다.
  */
 
+import type { AiTaskRequest } from '../../src/types/aiApi.ts';
+import { buildContentPrompt, buildDialoguePrompt, buildTextCreateBody, CONTENT_SCHEMA, DIALOGUE_SCHEMA } from './tasks.ts';
+
 export const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash';
 /** 생성·조회 요청 하나의 시간 제한 (백그라운드라 생성은 보통 몇 초) */
@@ -37,7 +40,7 @@ export type GeminiGetResult =
   | { kind: 'retry_later'; httpStatus: number | null };
 
 export interface GeminiClient {
-  create(input: { videoId: string; durationSec: number; promptVersion: string }): Promise<GeminiCreateResult>;
+  create(input: AiTaskRequest): Promise<GeminiCreateResult>;
   get(interactionId: string): Promise<GeminiGetResult>;
 }
 
@@ -111,6 +114,13 @@ export function buildCreateBody(model: string, videoId: string, durationSec: num
   };
 }
 
+/** 작업 종류별 생성 요청 본문 — 자막 추출만 영상 주소를 보내고, 나머지는 텍스트만 보낸다 */
+export function createBodyFor(model: string, input: AiTaskRequest) {
+  if (input.task === 'content') return buildTextCreateBody(model, buildContentPrompt(input), CONTENT_SCHEMA);
+  if (input.task === 'dialogue') return buildTextCreateBody(model, buildDialoguePrompt(input), DIALOGUE_SCHEMA);
+  return buildCreateBody(model, input.videoId, input.durationSec);
+}
+
 type Json = Record<string, unknown>;
 
 /** completed 응답에서 model_output 단계의 text 조각을 순서대로 이어 붙인다 (SDK output_text와 같은 규칙) */
@@ -153,7 +163,7 @@ export function createGeminiClient(opts: { apiKey: string | null; model?: string
   const headers = () => ({ 'x-goog-api-key': opts.apiKey ?? '', 'Content-Type': 'application/json', Accept: 'application/json' });
 
   return {
-    async create({ videoId, durationSec }) {
+    async create(input) {
       if (!opts.apiKey) return { kind: 'rejected', httpStatus: 0, reason: 'not_configured', message: '서버에 Gemini 키가 설정되지 않았어요.' };
       let res: Response;
       try {
@@ -161,7 +171,7 @@ export function createGeminiClient(opts: { apiKey: string | null; model?: string
         res = await opts.fetch(`${GEMINI_BASE}/interactions`, {
           method: 'POST',
           headers: headers(),
-          body: JSON.stringify(buildCreateBody(model, videoId, durationSec)),
+          body: JSON.stringify(createBodyFor(model, input)),
           signal: AbortSignal.timeout(timeoutMs),
         });
       } catch {

@@ -13,6 +13,8 @@ import { Icon } from '@/components/ui/Icon';
 import { formatDateKo, formatTimestamp } from '@/utils/date';
 import { extractionController } from '@/services/extraction';
 import type { SingleProgress } from '@/services/extraction/controller';
+import { contentDeps, contentProgress } from '@/services/content';
+import { ContentStatus, useContentProgress } from '@/components/content/StudyContentPanel';
 
 const FORMAT_LABEL: Record<TranscriptFormat, string> = {
   srt: 'SRT',
@@ -85,6 +87,7 @@ function elapsed(since: string) {
 /** Gemini로 이 영상의 자막 만들기 — YouTube 공식 자막 확인과는 별개 */
 function AiExtractSection({ video, hasContent }: { video: Video; hasContent: boolean }) {
   const { progress, running } = useSingleProgress(video.id);
+  const content = useContentProgress(video.id);
   const [, tick] = useState(0);
   useEffect(() => {
     if (!running) return;
@@ -98,6 +101,10 @@ function AiExtractSection({ video, hasContent }: { video: Video; hasContent: boo
     setSingle(video.id, { phase: 'sending' });
     void extractionController
       .extractOne(video.id, (p) => setSingle(video.id, p))
+      .then((p) => {
+        // 자막이 저장되면 이어서 원문 문장·Chunk를 만든다 (저장된 자막 텍스트만 보냄)
+        if (p.phase === 'succeeded' && p.transcriptSaved) void contentProgress.start(contentDeps, video.id);
+      })
       .finally(() => {
         singleRunning.delete(video.id);
         singleListeners.forEach((l) => l());
@@ -140,6 +147,12 @@ function AiExtractSection({ video, hasContent }: { video: Video; hasContent: boo
               <p className="mt-1 text-xs text-muted">{p.message}</p>
             </>
           )}
+        </div>
+      )}
+      {content.progress && (
+        <div className="mt-2">
+          <p className="mb-1 text-xs font-semibold text-subtle">이어서: 원문 문장·Chunk 만들기 (‘핵심 문장·Chunk’ 탭에서 확인)</p>
+          <ContentStatus p={content.progress} />
         </div>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-2">

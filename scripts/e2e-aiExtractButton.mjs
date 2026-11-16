@@ -65,11 +65,15 @@ async function main() {
   const browser = await chromium.launch();
   const errors = [];
   const calls = [];
+  const contentCalls = [];
   try {
     const ctx = await browser.newContext({ ...devices['iPad (gen 7)'] });
     await ctx.route(/^https:\/\/(i\.ytimg\.com|www\.youtube(-nocookie)?\.com)\//, (r) => r.fulfill({ status: 200, body: '' }));
     ctx.on('response', async (r) => {
-      if (r.url().endsWith('/api/ai/extract')) calls.push({ status: r.status(), key: r.request().headers()['idempotency-key'], state: (await r.json().catch(() => ({}))).state });
+      if (!r.url().endsWith('/api/ai/extract')) return;
+      const task = JSON.parse(r.request().postData() || '{}').task ?? 'extract';
+      // 자막 저장 뒤 이어서 나가는 문장·Chunk 요청은 따로 센다
+      (task === 'extract' ? calls : contentCalls).push({ status: r.status(), key: r.request().headers()['idempotency-key'], state: (await r.json().catch(() => ({}))).state });
     });
     const page = await ctx.newPage();
     page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
@@ -132,11 +136,24 @@ async function main() {
       check("'주요 표현' 탭에 AI 핵심 표현 표시 + 탭 개수 0 아님", !!ai && !/주요 표현\s*0/.test(await page.getByRole('tab', { name: /주요 표현/ }).innerText()), ai.split('\n').slice(0, 3).join(' / '));
       await page.screenshot({ path: `${SHOTS}/ai-btn-${MODE}-expressions.png`, fullPage: true });
 
+      // 자막 저장 뒤 이어서 원문 문장·Chunk 생성
+      await page.getByRole('tab', { name: /핵심 문장/ }).click();
+      await page.getByTestId('content-status').first().waitFor({ timeout: 10000 }).catch(() => {});
+      let cp = null;
+      for (let i = 0; i < (MODE === 'real' ? 120 : 40); i++) {
+        cp = (await page.getByTestId('content-status').count()) ? await page.getByTestId('content-status').first().getAttribute('data-phase') : null;
+        if (['succeeded', 'failed', 'already'].includes(cp)) break;
+        await page.waitForTimeout(1500);
+      }
+      const sentenceCount = await page.getByTestId('content-sentence').count();
+      check('자막 저장 뒤 이어서 원문 문장·Chunk 저장 (식별자 1개)', cp === 'succeeded' && sentenceCount > 0 && new Set(contentCalls.map((c) => c.key)).size === 1, `문장 ${sentenceCount}개 · Chunk ${await page.getByTestId('content-chunk').count()}개`);
+      await page.screenshot({ path: `${SHOTS}/ai-btn-${MODE}-content.png`, fullPage: true });
+
       // 다시 와도 재요청 없음
-      const n = calls.length;
+      const n = calls.length + contentCalls.length;
       await page.goto(`${BASE}/videos/e2e-ai1?tab=transcript`);
       await page.getByTestId('ai-extract-start').waitFor();
-      check('자막이 저장된 영상은 버튼이 잠기고 다시 요청하지 않음', (await page.getByTestId('ai-extract-start').isDisabled()) && calls.length === n);
+      check('자막이 저장된 영상은 버튼이 잠기고 다시 요청하지 않음', (await page.getByTestId('ai-extract-start').isDisabled()) && calls.length + contentCalls.length === n);
     }
     check('브라우저 오류 없음', errors.length === 0, errors.slice(0, 3).join(' | '));
   } finally {

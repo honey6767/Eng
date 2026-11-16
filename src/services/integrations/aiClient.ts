@@ -1,4 +1,4 @@
-import { AI_EXTRACT_PATH, type AiExtractRequest, type AiExtractResponse } from '@/types/aiApi';
+import { AI_EXTRACT_PATH, type AiTaskRequest, type AiExtractResponse } from '@/types/aiApi';
 import { integrationConfig } from './config';
 import { accessCodeStore, canSendAccessCode } from './accessCode';
 
@@ -14,7 +14,7 @@ export type AiTransportResult =
   /** 접근 코드 문제 */
   | { kind: 'auth_error'; httpStatus: number; message: string };
 
-export type AiClient = { extract(requestId: string, req: AiExtractRequest): Promise<AiTransportResult> };
+export type AiClient = { extract(requestId: string, req: AiTaskRequest): Promise<AiTransportResult> };
 
 export const aiClient: AiClient = {
   async extract(requestId, req) {

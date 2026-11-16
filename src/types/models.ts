@@ -203,7 +203,7 @@ export interface ExpressionSpan {
 }
 
 /** 3단계 — 핵심 문장을 어디서 가져왔는지 */
-export type KeySentenceOrigin = 'transcript' | 'manual';
+export type KeySentenceOrigin = 'transcript' | 'manual' | 'ai_extracted';
 
 export interface KeySentence extends BaseRecord {
   videoId: string;
@@ -222,6 +222,12 @@ export interface KeySentence extends BaseRecord {
   expressionSpans?: ExpressionSpan[];
   /** 3단계(선택) — 선정 경로 */
   origin?: KeySentenceOrigin;
+  /** AI 추출 문장 — 영상에 나온 번호 그대로 (order는 영상 안 정렬·중복 방지용) */
+  aiNumber?: number;
+  /** 사용자가 '암기할 문장'으로 고름 */
+  selected?: boolean;
+  /** 이 문장을 만든 AI 요청 식별자 */
+  contentRequestId?: string;
 }
 
 // ─────────────────────────────────────────────
@@ -241,6 +247,8 @@ export interface DialogueSegment {
   keySentenceId?: string;
   /** 원문 문장을 수정했다면 수정 전 원문과 이유를 기록 */
   modification?: { originalText: string; reason: string };
+  /** 통합 대화문 — 이 부분이 어떤 학습 Chunk(학습 항목)인지 */
+  learningItemId?: string;
 }
 
 export interface DialogueLine {
@@ -275,6 +283,29 @@ export interface Dialogue extends BaseRecord {
   /** 분리/구성 이유 등 메모 */
   compositionNote?: string;
   isFavorite: boolean;
+  /** 통합 대화문 — 사용한 Chunk와 그 출처·의미·뉘앙스 */
+  chunkUsages?: DialogueChunkUsage[];
+  /** 통합 대화문 — 사용한 Chunk의 출처 Day (일반 영상은 제외) */
+  sourceDays?: number[];
+  /** 생성에 쓰려고 골랐지만 대화문에 쓰지 않은 Chunk */
+  unusedLearningItemIds?: string[];
+  /** 이 대화문을 만든 AI 요청 식별자 */
+  aiRequestId?: string;
+}
+
+export interface DialogueChunkUsage {
+  learningItemId: string;
+  expressionId: string;
+  /** 학습한 형태 */
+  text: string;
+  /** 대화 속 실제 형태 */
+  usedAs: string;
+  dayNumber: number | null;
+  videoId: string | null;
+  meaningInContext: string;
+  nuance: string;
+  whyUsed: string;
+  example: { en: string; ko: string };
 }
 
 /** 영상별 대화문 구성 결과 — 대화문에 넣지 못한 문장은 별도 연습 대상 */
@@ -411,7 +442,19 @@ export interface AppMeta {
 // ─────────────────────────────────────────────
 
 /** 학습 대상의 종류: 핵심 표현 · 영상 속 Chunk · 대화문 Chunk */
-export type LearningItemKind = 'key' | 'intro_chunk' | 'dialogue_chunk';
+export type LearningItemKind = 'key' | 'intro_chunk' | 'dialogue_chunk' | 'chunk';
+
+/** 문장 속 Chunk 설명 (AI 학습 콘텐츠) */
+export interface ChunkDetail {
+  /** 이 문장에서의 뜻 */
+  meaningInSentence: string;
+  nuance: string;
+  /** 어떤 상황에서 쓰는지 */
+  usage: string;
+  /** 비슷한 표현과의 차이 */
+  comparison: string;
+  examples: { en: string; ko: string }[];
+}
 /** Day 영상에서 왔는지(day), 그 밖의 영상인지(other) */
 export type LearningItemSourceType = 'day' | 'other';
 export type LearningItemOrigin = 'migrated' | 'user' | 'ai_extracted';
@@ -438,6 +481,14 @@ export interface LearningItem extends BaseRecord {
   extractionDraftId: string | null;
   /** v2 핵심 문장에서 옮겨 왔을 때 (기존 핵심 문장은 그대로 둔다) */
   legacyKeySentenceId: string | null;
+  /** kind='chunk' — 이 Chunk가 들어 있는 원문 문장 (핵심 문장 id) */
+  sentenceId?: string | null;
+  /** kind='chunk' — 뜻·뉘앙스·상황·비교·예문 */
+  chunk?: ChunkDetail;
+  /** 사용자가 '암기할 Chunk'로 고름 */
+  selected?: boolean;
+  /** 이 항목을 만든 AI 요청 식별자 (문장·Chunk 생성) */
+  contentRequestId?: string;
 }
 
 export type DayAssignmentStatus = 'suggested' | 'confirmed';

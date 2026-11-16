@@ -85,7 +85,10 @@ export function referencesOf(table: TableName, row: AnyRow): RowRef[] {
       for (const id of d.sourceVideoIds ?? []) push(out, 'sourceVideoIds', 'videos', id);
       for (const id of d.expressionIds ?? []) push(out, 'expressionIds', 'expressions', id);
       for (const line of d.lines ?? [])
-        for (const seg of line.segments ?? []) push(out, 'lines.segments.keySentenceId', 'keySentences', seg.keySentenceId);
+        for (const seg of line.segments ?? []) {
+          push(out, 'lines.segments.keySentenceId', 'keySentences', seg.keySentenceId);
+          push(out, 'lines.segments.learningItemId', 'learningItems', seg.learningItemId);
+        }
       break;
     }
     case 'dialogueCompositions': {
@@ -125,6 +128,7 @@ export function referencesOf(table: TableName, row: AnyRow): RowRef[] {
       push(out, 'expressionId', 'expressions', li.expressionId);
       push(out, 'videoId', 'videos', li.videoId);
       push(out, 'dialogueId', 'dialogues', li.dialogueId);
+      push(out, 'sentenceId', 'keySentences', li.sentenceId);
       break;
     }
     case 'dayAssignments':

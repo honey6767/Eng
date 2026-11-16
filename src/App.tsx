@@ -9,6 +9,7 @@ import { VideosPage } from '@/pages/VideosPage';
 import { VideoDetailPage } from '@/pages/VideoDetailPage';
 import { DialoguesPage } from '@/pages/DialoguesPage';
 import { DialogueDetailPage } from '@/pages/DialogueDetailPage';
+import { CombineDialoguePage } from '@/pages/CombineDialoguePage';
 import { ReviewPage } from '@/pages/ReviewPage';
 import { ExpressionsPage } from '@/pages/ExpressionsPage';
 import { FavoritesPage } from '@/pages/FavoritesPage';
@@ -58,6 +59,7 @@ export default function App() {
             <Route path="videos" element={<VideosPage />} />
             <Route path="videos/:id" element={<VideoDetailPage />} />
             <Route path="dialogues" element={<DialoguesPage />} />
+            <Route path="dialogues/combine" element={<CombineDialoguePage />} />
             <Route path="dialogues/:id" element={<DialogueDetailPage />} />
             <Route path="review" element={<ReviewPage />} />
             <Route path="expressions" element={<ExpressionsPage />} />

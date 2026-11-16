@@ -67,7 +67,7 @@ export function youtubeProxyPlugin(): Plugin {
         let data = '';
         req.on('data', (c: Buffer) => {
           data += c;
-          if (data.length > 4096) req.destroy();
+          if (data.length > 256 * 1024) req.destroy();
         });
         req.on('end', () => resolve(data));
         req.on('error', () => resolve(''));

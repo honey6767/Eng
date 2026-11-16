@@ -65,8 +65,14 @@ export function DialogueDetailPage() {
             <p className="text-xs font-semibold text-muted">대화 상황</p>
             <p className="mt-1 text-[15px]">{dialogue.situation}</p>
             <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-              <Badge tone="brand">{dialogue.kind === 'original' ? '영상 원본 대화문' : '조합 대화문'}</Badge>
+              <Badge tone="brand">{dialogue.kind === 'original' ? '영상 원본 대화문' : '통합 대화문'}</Badge>
               {dialogue.isSample && <Badge>샘플</Badge>}
+              {dialogue.sourceDays?.map((d) => (
+                <Badge key={d} tone="info">
+                  Day {d}
+                </Badge>
+              ))}
+              {dialogue.generatedBy === 'ai' && <Badge>AI 생성</Badge>}
               {video && (
                 <Link to={`/videos/${video.id}`} className="inline-flex items-center gap-1 font-semibold text-brand">
                   <Icon name="video" className="size-3.5" />
@@ -83,7 +89,7 @@ export function DialogueDetailPage() {
                 한국어
               </Toggle>
               <Toggle active={highlight} onClick={() => setHighlight((v) => !v)}>
-                핵심 문장 표시
+                {dialogue.kind === 'combined' ? 'Chunk 표시' : '핵심 문장 표시'}
               </Toggle>
             </div>
           </div>
@@ -91,8 +97,8 @@ export function DialogueDetailPage() {
           <Card className="p-4 sm:p-5">
             <DialogueView lines={dialogue.lines} sentences={sentences} showKorean={showKorean} highlightKeys={highlight} />
             <p className="mt-4 flex items-center gap-2 border-t border-line pt-3 text-xs text-muted">
-              <mark className="shrink-0 rounded bg-key px-1 whitespace-nowrap text-ink">노란 표시</mark> 영상의 핵심 문장(원문 그대로) · 나머지는
-              자연스러운 대화를 위한 연결 문장
+              <mark className="shrink-0 rounded bg-key px-1 whitespace-nowrap text-ink">노란 표시</mark>
+              {dialogue.kind === 'combined' ? ' 이전 Day에서 배운 Chunk · 나머지는 자연스러운 대화를 위한 말' : ' 영상의 핵심 문장(원문 그대로) · 나머지는 자연스러운 대화를 위한 연결 문장'}
             </p>
           </Card>
 
@@ -100,6 +106,59 @@ export function DialogueDetailPage() {
             <p className="rounded-xl bg-surface px-4 py-3 text-sm text-muted ring-1 ring-line">
               <b className="text-ink">구성 메모</b> · {dialogue.compositionNote}
             </p>
+          )}
+
+          {dialogue.chunkUsages && dialogue.chunkUsages.length > 0 && (
+            <section data-testid="chunk-usages">
+              <SectionTitle>사용한 Chunk와 뉘앙스</SectionTitle>
+              <ul className="space-y-2">
+                {dialogue.chunkUsages.map((u) => (
+                  <li key={u.learningItemId}>
+                    <Card className="p-3.5 text-sm">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <mark className="en rounded bg-key px-1 font-semibold text-ink">{u.usedAs}</mark>
+                        {u.usedAs.toLowerCase() !== u.text.toLowerCase() && <span className="text-xs text-subtle">(배운 형태: {u.text})</span>}
+                        <Badge tone={u.dayNumber ? 'info' : 'neutral'}>{u.dayNumber ? `Day ${u.dayNumber}에서 배움` : '일반 영상에서 배움'}</Badge>
+                      </div>
+                      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                        {u.meaningInContext && (
+                          <>
+                            <dt className="text-xs font-semibold text-subtle">이 상황의 의미</dt>
+                            <dd>{u.meaningInContext}</dd>
+                          </>
+                        )}
+                        {u.nuance && (
+                          <>
+                            <dt className="text-xs font-semibold text-subtle">뉘앙스</dt>
+                            <dd>{u.nuance}</dd>
+                          </>
+                        )}
+                        {u.whyUsed && (
+                          <>
+                            <dt className="text-xs font-semibold text-subtle">쓴 이유</dt>
+                            <dd>{u.whyUsed}</dd>
+                          </>
+                        )}
+                      </dl>
+                      {u.example.en && (
+                        <p className="mt-2">
+                          <span className="text-xs font-semibold text-subtle">응용 · </span>
+                          <span className="en text-ink">{u.example.en}</span> <span className="text-muted">— {u.example.ko}</span>
+                        </p>
+                      )}
+                      {u.videoId && (
+                        <Link to={`/videos/${u.videoId}?tab=sentences`} className="mt-1 inline-block text-xs text-brand underline underline-offset-2">
+                          원본 문장 보기
+                        </Link>
+                      )}
+                    </Card>
+                  </li>
+                ))}
+              </ul>
+              {(dialogue.unusedLearningItemIds?.length ?? 0) > 0 && (
+                <p className="mt-2 text-xs text-subtle">고른 Chunk 중 {dialogue.unusedLearningItemIds!.length}개는 자연스럽게 넣기 어려워 쓰지 않았어요.</p>
+              )}
+            </section>
           )}
 
           <section>
