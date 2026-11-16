@@ -63,10 +63,10 @@ describe('B1-d 초안 적용 (추가만, 덮어쓰기 없음)', () => {
     expect(await db.learningItems.count()).toBe(3);
   });
 
-  it('이미 자막 기록이 있는 영상(실패 기록 포함)에는 AI 자막을 넣지 않는다 — 기존 자막 그대로', async () => {
+  it('내용 있는 자막이 이미 있는 영상에는 AI 자막을 넣지 않는다 — 기존 자막 그대로', async () => {
     const { db } = createTestRepos();
     await seedVideo(db, 'v2', '영상');
-    await db.transcripts.add({ id: 'tr-old', createdAt: T, updatedAt: T, videoId: 'v2', source: 'manual_paste', status: 'failed', rawText: '', segments: [] });
+    await db.transcripts.add({ id: 'tr-old', createdAt: T, updatedAt: T, videoId: 'v2', source: 'manual_paste', status: 'success', rawText: '00:00 hi', segments: [{ startSec: 0, endSec: 1, text: 'hi' }], format: 'timestamped' });
     await db.extractionJobs.add(job('v2'));
     await db.extractionDrafts.add(draft('v2'));
     const before = await snapshot(db);
@@ -75,6 +75,19 @@ describe('B1-d 초안 적용 (추가만, 덮어쓰기 없음)', () => {
     expect(after.transcripts).toEqual(before.transcripts);
     expect(after.videos).toBe(before.videos);
     expect(await db.learningItems.count()).toBe(3);
+  });
+
+  it('실패 기록(내용 없음)만 있는 영상에는 AI 자막을 추가한다 — 실패 기록은 지우거나 바꾸지 않음', async () => {
+    const { db } = createTestRepos();
+    await seedVideo(db, 'v2', '영상');
+    const failed = { id: 'tr-old', createdAt: T, updatedAt: T, videoId: 'v2', source: 'manual_paste' as const, status: 'failed' as const, rawText: '', segments: [] };
+    await db.transcripts.add(failed);
+    await db.extractionJobs.add(job('v2'));
+    await db.extractionDrafts.add(draft('v2'));
+    await applyDraft({ store: createExtractionStore(db), newId }, 'draft-v2');
+    const all = await db.transcripts.where('videoId').equals('v2').toArray();
+    expect(all.find((t) => t.id === 'tr-old')).toEqual(failed);
+    expect(all.filter((t) => t.source === 'ai_transcription' && t.status === 'success').length).toBe(1);
   });
 
   it('일부 표현을 빼고 적용하면 partially_approved, 확인 필요 초안은 자동 적용하지 않는다', async () => {

@@ -59,16 +59,21 @@ export async function syncJobs(deps: RunnerDeps): Promise<void> {
   const add: ExtractionJob[] = [];
   for (const v of videos) {
     if (v.isSample || !v.youtubeVideoId || hasTranscript.has(v.id) || hasJob.has(v.id)) continue;
-    const tooLong = typeof v.durationSec === 'number' && v.durationSec > max;
-    const noDuration = !(typeof v.durationSec === 'number' && v.durationSec > 0);
-    add.push({
-      id: jobId(v.id), videoId: v.id, status: tooLong || noDuration ? 'skipped' : 'queued', attempts: 0, attemptAfter: null,
-      lastError: tooLong ? { code: 'too_long', message: `${Math.round(max / 60)}분이 넘는 긴 영상이라 자동 추출하지 않아요.` } : noDuration ? { code: 'no_duration', message: '영상 길이를 몰라 자동 추출하지 않아요.' } : null,
-      currentRequestId: null, segments: [], leaseOwner: null, leaseUntil: null, model: null, apiStyle: 'interactions', promptVersion: AI_PROMPT_VERSION,
-      videoDurationSec: v.durationSec ?? null, draftId: null, createdAt: now, updatedAt: now,
-    });
+    add.push(makeJob(v, now, max));
   }
   await deps.store.addJobs(add);
+}
+
+/** 영상 1개의 추출 작업 (긴 영상·길이를 모르는 영상은 건너뜀으로) */
+export function makeJob(v: Video, now: string, max = MAX_AUTO_VIDEO_SEC): ExtractionJob {
+  const tooLong = typeof v.durationSec === 'number' && v.durationSec > max;
+  const noDuration = !(typeof v.durationSec === 'number' && v.durationSec > 0);
+  return {
+    id: jobId(v.id), videoId: v.id, status: tooLong || noDuration ? 'skipped' : 'queued', attempts: 0, attemptAfter: null,
+    lastError: tooLong ? { code: 'too_long', message: `${Math.round(max / 60)}분이 넘는 긴 영상이라 자동 추출하지 않아요.` } : noDuration ? { code: 'no_duration', message: '영상 길이를 몰라 자동 추출하지 않아요.' } : null,
+    currentRequestId: null, segments: [], leaseOwner: null, leaseUntil: null, model: null, apiStyle: 'interactions', promptVersion: AI_PROMPT_VERSION,
+    videoDurationSec: v.durationSec ?? null, draftId: null, createdAt: now, updatedAt: now,
+  };
 }
 
 export async function summarize(store: ExtractionStore): Promise<JobSummary> {
@@ -108,11 +113,11 @@ export type StepOutcome =
   /** 초안 저장 완료 */
   | { kind: 'done'; draftId: string }
   /** 이 영상만 멈춤 ('확인 필요' 또는 건너뜀) — 다음 영상으로 */
-  | { kind: 'job_stopped'; code: string }
+  | { kind: 'job_stopped'; code: string; message?: string; httpStatus?: number | null }
   /** 서버에 닿지 못함 — 같은 식별자로 나중에 다시 */
-  | { kind: 'retry' }
+  | { kind: 'retry'; message?: string; httpStatus?: number | null }
   /** 전체를 멈춰야 함 (하루 한도·무료 한도·접근 코드·서버 설정) */
-  | { kind: 'pause'; reason: NonNullable<ExtractionRunState['pauseReason']>; until: string | null; message: string };
+  | { kind: 'pause'; reason: NonNullable<ExtractionRunState['pauseReason']>; until: string | null; message: string; httpStatus?: number | null; code?: string };
 
 /** 한 작업을 한 걸음 진행한다 (요청 1번) */
 export async function stepJob(job: ExtractionJob, video: Video, deps: RunnerDeps): Promise<StepOutcome> {
@@ -151,8 +156,8 @@ export async function stepJob(job: ExtractionJob, video: Video, deps: RunnerDeps
 
   const r = await deps.client.extract(req.id, { videoId: video.youtubeVideoId!, durationSec: video.durationSec!, promptVersion: AI_PROMPT_VERSION });
   const iso2 = clock().toISOString();
-  if (r.kind === 'transport_error') return { kind: 'retry' };
-  if (r.kind === 'auth_error') return { kind: 'pause', reason: 'auth', until: null, message: r.message };
+  if (r.kind === 'transport_error') return { kind: 'retry', message: r.message, httpStatus: r.httpStatus ?? null };
+  if (r.kind === 'auth_error') return { kind: 'pause', reason: 'auth', until: null, message: r.message, httpStatus: r.httpStatus, code: 'auth' };
   const body: AiExtractResponse = r.body;
 
   if (body.state === 'pending') {
@@ -166,7 +171,7 @@ export async function stepJob(job: ExtractionJob, video: Video, deps: RunnerDeps
     if (!v.ok) {
       // 깨진 응답: 초안으로 저장하지 않고 '확인 필요'. Gemini는 이미 처리했으므로 자동으로 다시 요청하지 않는다
       await deps.store.saveResult({ ...job, status: 'failed_permanent', lastError: { code: 'invalid_result', message: v.error }, updatedAt: iso2 }, { ...doneReq, errorCode: 'invalid_result' }, null);
-      return { kind: 'job_stopped', code: 'invalid_result' };
+      return { kind: 'job_stopped', code: 'invalid_result', message: `Gemini 응답 형식이 올바르지 않아요: ${v.error}`, httpStatus: r.httpStatus };
     }
     const draft: ExtractionDraft = {
       id: `draft-${req.id}`, videoId: video.id, jobId: job.id, requestId: req.id, status: 'pending_review', result: v.result, rawText: body.resultText,
@@ -184,18 +189,18 @@ export async function stepJob(job: ExtractionJob, video: Video, deps: RunnerDeps
     if (body.code === 'daily_cap' || body.code === 'gemini_quota') {
       // 처리 안 됨 → 이 영상은 대기열로 되돌리고(다음에 새 식별자), 전체는 초기화 시각까지 멈춤
       await deps.store.saveResult({ ...job, status: 'queued', currentRequestId: null, attemptAfter: body.retryAt ?? null, lastError: err, updatedAt: iso2 }, failedReq, null);
-      return { kind: 'pause', reason: body.code, until: body.retryAt ?? null, message: body.message };
+      return { kind: 'pause', reason: body.code, until: body.retryAt ?? null, message: body.message, httpStatus: r.httpStatus, code: body.code };
     }
     if (body.code === 'too_long') {
       await deps.store.saveResult({ ...job, status: 'skipped', currentRequestId: null, lastError: err, updatedAt: iso2 }, failedReq, null);
-      return { kind: 'job_stopped', code: body.code };
+      return { kind: 'job_stopped', code: body.code, message: body.message, httpStatus: r.httpStatus };
     }
     if (body.code === 'gemini_not_configured' || body.code === 'ledger_unavailable' || body.code === 'bad_request') {
       await deps.store.saveResult({ ...job, status: 'queued', currentRequestId: null, lastError: err, updatedAt: iso2 }, failedReq, null);
-      return { kind: 'pause', reason: 'server', until: null, message: body.message };
+      return { kind: 'pause', reason: 'server', until: null, message: body.message, httpStatus: r.httpStatus, code: body.code };
     }
   }
   // Gemini 거절(비공개 등)·결과 모름·Gemini 실패·만료 → 이 영상만 '확인 필요' (자동 재요청 없음)
   await deps.store.saveResult({ ...job, status: 'failed_permanent', lastError: err, updatedAt: iso2 }, failedReq, null);
-  return { kind: 'job_stopped', code: body.code };
+  return { kind: 'job_stopped', code: body.code, message: body.message, httpStatus: r.httpStatus };
 }

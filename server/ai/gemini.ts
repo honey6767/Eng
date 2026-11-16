@@ -135,7 +135,16 @@ export function extractUsage(interaction: Json): GeminiUsage | null {
 
 function errorMessage(json: Json | null): string {
   const e = json?.error as Json | undefined;
-  return typeof e?.message === 'string' ? e.message.slice(0, 300) : '';
+  if (typeof e?.message === 'string' && e.message) return e.message.slice(0, 300);
+  return [e?.status, errorReason(json)].filter((x) => typeof x === 'string' && x).join(' ').slice(0, 300);
+}
+
+/** Google 오류 상세의 reason (예: API_KEY_INVALID) */
+function errorReason(json: Json | null): string {
+  const details = (json?.error as Json | undefined)?.details;
+  if (!Array.isArray(details)) return '';
+  for (const d of details as Json[]) if (typeof d?.reason === 'string') return d.reason;
+  return '';
 }
 
 export function createGeminiClient(opts: { apiKey: string | null; model?: string; fetch: typeof fetch; timeoutMs?: number }): GeminiClient {
@@ -162,6 +171,8 @@ export function createGeminiClient(opts: { apiKey: string | null; model?: string
       if (res.ok && json && typeof json.id === 'string') return { kind: 'created', interactionId: json.id, status: String(json.status ?? '') };
       if (res.status === 429) return { kind: 'rejected', httpStatus: 429, reason: 'quota', message: 'Gemini 무료 사용 한도에 도달했어요.' };
       if (res.status === 401 || res.status === 403) return { kind: 'rejected', httpStatus: res.status, reason: 'not_configured', message: 'Gemini 키가 거부됐어요.' };
+      // Google은 잘못된 키를 400(API_KEY_INVALID)으로 돌려준다 — 요청 문제가 아니라 키 설정 문제로 보여 준다
+      if (res.status === 400 && /API_KEY/.test(errorReason(json))) return { kind: 'rejected', httpStatus: 400, reason: 'not_configured', message: `Gemini 키가 올바르지 않아요 (${errorReason(json)}).` };
       if (res.status >= 400 && res.status < 500) return { kind: 'rejected', httpStatus: res.status, reason: 'invalid', message: errorMessage(json) || 'Gemini가 요청을 거부했어요.' };
       return { kind: 'unknown', httpStatus: res.status, message: `Gemini 서버 오류(${res.status})` };
     },

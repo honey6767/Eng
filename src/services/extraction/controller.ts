@@ -1,6 +1,6 @@
 import type { ExtractionRunState, ExtractionStore } from '@/repositories/extractionStore';
-import { autoApplyPending } from './manage';
-import { CREATE_GAP_MS, pickNext, POLL_MS, RETRY_MS, stepJob, summarize, syncJobs, type JobSummary, type RunnerDeps } from './runner';
+import { autoApplyPending, retryJob } from './manage';
+import { CREATE_GAP_MS, makeJob, pickNext, POLL_MS, RETRY_MS, stepJob, summarize, syncJobs, type JobSummary, type RunnerDeps } from './runner';
 
 /**
  * 자동 추출 실행 관리 — 시작·멈춤·이어하기, 화면에 보여 줄 상태.
@@ -21,6 +21,17 @@ export interface ControllerSnapshot {
   status: ControllerStatus;
   summary: JobSummary | null;
 }
+
+/** 영상 1개 AI 자막 만들기 진행 상태 (영상 화면의 '자막' 탭에 그대로 보여 준다) */
+export type SingleProgress =
+  | { phase: 'sending' }
+  | { phase: 'processing'; since: string; note?: string }
+  | { phase: 'succeeded'; transcriptSaved: boolean; segments: number; keyExpressions: number; applied: boolean; needsReview: boolean; reused: boolean }
+  | { phase: 'already' }
+  | { phase: 'failed'; httpStatus: number | null; code: string; message: string };
+
+/** 서버에 닿지 못할 때 같은 식별자로 다시 묻는 최대 횟수 (그 뒤에는 화면에 오류를 보여 주고 멈춤 — 다음에 누르면 같은 식별자로 이어서 조회) */
+const SINGLE_MAX_TRANSPORT_RETRIES = 3;
 
 export interface ControllerDeps extends RunnerDeps {
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -128,6 +139,76 @@ export function createExtractionController(deps: ControllerDeps) {
     }
   }
 
+  async function resultOf(videoId: string, draftId: string, reused: boolean): Promise<SingleProgress> {
+    const { transcripts } = await store.readOverview();
+    const draft = await store.getDraft(draftId);
+    const tr = transcripts.find((t) => t.videoId === videoId && t.status === 'success' && t.segments.length > 0);
+    const result = draft?.result as { keyExpressions?: unknown[] } | undefined;
+    const applied = draft?.status === 'approved' || draft?.status === 'partially_approved';
+    return { phase: 'succeeded', transcriptSaved: !!tr, segments: tr?.segments.length ?? 0, keyExpressions: result?.keyExpressions?.length ?? 0, applied, needsReview: !applied, reused };
+  }
+
+  async function runSingle(videoId: string, report: (p: SingleProgress) => SingleProgress, signal?: AbortSignal): Promise<SingleProgress> {
+    const overview = await store.readOverview();
+    const video = overview.videos.find((v) => v.id === videoId);
+    if (!video?.youtubeVideoId) return report({ phase: 'failed', httpStatus: null, code: 'no_video_id', message: 'YouTube 영상 ID가 없어 AI 자막을 만들 수 없어요.' });
+    if (overview.transcripts.some((t) => t.videoId === videoId && t.status === 'success' && t.segments.length > 0)) return report({ phase: 'already' });
+
+    let job = overview.jobs.find((j) => j.videoId === videoId);
+    if (!job) {
+      job = makeJob(video, now().toISOString(), deps.maxVideoSec);
+      await store.addJobs([job]);
+    }
+    if (job.status === 'skipped') return report({ phase: 'failed', httpStatus: null, code: job.lastError?.code ?? 'skipped', message: job.lastError?.message ?? '이 영상은 자동 추출 대상이 아니에요.' });
+    if (job.status === 'succeeded' && job.draftId) {
+      // 이미 받은 결과 재사용 (Gemini 다시 부르지 않음)
+      await autoApplyPending(deps);
+      return report(await resultOf(videoId, job.draftId, true));
+    }
+    if (job.status === 'failed_permanent') {
+      await retryJob(deps, job.id);
+      job = (await store.getJob(job.id))!;
+    }
+    // 하루 상한으로 대기 중이면 안내만
+    if (job.attemptAfter && Date.parse(job.attemptAfter) > now().getTime()) {
+      return report({ phase: 'failed', httpStatus: null, code: job.lastError?.code ?? 'waiting', message: `${job.lastError?.message ?? '하루 한도에 닿았어요.'} (${new Date(job.attemptAfter).toLocaleString('ko-KR')} 이후 다시 시도)` });
+    }
+
+    const since = now().toISOString();
+    report(job.currentRequestId ? { phase: 'processing', since } : { phase: 'sending' });
+    let transportFails = 0;
+    const ac = signal ?? new AbortController().signal;
+    while (!ac.aborted) {
+      const cur = (await store.getJob(job.id))!;
+      const out = await stepJob(cur, video, deps);
+      if (out.kind === 'pending') {
+        transportFails = 0;
+        report({ phase: 'processing', since, note: 'Gemini가 영상을 보고 자막을 만드는 중이에요. 보통 1~3분 걸려요.' });
+        await sleep(POLL_MS, ac);
+        continue;
+      }
+      if (out.kind === 'retry') {
+        transportFails++;
+        if (transportFails > SINGLE_MAX_TRANSPORT_RETRIES) {
+          return report({ phase: 'failed', httpStatus: out.httpStatus ?? null, code: 'network', message: `${out.message ?? 'AI 서버에 연결하지 못했어요.'} 잠시 뒤 다시 누르면 같은 요청으로 이어서 확인해요(새로 생성하지 않음).` });
+        }
+        report({ phase: 'processing', since, note: `${out.message ?? '연결이 불안정해요.'} 다시 확인하는 중… (${transportFails}/${SINGLE_MAX_TRANSPORT_RETRIES})` });
+        await sleep(RETRY_MS, ac);
+        continue;
+      }
+      if (out.kind === 'done') {
+        await autoApplyPending(deps);
+        return report(await resultOf(videoId, out.draftId, false));
+      }
+      if (out.kind === 'pause') {
+        if (out.until) await setRun({ pausedUntil: out.until, pauseReason: out.reason, pauseMessage: out.message });
+        return report({ phase: 'failed', httpStatus: out.httpStatus ?? null, code: out.code ?? out.reason, message: out.message });
+      }
+      return report({ phase: 'failed', httpStatus: out.httpStatus ?? null, code: out.code, message: out.message ?? '자막을 만들지 못했어요.' });
+    }
+    return report({ phase: 'failed', httpStatus: null, code: 'cancelled', message: '멈췄어요. 다시 누르면 같은 요청으로 이어서 확인해요.' });
+  }
+
   return {
     subscribe(fn: (s: ControllerSnapshot) => void) {
       listeners.add(fn);
@@ -165,6 +246,39 @@ export function createExtractionController(deps: ControllerDeps) {
       await loop;
       await setRun({ active: false });
       emit({ status: { kind: 'idle' } });
+    },
+    /**
+     * 영상 1개만 AI 자막 만들기 (사용자가 영상 화면에서 누름).
+     * - 이미 자막(내용 있음)이 있으면 요청하지 않는다.
+     * - 이미 받은 결과(초안)가 있으면 Gemini를 다시 부르지 않고 그 결과를 적용한다.
+     * - 실패로 멈춘 영상은 사용자가 눌렀으므로 한 번 더 요청한다(새 식별자). 진행 중이던 요청은 같은 식별자로 조회만 한다.
+     * - 전체 자동 추출이 돌고 있으면 잠시 멈추고 이 영상을 먼저 한 뒤, 다시 이어 간다.
+     */
+    async extractOne(videoId: string, onProgress: (p: SingleProgress) => void, signal?: AbortSignal): Promise<SingleProgress> {
+      const report = (p: SingleProgress) => {
+        onProgress(p);
+        return p;
+      };
+      const wasRunning = !!loop;
+      if (wasRunning) {
+        abort?.abort();
+        await loop;
+      }
+      let final: SingleProgress | null = null;
+      const finish = async () => {
+        await refresh();
+        if (wasRunning) void this.start();
+      };
+      try {
+        const got = await withLock(async () => {
+          final = await runSingle(videoId, report, signal);
+        }, undefined, signal);
+        if (!got) final = report({ phase: 'failed', httpStatus: null, code: 'other_tab', message: '다른 탭에서 자막 추출이 진행 중이에요. 그 탭을 닫고 다시 눌러 주세요.' });
+      } catch (e) {
+        final = report({ phase: 'failed', httpStatus: null, code: 'app_error', message: `앱에서 오류가 났어요: ${e instanceof Error ? e.message : String(e)}` });
+      }
+      await finish();
+      return final ?? report({ phase: 'failed', httpStatus: null, code: 'cancelled', message: '멈췄어요.' });
     },
     /** 앱을 열 때 — 이전에 시작해 끝나지 않은 작업이 있으면 이어 간다 */
     async resumeIfActive(): Promise<void> {

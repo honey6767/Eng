@@ -1,6 +1,6 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useState } from 'react';
-import { repos } from '@/repositories';
+import { extractionStore, repos } from '@/repositories';
 import { useLiveData } from '@/hooks/useLiveData';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
@@ -20,7 +20,7 @@ import { useYouTubeStatus } from '@/hooks/useYouTubeStatus';
 import { startVideo } from '@/services/studyQueue';
 import { formatDateKo, formatDuration } from '@/utils/date';
 import { TRANSCRIPT_STATUS } from '@/utils/labels';
-import type { Dialogue, DialogueComposition, KeySentence, Playlist } from '@/types/models';
+import type { Dialogue, DialogueComposition, Expression, KeySentence, LearningItem, Playlist } from '@/types/models';
 import { NotFoundPage } from './NotFoundPage';
 import { extractionController } from '@/services/extraction';
 
@@ -43,7 +43,7 @@ export function VideoDetailPage() {
   const data = useLiveData(async () => {
     const video = await repos.videos.get(id);
     if (!video) return null;
-    const [transcript, notes, sentences, dialogues, composition, playlists, expressions] = await Promise.all([
+    const [transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems] = await Promise.all([
       repos.transcripts.getByVideo(id),
       repos.expressionNotes.listByVideo(id),
       repos.keySentences.listByVideo(id),
@@ -51,19 +51,22 @@ export function VideoDetailPage() {
       repos.compositions.getByVideo(id),
       repos.playlists.list(),
       repos.expressions.list(),
+      extractionStore.listLearningItems(id),
     ]);
-    return { video, transcript, notes, sentences, dialogues, composition, playlists, expressions };
+    return { video, transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems };
   }, [id]);
 
   if (data === undefined) return <Loading />;
   if (data === null) return <NotFoundPage message="영상을 찾을 수 없어요." />;
 
-  const { video, transcript, notes, sentences, dialogues, composition, playlists, expressions } = data;
+  const { video, transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems } = data;
+  // AI가 뽑은 핵심 표현 (B1-d로 자동 적용된 것) — 기존 표현 노트와 따로 보여 준다
+  const aiItems = learningItems.filter((li) => li.origin === 'ai_extracted' && li.kind === 'key');
   const playlistById = new Map<string, Playlist>(playlists.map((p) => [p.id, p]));
   // 실제 영상은 2단계 기능인 자막 탭을 기본으로 연다
   const tab: TabKey = tabParam ?? (video.isSample ? 'preview' : 'transcript');
   const counts: Record<TabKey, number | null> = {
-    preview: new Set(notes.map((n) => n.expression)).size,
+    preview: new Set(notes.map((n) => n.expression)).size + aiItems.length,
     sentences: sentences.length,
     dialogues: dialogues.length,
     transcript: null,
@@ -172,7 +175,21 @@ export function VideoDetailPage() {
         </div>
       </div>
 
-      {tab === 'preview' && <ExpressionNotesPanel video={video} notes={notes} sentences={sentences} expressions={expressions} />}
+      {tab === 'preview' && (
+        <div className="space-y-4">
+          {aiItems.length > 0 && (
+            <AiExpressionList
+              items={aiItems}
+              expressions={expressions}
+              onSeek={(sec) => {
+                setSeek({ sec, nonce: Date.now() });
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+            />
+          )}
+          <ExpressionNotesPanel video={video} notes={notes} sentences={sentences} expressions={expressions} />
+        </div>
+      )}
       {tab === 'sentences' && (
         <KeySentenceManager
           video={video}
@@ -200,6 +217,40 @@ export function VideoDetailPage() {
         />
       )}
     </div>
+  );
+}
+
+function AiExpressionList({ items, expressions, onSeek }: { items: LearningItem[]; expressions: Expression[]; onSeek: (sec: number) => void }) {
+  const byId = new Map(expressions.map((e) => [e.id, e]));
+  const sorted = [...items].sort((a, b) => (a.timestampSec ?? 1e9) - (b.timestampSec ?? 1e9));
+  return (
+    <Card className="p-4" data-testid="ai-expressions">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h3 className="font-bold">AI가 찾은 핵심 표현 {sorted.length}개</h3>
+        <Badge tone="brand">AI 추출</Badge>
+      </div>
+      <ul className="divide-y divide-line">
+        {sorted.map((li) => {
+          const e = byId.get(li.expressionId);
+          return (
+            <li key={li.id} className="py-2.5">
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span className="font-semibold text-ink">{e?.text ?? '(표현)'}</span>
+                {e?.meaningKo && <span className="text-sm text-muted">{e.meaningKo}</span>}
+                {li.status === 'needs_review' && <Badge tone="warn">확인 권장</Badge>}
+                {li.onScreen && <Badge>화면 글자</Badge>}
+                {li.timestampSec != null && (
+                  <button type="button" className="text-xs text-brand underline underline-offset-2" onClick={() => onSeek(li.timestampSec!)}>
+                    {formatDuration(li.timestampSec)}
+                  </button>
+                )}
+              </div>
+              {li.sourceText && <p className="mt-1 text-sm text-subtle">“{li.sourceText}”</p>}
+            </li>
+          );
+        })}
+      </ul>
+    </Card>
   );
 }
 

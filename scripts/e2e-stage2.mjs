@@ -141,8 +141,8 @@ async function mockSuite(base) {
   check('학습 상태(학습 완료) 새로고침 후 유지', (await page.getByRole('radio', { name: '학습 완료' }).getAttribute('aria-checked')) === 'true');
 
   // 6. 자막 자동 가져오기 — 트랙 없음
-  check('실제 영상은 자막 탭이 기본', await visible(page.getByRole('heading', { name: '자막 자동 가져오기' })));
-  await page.getByRole('button', { name: '자막 자동 가져오기 시도' }).click();
+  check('실제 영상은 자막 탭이 기본', await visible(page.getByRole('heading', { name: 'YouTube 공식 자막 확인' })));
+  await page.getByRole('button', { name: '공식 자막 트랙 확인' }).click();
   check('자막 확인: 트랙 없음 → 성공으로 표시하지 않음', await textMatches(page.getByTestId('caption-check-result'), /자막 트랙 없음/));
   check('자막 미등록 상태 유지', await visible(page.getByRole('heading', { name: '자막 직접 입력' })));
 
@@ -175,7 +175,7 @@ async function mockSuite(base) {
   // 자막 트랙이 있는 영상: 권한 없음
   await page.goto(`${base}/videos`);
   await page.getByTestId('video-list').getByText('[MOCK] 테스트 영상 1', { exact: true }).click();
-  await page.getByRole('button', { name: '자막 자동 가져오기 시도' }).click();
+  await page.getByRole('button', { name: '공식 자막 트랙 확인' }).click();
   check('자막 트랙 있음 → "권한 없음"으로 정확히 표시', await textMatches(page.getByTestId('caption-check-result'), /자동 가져오기 불가 · 권한 없음/));
   check('확인된 트랙 정보 표시', await visible(page.getByText(/확인된 트랙: en\(자동 생성\)/)));
   await page.screenshot({ path: `${SHOTS}/s2-03-transcript.png`, fullPage: true });

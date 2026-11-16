@@ -35,6 +35,8 @@ describe('Gemini Interactions 클라이언트', () => {
     const run = async (status: number) => createGeminiClient({ apiKey: 'k', fetch: (async () => ok({ error: { message: 'm' } }, status)) as unknown as typeof fetch }).create({ videoId: 'eNODHkrNuDA', durationSec: 10, promptVersion: 'v1' });
     expect(await run(429)).toMatchObject({ kind: 'rejected', reason: 'quota' });
     expect(await run(403)).toMatchObject({ kind: 'rejected', reason: 'not_configured' });
+    const badKey = createGeminiClient({ apiKey: 'k', fetch: (async () => new Response(JSON.stringify({ error: { code: 400, status: 'INVALID_ARGUMENT', details: [{ reason: 'API_KEY_INVALID' }] } }), { status: 400 })) as typeof fetch });
+    expect(await badKey.create({ videoId: 'eNODHkrNuDA', durationSec: 10, promptVersion: 'v1' })).toMatchObject({ kind: 'rejected', reason: 'not_configured', httpStatus: 400 });
     expect(await run(400)).toMatchObject({ kind: 'rejected', reason: 'invalid' });
     const noKey = createGeminiClient({ apiKey: null, fetch: vi.fn() as unknown as typeof fetch });
     expect(await noKey.create({ videoId: 'eNODHkrNuDA', durationSec: 10, promptVersion: 'v1' })).toMatchObject({ kind: 'rejected', reason: 'not_configured' });

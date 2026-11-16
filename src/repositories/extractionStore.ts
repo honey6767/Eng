@@ -99,7 +99,7 @@ export function createExtractionStore(db: StudyDatabase): ExtractionStore {
         if (!draft || draft.status === 'approved' || draft.status === 'partially_approved' || draft.status === 'superseded') return null;
         const video = await db.videos.get(draft.videoId);
         if (!video) return null;
-        const hasTranscript = (await db.transcripts.where('videoId').equals(video.id).count()) > 0;
+        const hasTranscript = (await db.transcripts.where('videoId').equals(video.id).filter((t) => t.status === 'success' && t.segments.length > 0).count()) > 0;
         const expressions = await db.expressions.toArray();
         const existingItems = await db.learningItems.where('videoId').equals(video.id).toArray();
         const dayAssignment = (await db.dayAssignments.where('videoId').equals(video.id).first()) ?? null;

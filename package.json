@@ -19,7 +19,8 @@
     "e2e:access": "node scripts/e2e-access.mjs",
     "e2e:stageB1a": "node scripts/e2e-stageB1a.mjs",
     "e2e:stageB1b": "node scripts/e2e-stageB1b.mjs",
-    "e2e:stageB1cd": "node scripts/e2e-stageB1cd.mjs"
+    "e2e:stageB1cd": "node scripts/e2e-stageB1cd.mjs",
+    "e2e:aiButton": "node scripts/e2e-aiExtractButton.mjs"
   },
   "dependencies": {
     "@fontsource-variable/plus-jakarta-sans": "^5.2.8",

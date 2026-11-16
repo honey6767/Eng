@@ -61,10 +61,22 @@ function fail(requestId: string | null, code: AiFailureCode, message: string, co
   return { status, body: { ok: false, state: 'failed', requestId, code, message, consumed, ...(retryAt ? { retryAt } : {}) } };
 }
 
+/** 실패 종류별 HTTP 상태 — 화면에 그대로 보여 준다 (본문의 code·consumed가 실제 판단 기준) */
+const FAILURE_HTTP: Partial<Record<AiFailureCode, number>> = {
+  daily_cap: 429,
+  gemini_quota: 429,
+  too_long: 413,
+  gemini_not_configured: 503,
+  gemini_rejected: 502,
+  gemini_failed: 502,
+  unknown: 502,
+  expired: 410,
+};
+
 /** 저장된 기록을 응답으로 */
 function respond(row: LedgerRow): ExtractResult {
   if (row.state === 'succeeded') {
-    if (row.resultText === null) return fail(row.key, 'expired', '결과 보관 기간이 지났어요.', true);
+    if (row.resultText === null) return fail(row.key, 'expired', '결과 보관 기간이 지났어요.', true, FAILURE_HTTP.expired);
     return {
       status: 200,
       body: { ok: true, state: 'succeeded', requestId: row.key, interactionId: row.interactionId ?? '', model: row.model, resultText: row.resultText, usage: row.usageJson ? JSON.parse(row.usageJson) : null },
@@ -72,7 +84,8 @@ function respond(row: LedgerRow): ExtractResult {
   }
   if (row.state === 'failed') {
     const retryAt = row.failureCode === 'daily_cap' || row.failureCode === 'gemini_quota' ? nextPacificMidnight(row.updatedAt) : undefined;
-    return fail(row.key, (row.failureCode as AiFailureCode) ?? 'unknown', row.failureMessage ?? '', row.consumed, 200, retryAt);
+    const code = (row.failureCode as AiFailureCode) ?? 'unknown';
+    return fail(row.key, code, row.failureMessage ?? '', row.consumed, FAILURE_HTTP[code] ?? 500, retryAt);
   }
   return { status: 202, body: { ok: true, state: 'pending', requestId: row.key, interactionId: row.interactionId, retryAfterSec: POLL_AFTER_SEC } };
 }
@@ -145,11 +158,12 @@ export async function handleAiExtract(input: { idempotencyKey: string | null; bo
     const u = store.getUsage(cur.pacificDate);
     store.putUsage({ pacificDate: cur.pacificDate, videoSec: Math.max(0, u.videoSec - cur.durationSec), requests: Math.max(0, u.requests - 1) });
     const code: AiFailureCode = created.reason === 'quota' ? 'gemini_quota' : created.reason === 'not_configured' ? 'gemini_not_configured' : 'gemini_rejected';
-    const row: LedgerRow = { ...cur, state: 'failed', counted: false, consumed: false, leaseUntil: null, failureCode: code, failureMessage: created.message, updatedAt: t2 };
+    const upstream = created.httpStatus ? ` (Gemini HTTP ${created.httpStatus})` : '';
+    const row: LedgerRow = { ...cur, state: 'failed', counted: false, consumed: false, leaseUntil: null, failureCode: code, failureMessage: `${created.message}${upstream}`, updatedAt: t2 };
     store.put(row);
     return respond(row);
   }
-  const row: LedgerRow = { ...cur, state: 'failed', consumed: true, leaseUntil: null, failureCode: 'unknown', failureMessage: created.message, updatedAt: t2 };
+  const row: LedgerRow = { ...cur, state: 'failed', consumed: true, leaseUntil: null, failureCode: 'unknown', failureMessage: `${created.message}${created.httpStatus ? ` (Gemini HTTP ${created.httpStatus})` : ''}`, updatedAt: t2 };
   store.put(row);
   return respond(row);
 }

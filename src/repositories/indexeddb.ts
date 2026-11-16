@@ -170,7 +170,11 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
     },
 
     transcripts: {
-      getByVideo: (videoId) => db.transcripts.where('videoId').equals(videoId).first(),
+      // 같은 영상에 기록이 여럿이면(예: 실패 기록 + AI 자막) 내용이 있는 자막을 먼저 보여 준다
+      getByVideo: async (videoId) => {
+        const all = await db.transcripts.where('videoId').equals(videoId).toArray();
+        return all.find((t) => t.status === 'success' && t.segments.length > 0) ?? all[0];
+      },
       save: (videoId, input) =>
         db.transaction('rw', db.transcripts, db.videos, async () => {
           const now = nowISO();

@@ -10,7 +10,7 @@ import { accessCodeStore, canSendAccessCode } from './accessCode';
 export type AiTransportResult =
   | { kind: 'response'; httpStatus: number; body: AiExtractResponse }
   /** 서버에 닿지 못했거나 알 수 없는 응답 — 같은 식별자로 나중에 다시 물으면 된다 */
-  | { kind: 'transport_error'; message: string }
+  | { kind: 'transport_error'; message: string; httpStatus?: number }
   /** 접근 코드 문제 */
   | { kind: 'auth_error'; httpStatus: number; message: string };
 
@@ -33,7 +33,7 @@ export const aiClient: AiClient = {
       if (res.status === 401 && code) accessCodeStore.markRejected();
       return { kind: 'auth_error', httpStatus: res.status, message: (body as { message?: string } | null)?.message ?? '접근 코드를 확인해 주세요.' };
     }
-    if (!body || typeof body !== 'object' || !('state' in body)) return { kind: 'transport_error', message: `AI 서버 응답을 읽지 못했어요 (${res.status}).` };
+    if (!body || typeof body !== 'object' || !('state' in body)) return { kind: 'transport_error', httpStatus: res.status, message: `AI 서버 응답을 읽지 못했어요 (HTTP ${res.status}).` };
     return { kind: 'response', httpStatus: res.status, body };
   },
 };

@@ -75,9 +75,11 @@ for (const [label, makeStore] of [['메모리 장부', () => memoryLedgerStore()
       const { run } = setup(g);
       const long = await run(KEY(5), body('eNODHkrNuDA', 4000));
       expect(long.body).toMatchObject({ ok: false, code: 'too_long', consumed: false });
+      expect(long.status).toBe(413);
       for (let i = 0; i < 5; i++) await run(KEY(10 + i), body(`video00000${i}`, 300));
       const capped = await run(KEY(20), body('video000099', 300));
       expect(capped.body).toMatchObject({ ok: false, code: 'daily_cap', consumed: false, retryAt: nextPacificMidnight(T) });
+      expect(capped.status).toBe(429);
       expect(g.createCalls).toHaveLength(5);
     });
 
