@@ -3,7 +3,7 @@ import { AI_CONTENT_PROMPT_VERSION, CONTENT_LIMITS, type AiContentRequest, type 
 import type { ChunkDetail, DayAssignment, Expression, KeySentence, LearningItem, Transcript, Video } from '@/types/models';
 import { normalizeExpressionKey } from '@/utils/text';
 import { partsFrom } from '@/utils/chunkMatch';
-import { isSafeBase, locateChunk, parsePatternFields } from '@/utils/chunkBase';
+import { isSafeBase, locateChunk, parsePatternFields, patternDetail } from '@/utils/chunkBase';
 
 /**
  * AI 학습 콘텐츠 — 저장된 자막에서 ① 원문 문장 ② 문장 속 Chunk 를 만든다.
@@ -144,7 +144,7 @@ export function validateContent(text: string, durationSec: number | null): Conte
         examples,
         ...(m && parts.length > 1 ? { parts } : {}),
         ...(m ? { surface: m.surface } : {}),
-        ...(pat ? { pattern: pat.pattern, swaps: pat.swaps } : {}),
+        ...(pat ?? {}),
       });
     }
     sentences.push({ number, text: en, meaningKo: txt(s.meaningKo, 500), timestampSec: ts, chunks });
@@ -258,7 +258,7 @@ export function planContent(ctx: ContentContext): ContentPlan {
         id: contentChunkId(requestId, exprId), createdAt: now, updatedAt: now, expressionId: exprId, videoId: video.id, sourceType, dayNumber: ctx.dayNumber,
         kind: 'chunk', dialogueId: null, sourceText: s.text, timestampSec: s.timestampSec, onScreen: false, origin: 'ai_extracted', status: 'confirmed',
         extractionDraftId: null, legacyKeySentenceId: null, sentenceId,
-        chunk: { meaningInSentence: c.meaningInSentence, nuance: c.nuance, usage: c.usage, comparison: c.comparison, examples: c.examples, ...(c.parts ? { parts: c.parts } : {}), ...(c.surface ? { surface: c.surface } : {}), ...(c.pattern !== undefined ? { pattern: c.pattern, swaps: c.swaps ?? [] } : {}) },
+        chunk: { meaningInSentence: c.meaningInSentence, nuance: c.nuance, usage: c.usage, comparison: c.comparison, examples: c.examples, ...(c.parts ? { parts: c.parts } : {}), ...(c.surface ? { surface: c.surface } : {}), ...patternDetail(c) },
         selected: false, contentRequestId: requestId,
         ...(ctx.chunkRole ? { chunkRole: ctx.chunkRole } : {}),
       });

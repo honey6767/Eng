@@ -378,7 +378,7 @@ describe('Day 11 실제 저장 형태: 핵심 Chunk 기록 없이 활용형 Chun
 
 describe('추가 덩어리 표현 기본형 규칙 (look super tired → look tired)', () => {
   it('정도만 강조하는 말만 빼고, 뜻이 바뀌는 말은 그대로', async () => {
-    const { deriveBase, isSafeBase, derivePattern } = await import('@/utils/chunkBase');
+    const { deriveBase, isSafeBase } = await import('@/utils/chunkBase');
     expect(deriveBase('look super tired')).toEqual({ base: 'look tired', parts: ['look', 'tired'], dropped: ['super'] });
     expect(deriveBase('look really happy')?.base).toBe('look happy');
     expect(deriveBase('look so familiar')?.base).toBe('look familiar');
@@ -387,10 +387,9 @@ describe('추가 덩어리 표현 기본형 규칙 (look super tired → look ti
     expect(deriveBase('which car to buy')).toBeNull();
     expect(isSafeBase("don't look tired", 'look tired')).toBe(false); // 부정은 빼지 않음
     expect(isSafeBase('look super tired', 'look tired')).toBe(true);
-    expect(derivePattern('look tired', ['super'])).toEqual({ pattern: 'look + 형용사', swaps: ['look happy', 'look familiar', 'look busy'] });
   });
 
-  it('AI 결과: 기본형(text)·원문 형태(surface)·바꿔 쓰기(pattern·swaps)를 저장, parts를 안 나눠도 원문에서 찾음', () => {
+  it('이전 형식(p3) AI 결과: 기본형(text)·원문 형태(surface)·pattern·swaps를 그대로 읽음, parts를 안 나눠도 원문에서 찾음', () => {
     const sentences = [{ number: 3, text: 'You look super tired. You could use some rest.' }];
     const core = { text: 'could use', parts: ['could', 'use'], meaningKo: '', nuance: '', usage: '', comparison: '', examples: [], sentenceNumbers: [3], taughtEvidence: '' };
     const dialogue = { title: 't', situation: 's', lines: [{ speaker: 'A', en: 'You look tired.', ko: '피곤해 보여.', sourceSentenceNumber: 0, chunkTexts: [] }, { speaker: 'B', en: 'I could use some rest.', ko: '좀 쉬고 싶어.', sourceSentenceNumber: 0, chunkTexts: [] }], chunkNotes: [] };
@@ -411,8 +410,9 @@ describe('추가 덩어리 표현 기본형 규칙 (look super tired → look ti
     const item = { id: 'li', kind: 'chunk', expressionId: 'e', videoId: 'd11', chunk: { meaningInSentence: '', nuance: '', usage: '', comparison: '', examples: [], surface: 'look super tired' } } as never;
     const before = JSON.stringify(item);
     const v = extraViewOf(item, e);
-    expect(v).toMatchObject({ base: 'look tired', parts: ['look', 'tired'], surface: 'look super tired', dropped: ['super'], pattern: 'look + 형용사', source: 'app' });
-    expect(v.swaps).toEqual(['look happy', 'look familiar', 'look busy']);
+    expect(v).toMatchObject({ base: 'look tired', parts: ['look', 'tired'], surface: 'look super tired', dropped: ['super'], source: 'app', patternSource: 'app' });
+    expect(v.pattern?.pattern).toBe('look + 형용사');
+    expect(v.pattern?.examples.map((x) => [x.en, x.ko])).toEqual([['look happy', '행복해 보이다'], ['look familiar', '낯익어 보이다'], ['look busy', '바빠 보이다']]);
     expect(JSON.stringify(item)).toBe(before);
     const sleep = extraViewOf({ ...(item as object), chunk: undefined } as never, { ...(e as object), text: "didn't get much sleep" } as never);
     expect([sleep.base, sleep.source]).toEqual(["didn't get much sleep", 'none']);
@@ -423,5 +423,81 @@ describe('추가 덩어리 표현 기본형 규칙 (look super tired → look ti
     expect(pp).toContain('look super tired → look tired');
     expect(pp).toContain('무조건 짧게 줄이지 않습니다');
     expect(pp).toContain('pattern');
+  });
+});
+
+describe('교체 패턴 (which + 명사 + to buy) — 기본 Chunk와 구분, 검사 통과한 것만', () => {
+  const ex = (en: string, ko: string, note = '') => ({ en, ko, note });
+
+  it('패턴 검사: 정해진 자리 이름만, 고정 부분은 기본 Chunk에 같은 순서로, 예시는 패턴에 맞고 뜻이 있어야 함', async () => {
+    const { checkPattern, parsePattern } = await import('@/utils/chunkPattern');
+    expect(parsePattern('which + 명사 + to buy')?.map((t) => t.slot)).toEqual([false, true, false]);
+    expect(parsePattern('which + 물건 + to buy')).toBeNull(); // '물건'은 정해진 자리 이름이 아님 → 패턴 거부
+    expect(checkPattern('which car to buy', 'which + 물건 + to buy', '', [ex('which phone to buy', '어떤 폰을 살지')])).toBeNull();
+    expect(parsePattern('명사 + 형용사')).toBeNull(); // 고정 부분 없음
+    expect(parsePattern('look + 명사 + 형용사')).toBeNull(); // 자리끼리 붙음
+    expect(checkPattern('which car to buy', 'which + 명사 + to get', '', [ex('which phone to get', '어떤 폰을 살지')])).toBeNull(); // 고정 부분이 기본 Chunk에 없음
+    const ok = checkPattern('which car to buy', 'which + 명사 + to buy', '명사 자리: 사려는 물건', [
+      ex('which car to buy', '어떤 차를 살지'), // 기본 Chunk와 같음 → 제외
+      ex('which phone to buy', '어떤 폰을 살지'),
+      ex('which to buy phone', '어색함'), // 패턴에 안 맞음 → 제외
+      ex('which laptop to buy', ''), // 뜻 없음 → 제외
+      ex('which laptop to buy', '어떤 노트북을 살지'),
+      ex('which one to buy', '어떤 것을 살지'),
+      ex('which tablet to buy', '어떤 태블릿을 살지'), // 3개 넘음 → 제외
+    ]);
+    expect(ok?.pattern).toBe('which + 명사 + to buy');
+    expect(ok?.examples.map((x) => x.en)).toEqual(['which phone to buy', 'which laptop to buy', 'which one to buy']);
+    expect(checkPattern('which car to buy', 'which + 명사 + to buy', '', [ex('which car to buy', '어떤 차를 살지')])).toBeNull(); // 남는 예시가 없으면 패턴도 없음
+  });
+
+  it('예전 Day 11 4개 표현: 화면에서만 기본 Chunk·교체 패턴·활용 예시(뜻·뜻 차이)', async () => {
+    const { templatePattern } = await import('@/utils/chunkPattern');
+    const which = templatePattern('which car to buy')!;
+    expect([which.pattern, which.slotNote]).toEqual(['which + 명사 + to buy', '명사 자리: 사려는 물건']);
+    expect(which.examples.map((x) => `${x.en} — ${x.ko}`)).toEqual(['which phone to buy — 어떤 폰을 살지', 'which laptop to buy — 어떤 노트북을 살지', 'which one to buy — 어떤 것을 살지']);
+    const sleep = templatePattern("didn't get much sleep")!;
+    expect(sleep.pattern).toBe("didn't get much + 불가산명사");
+    expect(sleep.examples.map((x) => x.en)).toEqual(["didn't get much rest", "didn't get much exercise"]);
+    expect(sleep.examples.every((x) => x.ko && x.note)).toBe(true); // 뜻이 달라지므로 뜻 차이 표시
+    const cup = templatePattern('a cup of coffee')!;
+    expect([cup.pattern, cup.examples.map((x) => `${x.en} — ${x.ko}`)]).toEqual(['a cup of + 명사', ['a cup of tea — 차 한 잔', 'a cup of hot chocolate — 핫초코 한 잔']]);
+    expect(cup.slotNote).toContain('음료');
+    expect(templatePattern('look tired')?.pattern).toBe('look + 형용사');
+    // 틀에 없는 표현은 패턴 없음 (지어내지 않음)
+    expect(templatePattern('could use some help')).toBeNull();
+    expect(templatePattern('look after')).toBeNull();
+    expect(templatePattern("didn't get much homework")).toBeNull();
+    expect(templatePattern('which car to steal')).toBeNull();
+  });
+
+  it('p4 AI 결과: 검사를 통과한 활용 예시만 저장 (패턴에 안 맞거나 뜻 없는 것은 뺌), 잘못된 패턴은 저장 안 함', () => {
+    const sentences = [{ number: 4, text: 'I could use some advice on which car to buy.' }];
+    const dialogue = { title: 't', situation: 's', lines: [{ speaker: 'A', en: 'a', ko: 'a', sourceSentenceNumber: 0, chunkTexts: [] }, { speaker: 'B', en: 'b', ko: 'b', sourceSentenceNumber: 0, chunkTexts: [] }], chunkNotes: [] };
+    const run = (x: Record<string, unknown>) => {
+      const v = validateDayPack(JSON.stringify({ coreChunks: [], extraChunks: [{ sentenceNumber: 4, text: 'which car to buy', parts: ['which car to buy'], surface: 'which car to buy', meaningKo: '어떤 차를 살지', ...x }], dialogue, notes: '' }), sentences);
+      return v.ok ? v.pack.extras[0].chunk : null;
+    };
+    const good = run({ pattern: 'which + 명사 + to buy', slotNote: '명사 자리: 사려는 물건', swapExamples: [ex('which phone to buy', '어떤 폰을 살지'), ex('phone which to buy', '틀림'), ex('which laptop to buy', '')] });
+    expect(good).toMatchObject({ text: 'which car to buy', pattern: 'which + 명사 + to buy', slotNote: '명사 자리: 사려는 물건', swapExamples: [{ en: 'which phone to buy', ko: '어떤 폰을 살지' }] });
+    const bad = run({ pattern: 'which + 물건 + to purchase', slotNote: 'x', swapExamples: [ex('which phone to purchase', '어떤 폰')] });
+    expect(bad).toMatchObject({ text: 'which car to buy', pattern: '', swapExamples: [] });
+  });
+
+  it('보여 주기 순서: AI 결과(검사 통과) → 검토된 틀(예전 자료) → 이전 형식 그대로, 저장값은 바꾸지 않음', async () => {
+    const { extraViewOf } = await import('./chunkRoles');
+    const e = (text: string) => ({ id: 'e', text, normalizedKey: text, meaningKo: '', sourceRefs: [], isFavorite: false, isMarkedDifficult: false, createdAt: T, updatedAt: T }) as never;
+    const item = (chunk: Record<string, unknown> | undefined) => ({ id: 'li', kind: 'chunk', expressionId: 'e', videoId: 'v', chunk }) as never;
+    const base = { meaningInSentence: '', nuance: '', usage: '', comparison: '', examples: [] };
+    const p4 = item({ ...base, pattern: 'which + 명사 + to buy', slotNote: 'n', swapExamples: [ex('which bike to buy', '어떤 자전거를 살지')] });
+    expect(extraViewOf(p4, e('which car to buy'))).toMatchObject({ patternSource: 'ai', pattern: { examples: [{ en: 'which bike to buy' }] } });
+    const legacy = item(undefined);
+    const lv = extraViewOf(legacy, e('which car to buy'));
+    expect([lv.patternSource, lv.pattern?.examples.length]).toEqual(['app', 3]);
+    const p3 = item({ ...base, pattern: 'get + 명사', swaps: ['get coffee'] });
+    const before = JSON.stringify(p3);
+    expect(extraViewOf(p3, e('get lunch'))).toMatchObject({ patternSource: 'old', oldSwaps: ['get coffee'] });
+    expect(JSON.stringify(p3)).toBe(before);
+    expect(extraViewOf(item(undefined), e('could use some help')).pattern).toBeNull();
   });
 });

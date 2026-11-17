@@ -27,7 +27,10 @@ export const SECONDARY_NAV: { title: string; items: NavItem[] }[] = [
   },
   {
     title: '내 기록',
-    items: [{ to: '/favorites', label: '즐겨찾기', icon: 'star' }],
+    items: [
+      { to: '/favorites', label: '즐겨찾기', icon: 'star' },
+      { to: '/ai-questions', label: 'AI 질문 기록', icon: 'chat' },
+    ],
   },
   {
     title: '앱',
@@ -39,4 +42,4 @@ export const SECONDARY_NAV: { title: string; items: NavItem[] }[] = [
 export const MOBILE_TABS: NavItem[] = [...NAV_ITEMS, { to: '/more', label: '더보기', icon: 'more' }];
 
 /** '더보기' 탭이 활성으로 보일 경로 */
-export const MORE_PATHS = ['/more', '/videos', '/expressions', '/extraction', '/days', '/favorites', '/settings'];
+export const MORE_PATHS = ['/more', '/videos', '/expressions', '/extraction', '/days', '/favorites', '/ai-questions', '/settings'];

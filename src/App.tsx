@@ -14,6 +14,7 @@ import { MemorizePage } from '@/pages/MemorizePage';
 import { ReviewPage } from '@/pages/ReviewPage';
 import { ExpressionsPage } from '@/pages/ExpressionsPage';
 import { FavoritesPage } from '@/pages/FavoritesPage';
+import { AiQuestionsPage } from '@/pages/AiQuestionsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { MorePage } from '@/pages/MorePage';
 import { CollectionPage } from '@/pages/CollectionPage';
@@ -71,6 +72,7 @@ export default function App() {
             <Route path="review" element={<ReviewPage />} />
             <Route path="expressions" element={<ExpressionsPage />} />
             <Route path="favorites" element={<FavoritesPage />} />
+            <Route path="ai-questions" element={<AiQuestionsPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="collection" element={<CollectionPage />} />
             <Route path="more" element={<MorePage />} />

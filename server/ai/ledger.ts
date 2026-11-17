@@ -57,6 +57,8 @@ export interface LedgerStore {
   cleanup(resultBefore: number, rowBefore: number): void;
   /** 만료된 creating 기록 (알람 정리용) */
   expiredCreating(now: number): LedgerRow[];
+  /** 그날 사용량에 셈한 요청 수 (videoId별, 읽기만 — 질문 하루 한도용) */
+  countCounted(videoId: string, pacificDate: string): number;
 }
 
 export function memoryLedgerStore(): LedgerStore & { rows: Map<string, LedgerRow> } {
@@ -84,6 +86,7 @@ export function memoryLedgerStore(): LedgerStore & { rows: Map<string, LedgerRow
       }
     },
     expiredCreating: (now) => [...rows.values()].filter((r) => r.state === 'creating' && (r.leaseUntil ?? 0) < now).map((r) => ({ ...r })),
+    countCounted: (videoId, d) => [...rows.values()].filter((r) => r.videoId === videoId && r.pacificDate === d && r.counted).length,
   };
 }
 

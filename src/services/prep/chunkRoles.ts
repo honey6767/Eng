@@ -1,6 +1,7 @@
 import type { Expression, LearningItem } from '@/types/models';
 import { matchParts, wordsOf } from '@/utils/chunkMatch';
-import { deriveBase, derivePattern, droppedWords } from '@/utils/chunkBase';
+import { deriveBase, droppedWords } from '@/utils/chunkBase';
+import { checkPattern, fitPattern, parsePattern, templatePattern, type PatternInfo } from '@/utils/chunkPattern';
 
 /**
  * 영상(Day)의 Chunk 분류 — 저장된 기록은 바꾸지 않고 보여 줄 때만 나눈다 (읽기 전용).
@@ -149,7 +150,7 @@ export function rolesByItem(items: LearningItem[], exprById: Map<string, Express
 
 /** 추가 덩어리 표현을 학습용 기본형으로 보기 (저장된 기록은 바꾸지 않음) */
 export interface ExtraView {
-  /** 학습용 기본 Chunk (예: look tired) */
+  /** 학습용 기본 Chunk (예: look tired, which car to buy) */
   base: string;
   /** 원문 문장에서 기본 Chunk 부분을 찾는 조각 (사이에 뺀 말이 있으면 나뉨) */
   parts: string[];
@@ -157,24 +158,38 @@ export interface ExtraView {
   surface: string | null;
   /** 원문에서 빼낸 말 (예: super) */
   dropped: string[];
-  /** 바꿔 쓰는 틀 (예: look + 형용사, 없으면 '') */
-  pattern: string;
-  swaps: string[];
   /** ai = AI가 기본형 규칙으로 정리 · app = 예전 자료라 화면에서만 정리 · none = 정리할 것 없음 */
   source: 'ai' | 'app' | 'none';
+  /** 교체 패턴·활용 예시 (확인할 수 없으면 null → 기본 Chunk만) */
+  pattern: PatternInfo | null;
+  /** ai = AI가 만들고 검사 통과 · app = 예전 자료라 검토된 틀로 화면에서만 · old = 이전 형식(p3) 그대로, 예시 뜻 없음 */
+  patternSource: 'ai' | 'app' | 'old' | null;
+  /** 이전 형식(p3) 활용 예 (뜻 없음) */
+  oldSwaps: string[];
 }
 
 export function extraViewOf(item: LearningItem, e: Expression | undefined): ExtraView {
   const text = e?.text ?? item.chunk?.surface ?? '';
   const c = item.chunk;
+  let v: Omit<ExtraView, 'pattern' | 'patternSource' | 'oldSwaps'>;
   if (c && c.pattern !== undefined) {
     const surface = c.surface && c.surface.toLowerCase() !== text.toLowerCase() ? c.surface : null;
-    return { base: text, parts: c.parts ?? [text], surface, dropped: surface ? (droppedWords(surface, text) ?? []) : [], pattern: c.pattern, swaps: c.swaps ?? [], source: 'ai' };
+    v = { base: text, parts: c.parts ?? [text], surface, dropped: surface ? (droppedWords(surface, text) ?? []) : [], source: 'ai' };
+  } else {
+    // 예전 자료: 저장된 표현(원문 형태)에서 정도만 강조하는 말을 뺀 기본형을 계산 (look super tired → look tired)
+    const original = c?.surface ?? text;
+    const d = deriveBase(original);
+    v = d
+      ? { base: d.base, parts: d.parts, surface: original, dropped: d.dropped, source: 'app' }
+      : { base: text, parts: partsOfItem(item, e), surface: c?.surface && c.surface.toLowerCase() !== text.toLowerCase() ? c.surface : null, dropped: [], source: 'none' };
   }
-  // 예전 자료: 저장된 표현(원문 형태)에서 정도만 강조하는 말을 뺀 기본형을 계산 (look super tired → look tired)
-  const original = c?.surface ?? text;
-  const d = deriveBase(original);
-  if (!d) return { base: text, parts: partsOfItem(item, e), surface: c?.surface && c.surface.toLowerCase() !== text.toLowerCase() ? c.surface : null, dropped: [], pattern: '', swaps: [], source: 'none' };
-  const p = derivePattern(d.base, d.dropped);
-  return { base: d.base, parts: d.parts, surface: original, dropped: d.dropped, pattern: p?.pattern ?? '', swaps: p?.swaps ?? [], source: 'app' };
+  // 교체 패턴: AI 결과(검사 통과) → 검토된 틀(예전 자료) → 이전 형식 그대로
+  const ai = c?.swapExamples ? checkPattern(v.base, c.pattern, c.slotNote, c.swapExamples) : null;
+  if (ai) return { ...v, pattern: ai, patternSource: 'ai', oldSwaps: [] };
+  const tpl = templatePattern(v.base);
+  if (tpl) return { ...v, pattern: tpl, patternSource: 'app', oldSwaps: [] };
+  const oldTokens = c?.pattern && !c.swapExamples ? parsePattern(c.pattern) : null;
+  if (oldTokens && fitPattern(v.base, oldTokens))
+    return { ...v, pattern: { pattern: c!.pattern!, tokens: oldTokens, slotNote: '', examples: [] }, patternSource: 'old', oldSwaps: c!.swaps ?? [] };
+  return { ...v, pattern: null, patternSource: null, oldSwaps: [] };
 }

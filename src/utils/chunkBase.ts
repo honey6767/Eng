@@ -1,4 +1,5 @@
 import { matchParts, partsFrom, wordsOf, type ChunkMatch } from './chunkMatch';
+import { checkPattern, type SwapExample } from './chunkPattern';
 
 /**
  * 추가 덩어리 표현의 기본형 — 원문 형태와 학습용 기본 Chunk를 나눈다.
@@ -48,31 +49,28 @@ export function deriveBase(text: string): { base: string; parts: string[]; dropp
   return { base, parts: keep.map((t) => text.slice(t.start, t.end)), dropped: droppedWords(text, base) ?? [] };
 }
 
-/** 연결동사 + 형용사 틀 (예전 자료용, 강조 부사가 형용사 앞에 있었을 때만) */
-const LINKING: Record<string, { forms: string[]; swaps: string[] }> = {
-  look: { forms: ['look', 'looks', 'looked', 'looking'], swaps: ['look happy', 'look familiar', 'look busy', 'look great'] },
-  feel: { forms: ['feel', 'feels', 'felt', 'feeling'], swaps: ['feel better', 'feel sick', 'feel tired', 'feel great'] },
-  seem: { forms: ['seem', 'seems', 'seemed', 'seeming'], swaps: ['seem busy', 'seem nice', 'seem tired', 'seem happy'] },
-  sound: { forms: ['sound', 'sounds', 'sounded', 'sounding'], swaps: ['sound good', 'sound great', 'sound familiar', 'sound tired'] },
-};
-
-export function derivePattern(base: string, dropped: string[]): { pattern: string; swaps: string[] } | null {
-  const b = ws(base);
-  if (b.length !== 2 || !dropped.length) return null;
-  const lemma = Object.keys(LINKING).find((k) => LINKING[k].forms.includes(b[0]));
-  if (!lemma) return null;
-  const self = `${lemma} ${b[1]}`;
-  return { pattern: `${lemma} + 형용사`, swaps: LINKING[lemma].swaps.filter((s) => s !== self).slice(0, 3) };
-}
-
-/** AI가 준 바꿔 쓰기 틀·활용 예 */
-export function parsePatternFields(c: Record<string, unknown>, base: string): { pattern: string; swaps: string[] } | null {
+/**
+ * AI가 준 교체 패턴·활용 예시.
+ * - p4: pattern·slotNote·swapExamples(뜻 포함)를 검사해 통과한 것만 (아니면 패턴 없음으로 기록)
+ * - p3: pattern·swaps(뜻 없음) 그대로 — 예전 형식
+ */
+export function parsePatternFields(c: Record<string, unknown>, base: string): { pattern: string; slotNote?: string; swapExamples?: SwapExample[]; swaps?: string[] } | null {
+  if (Array.isArray(c.swapExamples) || typeof c.slotNote === 'string') {
+    const info = checkPattern(base, c.pattern, c.slotNote, c.swapExamples);
+    return info ? { pattern: info.pattern, slotNote: info.slotNote, swapExamples: info.examples } : { pattern: '', slotNote: '', swapExamples: [] };
+  }
   if (typeof c.pattern !== 'string' && !Array.isArray(c.swaps)) return null;
   const pattern = typeof c.pattern === 'string' ? c.pattern.trim().slice(0, 60) : '';
   const key = ws(base).join(' ');
   const swaps = [...new Set((Array.isArray(c.swaps) ? c.swaps : []).filter((s): s is string => typeof s === 'string').map((s) => s.trim().slice(0, 60)).filter((s) => s && ws(s).join(' ') !== key))].slice(0, 4);
   return { pattern, swaps };
 }
+
+/** 저장할 때 ChunkDetail에 붙일 교체 패턴 필드 */
+export const patternDetail = (c: { pattern?: string; slotNote?: string; swapExamples?: SwapExample[]; swaps?: string[] }) =>
+  c.pattern !== undefined
+    ? { pattern: c.pattern, ...(c.swaps ? { swaps: c.swaps } : {}), ...(c.slotNote !== undefined ? { slotNote: c.slotNote } : {}), ...(c.swapExamples ? { swapExamples: c.swapExamples } : {}) }
+    : {};
 
 /**
  * 원문 문장에서 Chunk 찾기 — 붙어 있으면 그대로, 아니면 parts(사이 단어 허용).

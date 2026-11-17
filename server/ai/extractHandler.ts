@@ -21,11 +21,13 @@ export interface AiCaps {
   dailyRequests: number;
   /** 한 번에 처리할 최대 영상 길이 (초) */
   maxVideoSec: number;
+  /** 하루 AI 질문 수 상한 — 전체 요청 상한 안에서, 학습 자료 생성 몫을 남겨 두기 위해 */
+  dailyAsk?: number;
 }
 
-export const DEFAULT_AI_CAPS: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 20, maxVideoSec: 30 * 60 };
+export const DEFAULT_AI_CAPS: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 20, maxVideoSec: 30 * 60, dailyAsk: 10 };
 
-export function parseCaps(env: { AI_DAILY_VIDEO_SEC_CAP?: string; AI_DAILY_REQUEST_CAP?: string; AI_MAX_VIDEO_SEC?: string }): AiCaps {
+export function parseCaps(env: { AI_DAILY_VIDEO_SEC_CAP?: string; AI_DAILY_REQUEST_CAP?: string; AI_MAX_VIDEO_SEC?: string; AI_DAILY_ASK_CAP?: string }): AiCaps {
   const pos = (v: string | undefined, d: number, max: number) => {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), max) : d;
@@ -35,6 +37,7 @@ export function parseCaps(env: { AI_DAILY_VIDEO_SEC_CAP?: string; AI_DAILY_REQUE
     dailyVideoSec: pos(env.AI_DAILY_VIDEO_SEC_CAP, DEFAULT_AI_CAPS.dailyVideoSec, 8 * 3600),
     dailyRequests: pos(env.AI_DAILY_REQUEST_CAP, DEFAULT_AI_CAPS.dailyRequests, 10_000),
     maxVideoSec: pos(env.AI_MAX_VIDEO_SEC, DEFAULT_AI_CAPS.maxVideoSec, 3 * 3600),
+    dailyAsk: pos(env.AI_DAILY_ASK_CAP, DEFAULT_AI_CAPS.dailyAsk ?? 10, 10_000),
   };
 }
 
@@ -150,7 +153,7 @@ async function handleInner(input: { idempotencyKey: string | null; body: unknown
   const workKey = workKeyOf(bodyHash);
   // 자막 추출만 영상 분량을 쓴다. 문장·Chunk·대화문은 텍스트만 보내므로 요청 수만 센다
   const task = taskOf(req);
-  const ledgerVideoId = req.task === 'dialogue' ? 'dialogue' : req.videoId;
+  const ledgerVideoId = req.task === 'dialogue' ? 'dialogue' : req.task === 'ask' ? 'ask' : req.videoId;
   const videoSec = task === 'extract' ? (req as { durationSec: number }).durationSec : 0;
   const { store, caps } = deps;
 
@@ -174,6 +177,12 @@ async function handleInner(input: { idempotencyKey: string | null; body: unknown
   };
   if (task === 'extract' && videoSec > caps.maxVideoSec) {
     const row = { ...base, state: 'failed' as const, leaseUntil: null, failureCode: 'too_long', failureMessage: `한 번에 처리할 수 있는 길이(${Math.round(caps.maxVideoSec / 60)}분)를 넘는 영상이에요.` };
+    store.put(row);
+    return respond(row);
+  }
+  const askCap = caps.dailyAsk ?? DEFAULT_AI_CAPS.dailyAsk!;
+  if (task === 'ask' && store.countCounted('ask', date) + 1 > askCap) {
+    const row = { ...base, state: 'failed' as const, leaseUntil: null, failureCode: 'daily_cap', failureMessage: `오늘 AI 질문 한도(${askCap}회)에 도달했어요. 학습 자료 생성 몫을 남겨 두려고 질문 수를 따로 제한해요. 태평양 시간 자정 이후 다시 질문할 수 있어요.` };
     store.put(row);
     return respond(row);
   }

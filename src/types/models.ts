@@ -484,8 +484,12 @@ export interface ChunkDetail {
    * 이 값이 있으면 AI가 기본형 규칙으로 정리한 기록 (표현 text = 학습용 기본 Chunk, surface = 원문 형태)
    */
   pattern?: string;
-  /** 추가 덩어리 표현 — 바꿔 넣은 활용 예 (예: look happy, look familiar) */
+  /** 추가 덩어리 표현 — 바꿔 넣은 활용 예 (p3 형식, 뜻 없음) */
   swaps?: string[];
+  /** 추가 덩어리 표현 — 교체 자리 설명 (예: 명사 자리: 사려는 물건) */
+  slotNote?: string;
+  /** 추가 덩어리 표현 — 검사를 통과한 활용 예시 (한국어 뜻, 뜻 차이) */
+  swapExamples?: { en: string; ko: string; note?: string }[];
 }
 /** Day 영상에서 왔는지(day), 그 밖의 영상인지(other) */
 export type LearningItemSourceType = 'day' | 'other';

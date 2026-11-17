@@ -3,7 +3,9 @@ import { contentStore } from '@/repositories';
 import { seriesOf } from '@/services/content/contentService';
 import type { DayAssignment, Dialogue, Expression, KeySentence, LearningItem, Video } from '@/types/models';
 import { chunkLabel, matchAllParts, matchParts } from '@/utils/chunkMatch';
-import { classifyChunks, corePatterns, extraViewOf } from '@/services/prep/chunkRoles';
+import { classifyChunks, corePatterns, extraViewOf, type ExtraView } from '@/services/prep/chunkRoles';
+import { fitPattern } from '@/utils/chunkPattern';
+import { ChunkQa } from '@/components/qa/ChunkQa';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { LinkButton } from '@/components/ui/Button';
@@ -88,6 +90,8 @@ export function StudyContentPanel({
   const selectedS = shown.filter((s) => s.selected).length;
   const selectedC = [...cores, ...listChunks, ...[...variantsByCore.values()].flat()].filter((c) => c.selected).length;
   const label = series.seriesKind === 'day' ? `Day ${series.dayNumber}` : '이 영상';
+  // AI 질문 문맥 — 출처 (질문할 때만 쓰임)
+  const qaBase = { videoId: video.id, videoTitle: video.title, source: `${series.seriesKind === 'day' ? `Day ${series.dayNumber}` : '일반 영상'} · ${video.title}`, dayNumber: series.seriesKind === 'day' ? (series.dayNumber ?? null) : null };
 
   return (
     <div className="space-y-4" data-testid="study-content">
@@ -157,6 +161,15 @@ export function StudyContentPanel({
                     </div>
                   )}
                   {core && <ChunkDetails item={core} />}
+                  <ChunkQa
+                    chunk={{
+                      chunkKey: p.id, chunkLabel: p.text, videoId: qaBase.videoId, videoTitle: qaBase.videoTitle,
+                      context: {
+                        source: qaBase.source, dayNumber: qaBase.dayNumber, role: 'core', base: p.text, meaningKo: p.meaningKo || undefined, nuance: nuance || undefined, taught: p.taught ?? undefined,
+                        sentences: occ.slice(0, 2).map((o) => byId.get(o.sentenceId)?.english ?? o.surface),
+                      },
+                    }}
+                  />
                 </li>
               );
             })}
@@ -177,7 +190,7 @@ export function StudyContentPanel({
             {listChunks
               .filter((c) => !onlySelected || c.selected)
               .map((c) => (
-                <ChunkRow key={c.id} item={c} expression={exprById.get(c.expressionId)} sentence={c.sentenceId ? byId.get(c.sentenceId) : undefined} number={c.sentenceId ? numberOf.get(c.sentenceId) : undefined} extra={hasCore} />
+                <ChunkRow key={c.id} item={c} expression={exprById.get(c.expressionId)} sentence={c.sentenceId ? byId.get(c.sentenceId) : undefined} number={c.sentenceId ? numberOf.get(c.sentenceId) : undefined} extra={hasCore} qa={qaBase} />
               ))}
           </ul>
         </Card>
@@ -316,7 +329,7 @@ function ChunkDetails({ item }: { item: LearningItem }) {
   );
 }
 
-function ChunkRow({ item, expression, sentence, number, extra }: { item: LearningItem; expression: Expression | undefined; sentence?: KeySentence; number?: number; extra: boolean }) {
+function ChunkRow({ item, expression, sentence, number, extra, qa }: { item: LearningItem; expression: Expression | undefined; sentence?: KeySentence; number?: number; extra: boolean; qa: { videoId: string; videoTitle: string; source: string; dayNumber: number | null } }) {
   const v = extraViewOf(item, expression);
   return (
     <li className="rounded-xl bg-canvas p-3" data-testid="content-chunk">
@@ -344,17 +357,7 @@ function ChunkRow({ item, expression, sentence, number, extra }: { item: Learnin
           )}
         </p>
       )}
-      {(v.pattern || v.swaps.length > 0) && (
-        <p className="mt-1 flex flex-wrap items-center gap-1.5 text-sm" data-testid="chunk-pattern">
-          <span className="text-xs font-semibold text-subtle">바꿔 쓰기 · </span>
-          {v.pattern && <span className="rounded-md border border-line bg-surface px-1.5 font-semibold text-ink">{v.pattern}</span>}
-          {v.swaps.map((x) => (
-            <span key={x} className="en rounded-md bg-surface px-1.5 text-muted ring-1 ring-line">
-              {x}
-            </span>
-          ))}
-        </p>
-      )}
+      {v.pattern && <PatternBlock v={v} />}
       {item.chunk?.nuance && <p className="mt-1 text-sm"><span className="text-xs font-semibold text-subtle">뉘앙스 · </span>{item.chunk.nuance}</p>}
       {sentence && (
         <p className="mt-1 text-sm text-muted" data-testid="chunk-context">
@@ -363,6 +366,71 @@ function ChunkRow({ item, expression, sentence, number, extra }: { item: Learnin
         </p>
       )}
       <ChunkDetails item={item} />
+      <ChunkQa
+        chunk={{
+          chunkKey: item.id, chunkLabel: v.base, videoId: qa.videoId, videoTitle: qa.videoTitle,
+          context: {
+            source: qa.source, dayNumber: qa.dayNumber, role: extra ? 'extra' : 'chunk', base: v.base, original: v.surface ?? undefined,
+            sentences: sentence ? [sentence.english] : undefined, meaningKo: expression?.meaningKo || undefined, nuance: item.chunk?.nuance || undefined,
+            pattern: v.pattern ? `${v.pattern.pattern}${v.pattern.slotNote ? ` (${v.pattern.slotNote})` : ''}` : undefined,
+            examples: v.pattern?.examples.map((x) => `${x.en} — ${x.ko}`),
+          },
+        }}
+      />
     </li>
+  );
+}
+
+/** 교체 패턴 (자리는 색 칩) + 활용 예시 (바꾼 말 강조 · 한국어 뜻 · 뜻 차이) */
+function PatternBlock({ v }: { v: ExtraView }) {
+  const p = v.pattern!;
+  return (
+    <div className="mt-1.5 rounded-lg bg-surface px-2.5 py-2 text-sm ring-1 ring-line" data-testid="chunk-pattern" data-source={v.patternSource ?? ''}>
+      <p className="flex flex-wrap items-center gap-1">
+        <span className="text-xs font-semibold text-subtle">교체 패턴 · </span>
+        {p.tokens.map((t, i) => (
+          <span key={i} className="contents">
+            {i > 0 && <span className="text-subtle"> + </span>}
+            {t.slot ? (
+              <span className="rounded-md bg-key/70 px-1.5 text-xs font-bold text-key-ink" data-testid="pattern-slot">
+                {t.text}
+              </span>
+            ) : (
+              <span className="en font-semibold text-ink">{t.text}</span>
+            )}
+          </span>
+        ))}
+        {p.slotNote && <span className="ml-1 text-xs text-muted">({p.slotNote})</span>}
+      </p>
+      {p.examples.length > 0 && (
+        <ul className="mt-1.5 space-y-1">
+          <li className="text-xs font-semibold text-subtle">활용 예시</li>
+          {p.examples.map((x) => {
+            const fills = fitPattern(x.en, p.tokens) ?? [];
+            let k = 0;
+            return (
+              <li key={x.en} data-testid="chunk-example">
+                <span className="en text-ink">
+                  {p.tokens.map((t, i) => (
+                    <span key={i}>
+                      {i > 0 ? ' ' : ''}
+                      {t.slot ? <b className="text-brand">{fills[k++] ?? ''}</b> : t.text}
+                    </span>
+                  ))}
+                </span>
+                <span className="text-muted"> — {x.ko}</span>
+                {x.note && <span className="block pl-3 text-xs text-subtle">뜻 차이: {x.note}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {v.patternSource === 'old' && v.oldSwaps.length > 0 && (
+        <p className="mt-1 text-xs text-subtle">
+          이전 형식 활용 예(뜻 정보 없음): <span className="en">{v.oldSwaps.join(', ')}</span>
+        </p>
+      )}
+      {v.patternSource === 'app' && <p className="mt-1 text-[11px] text-subtle">예전 자료라 검토된 틀로 화면에서만 보완했어요 (저장된 자료는 그대로)</p>}
+    </div>
   );
 }

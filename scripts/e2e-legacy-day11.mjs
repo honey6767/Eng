@@ -167,7 +167,7 @@ async function main() {
     check('look super tired는 기본 Chunk look tired로 표시', (await tiredRow.getByTestId('chunk-base').innerText()) === 'look tired');
     const origin = await tiredRow.getByTestId('chunk-origin').innerText();
     check('원문 표현과 기본 Chunk 구분 (super를 뺐다고 표시)', /look super tired/.test(origin) && /look tired/.test(origin) && /super/.test(origin) && /화면에서만/.test(origin), origin);
-    const pat = await tiredRow.getByTestId('chunk-pattern').innerText();
+    const pat = (await tiredRow.getByTestId('chunk-pattern').innerText()).replace(/\s+/g, ' ');
     check('바꿔 쓰기: look + 형용사 · look happy · look familiar · look busy', /look \+ 형용사/.test(pat) && ['look happy', 'look familiar', 'look busy'].every((x) => pat.includes(x)), pat.replace(/\n/g, ' '));
     check('문맥 문장은 원문 그대로 (super 포함)', /You look super tired\./.test(await tiredRow.getByTestId('chunk-context').innerText()));
     const sleepRow = page.locator('[data-testid="extra-chunks"] [data-testid="content-chunk"]').filter({ hasText: "didn't get much sleep" });

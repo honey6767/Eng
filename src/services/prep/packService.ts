@@ -9,7 +9,7 @@ import {
 import type { BlankPlan, DayAssignment, Dialogue, DialogueChunkUsage, DialogueLine, DialogueSegment, Expression, KeySentence, LearningItem, Transcript, Video } from '@/types/models';
 import { normalizeExpressionKey } from '@/utils/text';
 import { chunkLabel, matchAllParts, matchParts, partsFrom, wordsOf } from '@/utils/chunkMatch';
-import { isSafeBase, locateChunk, parsePatternFields } from '@/utils/chunkBase';
+import { isSafeBase, locateChunk, parsePatternFields, patternDetail } from '@/utils/chunkBase';
 import { contentChunkId, planContent, seriesOf, transcriptText, validateContent, type ContentChunk, type ContentResult } from '@/services/content/contentService';
 
 /**
@@ -191,10 +191,7 @@ function validateDayPackObject(raw: Record<string, unknown>, sentences: { number
       chunk: {
         text, meaningKo: txt(x.meaningKo, 200), meaningInSentence: txt(x.meaningInSentence), nuance: txt(x.nuance), usage: txt(x.usage), comparison: txt(x.comparison), examples: examplesOf(x.examples),
         ...(parts.length > 1 && m.surface.toLowerCase() !== text.toLowerCase() ? { parts, surface: m.surface } : {}),
-        ...((() => {
-          const pat = parsePatternFields(x, text);
-          return pat ? { pattern: pat.pattern, swaps: pat.swaps } : {};
-        })()),
+        ...(parsePatternFields(x, text) ?? {}),
       },
     });
   }
@@ -425,7 +422,7 @@ export function planPack(ctx: PackContext): PackPlan {
     items.push({
       id: contentChunkId(requestId, exprId), createdAt: now, updatedAt: now, expressionId: exprId, videoId: video.id, sourceType, dayNumber: ctx.dayNumber, kind: 'chunk', dialogueId: null,
       sourceText: sentence.english, timestampSec: sentence.timestampSec, onScreen: false, origin: 'ai_extracted', status: 'confirmed', extractionDraftId: null, legacyKeySentenceId: null, sentenceId,
-      chunk: { meaningInSentence: x.chunk.meaningInSentence, nuance: x.chunk.nuance, usage: x.chunk.usage, comparison: x.chunk.comparison, examples: x.chunk.examples, ...(x.chunk.parts ? { parts: x.chunk.parts } : {}), ...(x.chunk.surface ? { surface: x.chunk.surface } : {}), ...(x.chunk.pattern !== undefined ? { pattern: x.chunk.pattern, swaps: x.chunk.swaps ?? [] } : {}) },
+      chunk: { meaningInSentence: x.chunk.meaningInSentence, nuance: x.chunk.nuance, usage: x.chunk.usage, comparison: x.chunk.comparison, examples: x.chunk.examples, ...(x.chunk.parts ? { parts: x.chunk.parts } : {}), ...(x.chunk.surface ? { surface: x.chunk.surface } : {}), ...patternDetail(x.chunk) },
       chunkRole: 'extra', selected: false, contentRequestId: requestId,
     });
   }

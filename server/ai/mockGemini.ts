@@ -1,4 +1,4 @@
-import type { AiContentRequest, AiDayPackRequest, AiDialogueRequest, AiPackRequest } from '../../src/types/aiApi.ts';
+import type { AiAskRequest, AiContentRequest, AiDayPackRequest, AiDialogueRequest, AiPackRequest } from '../../src/types/aiApi.ts';
 import type { GeminiClient, GeminiGetResult } from './gemini.ts';
 
 const MOCK_CHUNKS = ['could use', 'a little break', 'right now', 'sounds like', 'a good idea', 'figure out', 'get back to', 'running late', 'catch up', 'no big deal', 'make it'];
@@ -37,10 +37,15 @@ export function mockContentResult(r: AiContentRequest) {
 function mockBaseExtras(sentence: string) {
   const m = /\b(look|looks|feel|feels|seem|seems|sound|sounds)\s+(super|really|so|very)\s+([a-z]+)/i.exec(sentence);
   if (!m) return [];
-  const verb = m[1].toLowerCase().replace(/s$/, '');
-  const base = `${m[1]} ${m[3]}`;
+    const base = `${m[1]} ${m[3]}`;
   return [{
-    text: base, parts: [m[1], m[3]], surface: m[0], pattern: `${verb} + 형용사`, swaps: [`${verb} happy`, `${verb} familiar`, `${verb} busy`].filter((x) => x !== `${verb} ${m[3].toLowerCase()}`),
+    text: base, parts: [m[1], m[3]], surface: m[0], pattern: `${m[1]} + 형용사`, slotNote: '형용사 자리: 겉으로 보이는 상태',
+    swapExamples: [
+      { en: `${m[1]} happy`, ko: '행복해 보이다', note: '' },
+      { en: `${m[1]} busy`, ko: '바빠 보이다', note: '' },
+      { en: `${m[1]}s sad`, ko: '(고정 부분이 달라 패턴에 안 맞는 예 — 앱이 빼야 함)', note: '' },
+      { en: `${m[1]} familiar`, ko: '', note: '' },
+    ],
     meaningKo: `${base}의 뜻`, meaningInSentence: `이 문장에서 ${base}`, nuance: '상태를 보고 느낀 그대로 말함', usage: '상대 모습을 보고 말할 때', comparison: '강조 말을 넣으면 정도가 커짐',
     examples: [{ en: `You ${base} today.`, ko: '오늘 그래 보여.' }],
   }];
@@ -79,7 +84,7 @@ function mockDayPack(sentences: { number: number; text: string }[], dayLabel: st
   const extraChunks = sentences.flatMap((s) =>
     [
       ...MOCK_CHUNKS.filter((c) => c !== best?.c && s.text.toLowerCase().includes(c) && !(best && findForm(c, best.parts))).map((c) => ({
-        sentenceNumber: s.number, text: c, parts: [c], surface: c, pattern: '', swaps: [] as string[], meaningKo: `${c}의 뜻`, meaningInSentence: `이 문장에서 ${c}`, nuance: '자연스러운 구어', usage: '일상 대화', comparison: '비슷한 표현보다 가벼움',
+        sentenceNumber: s.number, text: c, parts: [c], surface: c, pattern: '', slotNote: '', swapExamples: [] as { en: string; ko: string; note: string }[], meaningKo: `${c}의 뜻`, meaningInSentence: `이 문장에서 ${c}`, nuance: '자연스러운 구어', usage: '일상 대화', comparison: '비슷한 표현보다 가벼움',
         examples: [{ en: `Let's ${c}.`, ko: `${c} 하자.` }],
       })),
       ...mockBaseExtras(s.text).map((x) => ({ sentenceNumber: s.number, ...x })),
@@ -108,7 +113,7 @@ export function mockPackResult(r: AiPackRequest) {
   const c = mockContentResult({ ...r, task: 'content' });
   const day = mockDayPack(c.sentences, r.dayNumber ? `Day ${r.dayNumber}` : '영상', r.transcript);
   // 문장별 chunks = 추가 덩어리 표현 (핵심 Chunk·활용형 제외) — 실제 Gemini처럼 가끔 활용형을 섞어 앱의 걸러내기도 확인
-  const sentences = c.sentences.map((s) => ({ ...s, chunks: [...s.chunks.map((k) => ({ ...k, parts: [k.text], surface: k.text, pattern: '', swaps: [] as string[] })), ...mockBaseExtras(s.text)] }));
+  const sentences = c.sentences.map((s) => ({ ...s, chunks: [...s.chunks.map((k) => ({ ...k, parts: [k.text], surface: k.text, pattern: '', slotNote: '', swapExamples: [] as { en: string; ko: string; note: string }[] })), ...mockBaseExtras(s.text)] }));
   const { extraChunks: _e, ...rest } = day;
   void _e;
   return { sentences, ...rest, notes: '' };
@@ -116,6 +121,22 @@ export function mockPackResult(r: AiPackRequest) {
 
 export function mockDayPackResult(r: AiDayPackRequest) {
   return mockDayPack(r.sentences, r.dayNumber ? `Day ${r.dayNumber}` : '영상', r.transcript ?? '');
+}
+
+/** 가짜 AI 질문 답변: 받은 문맥(Chunk·이전 대화)을 답에 드러내 테스트에서 확인할 수 있게 */
+export function mockAskResult(r: AiAskRequest) {
+  const c = r.context;
+  const prev = r.history.length ? ` (이전 질문 ${r.history.length}개에 이어서: "${r.history[r.history.length - 1].question}")` : '';
+  return {
+    answer: `'${c.base}'에 대한 질문 "${r.question}"에 답해요${prev}. 구분: ${c.role === 'core' ? '핵심 Chunk' : '추가 덩어리 표현'}.`,
+    grammar: { verdict: '가능', explain: `${c.base} 형태는 문법적으로 맞아요.` },
+    natural: { verdict: '상황에 따라 다름', explain: '친구 사이 대화에서는 자연스럽게 써요.' },
+    nuance: `${c.base}는 ${c.meaningKo || '이 문맥'}의 느낌이에요.`,
+    examples: [{ en: `I think you ${c.base.split(' ')[0]} it.`, ko: '(예문 뜻)' }, { en: `Do you ${c.base}?`, ko: '(예문 뜻 2)' }],
+    fromLecture: c.taught ? `강의에서는 "${c.taught}"라고 소개했어요.` : '',
+    uncertain: '지역에 따라 다르게 들릴 수 있어요.',
+    summary: `${c.base} 질문(${r.turn}번째)에 대한 답 요약.`,
+  };
 }
 
 /** 가짜 통합 대화문: Chunk마다 한 줄씩, 마지막 하나는 쓰지 않음(unusedRefs 확인용) */
@@ -153,6 +174,14 @@ export function createMockGemini(): GeminiClient & { createCalls: string[]; getC
     createCalls,
     getCalls,
     async create(input) {
+      if (input.task === 'ask') {
+        // 가짜 질문 답변: 질문에 '[실패]'가 있으면 처리 후 실패, '[한도]'면 무료 한도 거절 (실패 처리 확인용)
+        createCalls.push(`ask:${input.sessionId}:${input.turn}`);
+        if (input.question.includes('[한도]')) return { kind: 'rejected', httpStatus: 429, reason: 'quota', message: 'Gemini 무료 사용 한도에 도달했어요.' };
+        const id = `mock-interaction-${++seq}-ask`;
+        jobs.set(id, input.question.includes('[실패]') ? { videoId: 'mockFail', durationSec: 0, polls: 0 } : { videoId: 'ask', durationSec: 0, polls: 0, text: JSON.stringify(mockAskResult(input)) });
+        return { kind: 'created', interactionId: id, status: 'in_progress' };
+      }
       if (input.task === 'content' || input.task === 'dialogue' || input.task === 'pack' || input.task === 'daypack') {
         const tag = input.task === 'dialogue' ? 'dialogue' : `${input.task}:${input.videoId}`;
         createCalls.push(tag);

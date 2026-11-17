@@ -8,6 +8,9 @@ import {
   type AiExtractRequest,
   type AiPackRequest,
   type AiTaskRequest,
+  ASK_LIMITS,
+  type AiAskContext,
+  type AiAskRequest,
 } from '../../src/types/aiApi.ts';
 import { isValidVideoId } from '../../src/utils/youtubeUrl.ts';
 
@@ -21,7 +24,7 @@ import { isValidVideoId } from '../../src/utils/youtubeUrl.ts';
  * 프롬프트는 서버만 가진다(앱은 재료만 보낸다). 키·비밀정보는 여기 없다.
  */
 
-export type TaskKind = 'extract' | 'content' | 'dialogue' | 'pack' | 'daypack';
+export type TaskKind = 'extract' | 'content' | 'dialogue' | 'pack' | 'daypack' | 'ask';
 export const taskOf = (r: AiTaskRequest): TaskKind => r.task ?? 'extract';
 
 const str = (v: unknown, max: number, min = 1): v is string => typeof v === 'string' && v.trim().length >= min && v.length <= max;
@@ -53,6 +56,7 @@ export function validateTaskRequest(raw: unknown): AiTaskRequest | null {
     if (!str(r.transcript, CONTENT_LIMITS.transcriptChars, 20)) return null;
     return { task: 'pack', videoId: r.videoId, title: r.title, seriesKind: r.seriesKind, dayNumber: r.dayNumber as number | null, transcript: r.transcript, promptVersion: r.promptVersion } satisfies AiPackRequest;
   }
+  if (r.task === 'ask') return validateAsk(r);
   if (r.task === 'daypack') {
     const L = DAYPACK_LIMITS;
     if (typeof r.videoId !== 'string' || !isValidVideoId(r.videoId)) return null;
@@ -94,6 +98,33 @@ export function validateTaskRequest(raw: unknown): AiTaskRequest | null {
     return { task: 'dialogue', chunks, lineCount: r.lineCount, promptVersion: r.promptVersion } satisfies AiDialogueRequest;
   }
   return null;
+}
+
+function validateAsk(r: Record<string, unknown>): AiAskRequest | null {
+  const L = ASK_LIMITS;
+  if (typeof r.sessionId !== 'string' || !REF.test(r.sessionId)) return null;
+  if (typeof r.turn !== 'number' || !Number.isInteger(r.turn) || r.turn < 1 || r.turn > L.maxTurns) return null;
+  if (!str(r.question, L.questionChars, L.minQuestionChars)) return null;
+  const c = r.context as Record<string, unknown> | null;
+  if (!c || typeof c !== 'object') return null;
+  if (!str(c.base, L.fieldChars) || !str(c.source, L.fieldChars, 0)) return null;
+  if (c.role !== 'core' && c.role !== 'extra' && c.role !== 'chunk') return null;
+  if (c.dayNumber !== null && !(typeof c.dayNumber === 'number' && Number.isInteger(c.dayNumber) && c.dayNumber > 0 && c.dayNumber < 10_000)) return null;
+  const optional = ['original', 'meaningKo', 'nuance', 'taught', 'pattern'] as const;
+  if (optional.some((k) => c[k] !== undefined && !str(c[k], L.fieldChars, 0))) return null;
+  const list = (v: unknown, max: number) => v === undefined || (Array.isArray(v) && v.length <= max && v.every((x) => str(x, L.fieldChars)));
+  if (!list(c.sentences, L.maxSentences) || !list(c.examples, L.maxExamples)) return null;
+  if (!Array.isArray(r.history) || r.history.length > L.historyTurns) return null;
+  const history = r.history as Record<string, unknown>[];
+  if (!history.every((h) => h && str(h.question, L.questionChars) && str(h.answer, L.historyAnswerChars, 0))) return null;
+  const context: AiAskContext = { source: c.source as string, dayNumber: c.dayNumber as number | null, role: c.role, base: c.base as string };
+  for (const k of optional) if (typeof c[k] === 'string') context[k] = c[k] as string;
+  if (Array.isArray(c.sentences)) context.sentences = c.sentences as string[];
+  if (Array.isArray(c.examples)) context.examples = c.examples as string[];
+  return {
+    task: 'ask', sessionId: r.sessionId, turn: r.turn, context, question: r.question,
+    history: history.map((h) => ({ question: h.question as string, answer: h.answer as string })), promptVersion: r.promptVersion as string,
+  };
 }
 
 /** 같은 식별자에 같은 내용이 왔는지 비교할 문자열 (기존 자막 추출은 예전 형식 그대로 유지) */
@@ -271,7 +302,11 @@ const PACK_CHUNK_SCHEMA = {
     parts: { type: 'array', items: { type: 'string' } },
     surface: { type: 'string' },
     pattern: { type: 'string' },
-    swaps: { type: 'array', items: { type: 'string' } },
+    slotNote: { type: 'string' },
+    swapExamples: {
+      type: 'array',
+      items: { type: 'object', properties: { en: { type: 'string' }, ko: { type: 'string' }, note: { type: 'string' } }, required: ['en', 'ko', 'note'] },
+    },
     meaningKo: { type: 'string' },
     meaningInSentence: { type: 'string' },
     nuance: { type: 'string' },
@@ -279,7 +314,7 @@ const PACK_CHUNK_SCHEMA = {
     comparison: { type: 'string' },
     examples: EXAMPLES,
   },
-  required: ['text', 'parts', 'surface', 'pattern', 'swaps', 'meaningKo', 'meaningInSentence', 'nuance', 'usage', 'comparison', 'examples'],
+  required: ['text', 'parts', 'surface', 'pattern', 'slotNote', 'swapExamples', 'meaningKo', 'meaningInSentence', 'nuance', 'usage', 'comparison', 'examples'],
 } as const;
 
 const CORE_CHUNK_SCHEMA = {
@@ -394,11 +429,17 @@ const EXTRA_RULES = `추가 덩어리 표현: 강사가 가르치지는 않았�
 - 기본형 규칙: 문장에 정도만 강조하는 말(super, really, so, very, pretty, totally 등)이 끼어 있고 빼도 핵심 뜻이 그대로면, 뺀 형태를 학습용 기본 Chunk로 적습니다.
   예) look super tired → look tired, look really happy → look happy, look so familiar → look familiar
 - 무조건 짧게 줄이지 않습니다. 빼면 뜻이나 자연스러움이 달라지는 말(not, never, too, only, almost 등, 예: too tired ≠ tired)이나 덩어리의 일부인 말(get much sleep의 much 등)은 그대로 둡니다.
-- text: 학습용 기본 Chunk (원문 형태와 같아도 됩니다)
+- text: 학습용 기본 Chunk — 실제 회화에서 그대로 쓰는 완성된 표현. 억지로 줄이지 않습니다 (which car to buy는 그대로).
 - parts: text를 원문에서 찾을 수 있게 나눈 조각. 원문에서 사이에 뺀 말이 있으면 그 앞뒤로 나눕니다 (look tired ← look super tired: ["look", "tired"]). 붙어 있으면 [text]
 - surface: 원문 문장에 실제로 쓰인 형태 그대로 (예: look super tired)
-- pattern: 단어를 바꿔 넣어 쓸 수 있으면 그 틀 (예: "look + 형용사", "get + 명사"). 고정된 표현이면 ""
-- swaps: pattern으로 바꿔 넣은 자연스러운 활용 예 0~3개 (예: look happy, look familiar, look busy). pattern이 ""이면 []
+- 교체 패턴은 기본 Chunk와 다른 정보입니다. 기본 Chunk의 일부 단어를 바꿔 새 표현을 만들 수 있을 때만 적습니다.
+- pattern: "고정 부분 + 자리 + 고정 부분" 형식. 자리 이름은 명사, 불가산명사, 형용사, 동사원형, 동사-ing, 사람, 장소 중 하나만 씁니다. 고정 부분은 text에 있는 단어 그대로·같은 순서입니다.
+  예) which car to buy → "which + 명사 + to buy", didn't get much sleep → "didn't get much + 불가산명사", look tired → "look + 형용사", a cup of coffee → "a cup of + 명사"
+  자연스러운 교체 자리를 확신할 수 없거나 고정된 관용 표현이면 ""
+- slotNote: 자리에 무엇이 들어가는지 짧게 (예: "명사 자리: 사려는 물건", "명사 자리: 음료"). pattern이 ""이면 ""
+- swapExamples: pattern의 자리만 바꾼, 원어민이 실제로 자주 쓰는 활용 예시 0~3개. 문법상 pattern과 정확히 맞아야 합니다. text와 같은 것은 넣지 않습니다. pattern이 ""이면 []
+  · en: 활용 예시 (예: which phone to buy) · ko: 자연스러운 한국어 뜻 (예: 어떤 폰을 살지)
+  · note: text와 뜻이 달라지면 그 차이 (예: rest는 잠보다 넓게 쉬는 것 전반). 차이가 없으면 ""
 - meaningKo(뜻), meaningInSentence(이 문장 문맥에서의 의미), nuance, usage, comparison, examples(짧은 응용 예문 2개)`;
 
 const DIALOGUE_RULES = (dayLabel: string) => `Day 통합 대화문(dialogue): 이 영상의 원문 문장과 핵심 Chunk로, 학습자가 통째로 외울 자연스러운 대화문 1개를 만듭니다.
@@ -462,4 +503,63 @@ ${PARTS_RULE}
 [원문 핵심 문장]
 ${list}
 ${hints}${transcript}`;
+}
+
+// ─────────────────────────────────────────────
+// ask — Chunk별 AI 질문
+// ─────────────────────────────────────────────
+
+const VERDICT = (values: string[]) => ({ type: 'object', properties: { verdict: { type: 'string', enum: values }, explain: { type: 'string' } }, required: ['verdict', 'explain'] });
+
+export const ASK_SCHEMA = {
+  type: 'object',
+  properties: {
+    answer: { type: 'string' },
+    grammar: VERDICT(['가능', '불가능', '조건부']),
+    natural: VERDICT(['자연스러움', '어색함', '상황에 따라 다름']),
+    nuance: { type: 'string' },
+    examples: EXAMPLES,
+    fromLecture: { type: 'string' },
+    uncertain: { type: 'string' },
+    summary: { type: 'string' },
+  },
+  required: ['answer', 'grammar', 'natural', 'nuance', 'examples', 'fromLecture', 'uncertain', 'summary'],
+} as const;
+
+export function buildAskPrompt(r: AiAskRequest): string {
+  const c = r.context;
+  const role = c.role === 'core' ? '핵심 Chunk (강사가 영상에서 직접 가르친 표현)' : c.role === 'extra' ? '추가 덩어리 표현 (강사가 가르치지 않았고 AI가 문맥에서 찾은 표현)' : 'Chunk (예전 기준 자료, 강사가 가르쳤는지 구분 안 됨)';
+  const lines = [
+    `- 학습 출처: ${c.source || '-'}`,
+    `- 구분: ${role}`,
+    `- 기본 Chunk: ${c.base}`,
+    c.original ? `- 원문 표현: ${c.original}` : '',
+    c.sentences?.length ? `- 원문 문장: ${c.sentences.map((x) => `"${x}"`).join(' / ')}` : '',
+    c.meaningKo ? `- 한국어 뜻: ${c.meaningKo}` : '',
+    c.nuance ? `- 뉘앙스: ${c.nuance}` : '',
+    c.taught ? `- 강의 설명(자막 인용): "${c.taught}"` : '- 강의 설명: (저장된 것 없음)',
+    c.pattern ? `- 교체 패턴: ${c.pattern}` : '',
+    c.examples?.length ? `- 활용 예시: ${c.examples.join(' / ')}` : '',
+  ].filter(Boolean);
+  const history = r.history.length
+    ? `\n[같은 Chunk에 대한 이전 질문과 답변 요약 — 이어지는 질문이면 참고]\n${r.history.map((h, i) => `${i + 1}. Q: ${h.question}\n   A: ${h.answer}`).join('\n')}\n`
+    : '';
+  return `당신은 한국인 학습자를 돕는 영어 회화 튜터입니다. 학습자가 지금 공부하는 Chunk에 대해 질문했습니다. 한국어로 답하세요.
+
+[지금 공부하는 Chunk]
+${lines.join('\n')}
+${history}
+[학습자의 질문]
+${r.question}
+
+답변 규칙:
+- answer: 질문에 대한 직접적인 답 (2~4문장).
+- grammar: 질문한 표현(또는 문장)이 문법적으로 가능한지 — verdict(가능/불가능/조건부)와 explain.
+- natural: 실제 원어민 회화에서 자연스러운지 — verdict(자연스러움/어색함/상황에 따라 다름)와 explain. 문법적으로 가능해도 실제로는 잘 쓰지 않으면 그렇게 구분해서 말합니다.
+- nuance: 기본 Chunk와 비교한 의미·뉘앙스 차이. 차이가 없으면 그렇게 적습니다.
+- examples: 실제로 쓸 수 있는 자연스러운 예문 2~3개 (en, ko).
+- fromLecture: 위 '강의 설명'에 실제로 있는 내용만 짧게 정리합니다. 강의 설명이 없거나 질문과 관계없으면 "". 강사가 말하지 않은 것을 강사가 가르쳤다고 하지 않습니다.
+- uncertain: 확인할 수 없거나 확신하지 못하는 부분 (지역·세대에 따라 다른 경우 등). 없으면 "". 추측을 사실처럼 단정하지 않습니다.
+- summary: 이 답변의 핵심을 1~2문장으로 (다음 후속 질문의 문맥으로만 씁니다).
+- 영어 학습과 관계없는 질문이면 answer에서 이 Chunk 학습에 대한 질문을 부탁하고 나머지는 비워 둡니다.`;
 }

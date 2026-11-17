@@ -10,6 +10,7 @@ const HINTS: Record<string, string> = {
   '/extraction': '자동 자막 추출 진행 · 확인 필요 항목',
   '/days': '영상별 Day 번호 확정',
   '/favorites': '즐겨찾기한 대화문과 표현',
+  '/ai-questions': 'Chunk별로 AI에게 물어본 질문과 답변',
   '/settings': '데이터 · YouTube 연결 · 샘플 데이터',
 };
 

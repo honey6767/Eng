@@ -30,6 +30,7 @@ export interface AiLedgerEnv {
   GEMINI_MODEL?: string;
   AI_DAILY_VIDEO_SEC_CAP?: string;
   AI_DAILY_REQUEST_CAP?: string;
+  AI_DAILY_ASK_CAP?: string;
   AI_MAX_VIDEO_SEC?: string;
 }
 
@@ -80,6 +81,8 @@ export function sqliteLedgerStore(sql: DoStorage['sql']): LedgerStore {
       sql.exec('UPDATE requests SET result_text = NULL WHERE updated_at < ? AND result_text IS NOT NULL', resultBefore);
     },
     expiredCreating: (now) => sql.exec(`SELECT ${COLS} FROM requests WHERE state = 'creating' AND lease_until < ?`, now).toArray().map(toRow),
+    // 읽기만 (표 구조·기존 기록은 그대로)
+    countCounted: (videoId, d) => Number(sql.exec('SELECT COUNT(*) AS n FROM requests WHERE video_id = ? AND pacific_date = ? AND counted = 1', videoId, d).toArray()[0]?.n ?? 0),
   };
 }
 
