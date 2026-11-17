@@ -349,6 +349,9 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
       listSince: (dateKey) => db.studyLogs.where('date').aboveOrEqual(dateKey).toArray(),
       countReviews: () => db.studyLogs.filter((l) => l.isReview).count(),
       count: () => db.studyLogs.count(),
+      add: async (log) => {
+        await db.studyLogs.add(log);
+      },
     },
 
     meta: {

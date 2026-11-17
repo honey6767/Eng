@@ -501,3 +501,73 @@ describe('교체 패턴 (which + 명사 + to buy) — 기본 Chunk와 구분, �
     expect(extraViewOf(item(undefined), e('could use some help')).pattern).toBeNull();
   });
 });
+
+describe('대화문 누적 복습 (1·3·7·14·30일)', () => {
+  const D = (iso: string) => new Date(iso);
+  const dlg = (id: string, day: number | null, extra: Record<string, unknown> = {}) => ({ id, title: `대화 ${id}`, lines: [{ id: 'l1' }], sourceDays: day ? [day] : undefined, videoId: null, ...extra }) as never;
+  const prog = (dialogueId: string, memorizedAt: string | null) => ({ id: dialogueId, dialogueId, memorized: !!memorizedAt, memorizedAt, currentStep: 5, highestCompletedStep: memorizedAt ? 5 : 2 }) as never;
+
+  it('암기 완료 → 1일 뒤 → 3일 → 7일 → 14일 → 30일, 이후 늘어남', async () => {
+    const { scheduleAfterMemorized, recordReview } = await import('@/services/dialogueReview');
+    let now = D('2026-11-17T10:00:00');
+    let s = scheduleAfterMemorized('d1', null, now)!;
+    const gaps: number[] = [];
+    let prev = now;
+    gaps.push(Math.round((D(s.nextReviewAt!).getTime() - prev.getTime()) / 864e5));
+    for (let i = 0; i < 5; i++) {
+      now = D(s.nextReviewAt!);
+      prev = now;
+      s = recordReview('d1', s, null, 'easy', now);
+      gaps.push(Math.round((D(s.nextReviewAt!).getTime() - prev.getTime()) / 864e5));
+    }
+    expect(gaps).toEqual([1, 3, 7, 14, 30, 60]);
+    expect(scheduleAfterMemorized('d1', s, now)).toBeNull(); // 이미 일정이 있으면 새로 만들지 않음
+  });
+
+  it('헷갈림은 간격을 줄이고, 다시 외워야 하면 오늘 다시 → 처음 간격부터', async () => {
+    const { scheduleAfterMemorized, recordReview, isReviewDue } = await import('@/services/dialogueReview');
+    const t = D('2026-11-17T10:00:00');
+    const s1 = recordReview('d', recordReview('d', scheduleAfterMemorized('d', null, t)!, null, 'easy', t), null, 'easy', t); // 7일 단계
+    const hard = recordReview('d', s1, null, 'hard', t);
+    expect(Math.round((D(hard.nextReviewAt!).getTime() - t.getTime()) / 864e5)).toBeLessThan(7);
+    const wrong = recordReview('d', s1, null, 'wrong', t);
+    expect(isReviewDue(wrong, t)).toBe(true);
+    expect(wrong.intervalIndex).toBe(0);
+  });
+
+  it('홈 일정: 오늘 복습할 Day들, 지난 것 포함·밀린 날 수, 예전에 외운 대화문은 저장 없이 암기일 기준으로', async () => {
+    const { dialogueReviewSchedule, todaySentence, scheduleAfterMemorized } = await import('@/services/dialogueReview');
+    const now = D('2026-11-17T09:00:00');
+    const s3 = { ...scheduleAfterMemorized('d3', null, D('2026-11-16T08:00:00'))! }; // 오늘 예정
+    const s7 = { ...scheduleAfterMemorized('d7', null, D('2026-11-13T08:00:00'))! }; // 3일 지남
+    const s12 = { ...scheduleAfterMemorized('d12', null, D('2026-11-17T08:00:00'))! }; // 내일
+    const input = {
+      dialogues: [dlg('d3', 3), dlg('d7', 7), dlg('d12', 12), dlg('old', 20), dlg('new', 30), dlg('combo', null, { sourceDays: [11, 12] })],
+      progress: [prog('old', '2026-11-10T08:00:00'), prog('new', null), prog('combo', '2026-11-16T07:00:00')],
+      reviewStates: [s3, s7, s12],
+    };
+    const before = JSON.stringify(input);
+    const r = dialogueReviewSchedule(input, now);
+    expect(r.due.map((x) => x.label)).toEqual(['Day 20', 'Day 7', 'Day 11 · Day 12', 'Day 3']);
+    expect(r.due.find((x) => x.label === 'Day 7')!.overdueDays).toBe(3);
+    expect(r.due.find((x) => x.label === 'Day 20')!.virtual).toBe(true); // 저장 없이 계산
+    expect(r.upcoming.map((x) => x.label)).toEqual(['Day 12']);
+    expect(r.due.some((x) => x.label === 'Day 30')).toBe(false); // 아직 외우지 않은 대화문은 복습 대상 아님
+    expect(todaySentence(r.due)).toBe('오늘은 Day 20, Day 7, Day 11 · Day 12, Day 3를 복습할 차례입니다.');
+    expect(JSON.stringify(input)).toBe(before);
+  });
+});
+
+describe('누적 복습 기준 확인 (5단계 암기 완료일)', () => {
+  it('완료일이 비어 있는 예전 기록도 복습 대상 · 외우지 않은 대화문은 제외 · 저장된 일정이 있으면 그것을 따름', async () => {
+    const { dialogueReviewSchedule, memorizedDate } = await import('@/services/dialogueReview');
+    const now = new Date('2026-11-18T09:00:00');
+    const d = (id: string, day: number) => ({ id, title: id, lines: [{ id: 'l' }], sourceDays: [day] }) as never;
+    const p = (id: string, memorized: boolean, memorizedAt: string | null, updatedAt: string) => ({ id, dialogueId: id, memorized, memorizedAt, updatedAt, currentStep: 5, highestCompletedStep: memorized ? 5 : 4 }) as never;
+    const progress = [p('a', true, '2026-11-16T10:00:00', '2026-11-16T10:00:00'), p('b', true, null, '2026-11-10T10:00:00'), p('c', false, null, '2026-11-17T10:00:00')];
+    expect(memorizedDate(progress[1] as never)).toBe('2026-11-10T10:00:00');
+    const r = dialogueReviewSchedule({ dialogues: [d('a', 1), d('b', 2), d('c', 3)], progress, reviewStates: [] }, now);
+    expect(r.due.map((x) => [x.label, x.dueAt.slice(0, 10)])).toEqual([['Day 2', '2026-11-11'], ['Day 1', '2026-11-17']]); // 완료일 + 1일
+    expect([...r.due, ...r.upcoming].some((x) => x.label === 'Day 3')).toBe(false); // 4단계까지만 한 대화문은 아직 복습 대상 아님
+  });
+});

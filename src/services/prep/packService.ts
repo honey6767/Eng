@@ -10,6 +10,7 @@ import type { BlankPlan, DayAssignment, Dialogue, DialogueChunkUsage, DialogueLi
 import { normalizeExpressionKey } from '@/utils/text';
 import { chunkLabel, matchAllParts, matchParts, partsFrom, wordsOf } from '@/utils/chunkMatch';
 import { isSafeBase, locateChunk, parsePatternFields, patternDetail } from '@/utils/chunkBase';
+import { phraseSpansByLine, validateUsefulPhrases } from '@/services/phrases/usefulPhrases';
 import { contentChunkId, planContent, seriesOf, transcriptText, validateContent, type ContentChunk, type ContentResult } from '@/services/content/contentService';
 
 /**
@@ -114,6 +115,8 @@ export interface DayPackResult {
   situation: string;
   lines: DayDialogueLine[];
   extraNotes: string;
+  /** 대화문의 ✨ 유용한 회화 표현 (AI 원본, 저장 때 검사) */
+  usefulRaw?: unknown;
 }
 
 export type PackValidation = { ok: true; content: ContentResult | null; pack: DayPackResult; issues: string[] } | { ok: false; error: string };
@@ -217,7 +220,7 @@ function validateDayPackObject(raw: Record<string, unknown>, sentences: { number
     const ex = (n.example ?? {}) as Record<string, unknown>;
     notes.set(key, { meaningInContext: txt(n.meaningInContext), nuance: txt(n.nuance), whyUsed: txt(n.whyUsed), example: { en: txt(ex.en, 300), ko: txt(ex.ko, 300) } });
   }
-  return { core, extras, notes, title: txt(d.title, 100), situation: txt(d.situation, 800), lines, extraNotes: txt(raw.notes, 1000) };
+  return { core, extras, notes, title: txt(d.title, 100), situation: txt(d.situation, 800), lines, extraNotes: txt(raw.notes, 1000), usefulRaw: d.usefulPhrases };
 }
 
 export function validatePack(text: string, durationSec: number | null): PackValidation {
@@ -275,7 +278,7 @@ const STOP = new Set(
  * - coreIds를 주면 version 2: 1 = 핵심 Chunk, 2 = 추가 덩어리 표현, 3 = 주요 단어, 4 = 나머지
  * - 없으면 version 1(예전 형식): 1 = Chunk 부분, 2 = 주요 단어, 3 = 나머지
  */
-export function buildBlankPlan(lines: DialogueLine[], coreIds?: Set<string>): BlankPlan {
+export function buildBlankPlan(lines: DialogueLine[], coreIds?: Set<string>, usefulSpans?: Record<string, { s: number; e: number }[]>): BlankPlan {
   const v2 = !!coreIds;
   const out: BlankPlan = { version: v2 ? 2 : 1, lines: {} };
   for (const line of lines) {
@@ -288,6 +291,8 @@ export function buildBlankPlan(lines: DialogueLine[], coreIds?: Set<string>): Bl
       if (seg.kind === 'key' && seg.learningItemId) spans.push({ s: pos, e: pos + seg.text.length, core: !v2 || coreIds!.has(seg.learningItemId) });
       pos += seg.text.length;
     });
+    // ✨ 유용한 회화 표현(대화문 출처)은 추가 표현과 같은 2순위
+    for (const u of usefulSpans?.[line.id] ?? []) spans.push({ s: u.s, e: u.e, core: false });
     out.lines[line.id] = wordsOf(en).map((t) => {
       const sp = spans.find((x) => t.start >= x.s && t.end <= x.e);
       const content = t.w.length >= 3 && !STOP.has(t.w);
@@ -476,6 +481,9 @@ export function planPack(ctx: PackContext): PackPlan {
           };
         }),
     ];
+    // ✨ 유용한 회화 표현 (대화문 자체 출처) — 핵심 Chunk·원문 출처 표현과 겹치지 않게, 상한 안에서
+    const extraIds = new Set(usages.filter((u) => u.kind === 'extra').map((u) => u.learningItemId));
+    const phrases = validateUsefulPhrases(pack.usefulRaw, lines, { coreTexts: coreItems.map((c) => c.core.text), extraIds, newId: ctx.newId });
     const sourced = lines.filter((l) => l.sourceSentenceId).length;
     const order = Math.max(0, ...ctx.existingDialogues.filter((d) => d.videoId === video.id).map((d) => d.orderInVideo)) + 1;
     const label = ctx.dayNumber ? `Day ${ctx.dayNumber}` : '이 영상';
@@ -485,10 +493,12 @@ export function planPack(ctx: PackContext): PackPlan {
       compositionNote: [
         `${label} 원문 문장 ${ordered.length}개 중 ${new Set(lines.map((l) => l.sourceSentenceId).filter(Boolean)).size}개를 그대로 사용`,
         `핵심 Chunk ${usages.filter((u) => u.kind === 'core').map((u) => `${u.text} ×${usedForms.get(u.learningItemId)?.length ?? 0}`).join(', ') || '없음'}`,
-        usages.some((u) => u.kind === 'extra') ? `추가 덩어리 표현 ${usages.filter((u) => u.kind === 'extra').map((u) => u.text).join(', ')}` : '',
+        usages.some((u) => u.kind === 'extra') || phrases.length ? `✨ 유용한 회화 표현 ${[...usages.filter((u) => u.kind === 'extra').map((u) => u.text), ...phrases.map((p) => p.base)].join(', ')}` : '',
         pack.extraNotes,
       ].filter(Boolean).join(' · '),
-      isFavorite: false, chunkUsages: usages, sourceDays: ctx.dayNumber ? [ctx.dayNumber] : [], aiRequestId: requestId, blankPlan: buildBlankPlan(lines, new Set(coreItems.map((c) => c.item.id))),
+      isFavorite: false, chunkUsages: usages, sourceDays: ctx.dayNumber ? [ctx.dayNumber] : [], aiRequestId: requestId,
+      ...(phrases.length ? { phrases } : {}),
+      blankPlan: buildBlankPlan(lines, new Set(coreItems.map((c) => c.item.id)), phraseSpansByLine(phrases)),
     };
     return { sentences, expressions, items, dialogue, summary: { sentences: ordered.length, chunks: items.filter((i) => i.kind === 'chunk').length, core: coreItems.length, lines: lines.length, sourcedLines: sourced } };
   }

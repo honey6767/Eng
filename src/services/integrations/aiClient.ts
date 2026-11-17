@@ -1,4 +1,4 @@
-import { AI_EXTRACT_PATH, type AiTaskRequest, type AiExtractResponse } from '@/types/aiApi';
+import { AI_EXTRACT_PATH, AI_USAGE_PATH, type AiTaskRequest, type AiExtractResponse, type AiUsageResponse } from '@/types/aiApi';
 import { integrationConfig } from './config';
 import { accessCodeStore, canSendAccessCode } from './accessCode';
 
@@ -38,3 +38,18 @@ export const aiClient: AiClient = {
     return { kind: 'response', httpStatus: res.status, body };
   },
 };
+
+/** 오늘 AI 사용량 (읽기 전용, Gemini를 부르지 않음) — 실패하면 null */
+export async function fetchAiUsage(): Promise<AiUsageResponse | null> {
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  const code = accessCodeStore.get();
+  if (code && canSendAccessCode(integrationConfig.apiBaseUrl)) headers.Authorization = `Bearer ${code}`;
+  const base = (integrationConfig.apiBaseUrl ?? '').replace(/\/$/, '');
+  try {
+    const res = await fetch(`${base}${AI_USAGE_PATH}`, { method: 'POST', headers });
+    const body = (await res.json().catch(() => null)) as AiUsageResponse | null;
+    return res.ok && body?.ok ? body : null;
+  } catch {
+    return null;
+  }
+}

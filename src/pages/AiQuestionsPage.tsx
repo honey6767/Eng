@@ -99,8 +99,8 @@ export function AiQuestionsPage() {
                   <button type="button" className="block w-full text-left" onClick={() => setOpenId(open ? null : s.id)} aria-expanded={open} data-testid="qa-session-toggle">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="en font-bold text-ink">{s.chunkLabel}</span>
-                      {s.role === 'core' && <Badge tone="key">핵심 Chunk</Badge>}
-                      {s.role === 'extra' && <Badge tone="info">추가 덩어리 표현 · AI</Badge>}
+                      {s.role === 'core' && <Badge tone="key">★ 핵심 Chunk</Badge>}
+                      {s.role === 'extra' && <Badge tone="info">✨ 유용한 회화 표현</Badge>}
                       <Badge tone={s.dayNumber ? 'brand' : 'neutral'}>{s.dayNumber ? `Day ${s.dayNumber}` : '일반 영상'}</Badge>
                       <span className="text-xs text-subtle">질문 {turns.length}개</span>
                       <span className="ml-auto text-xs text-subtle">{new Date(latest.createdAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>

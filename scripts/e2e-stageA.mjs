@@ -119,12 +119,12 @@ async function suite(label, device, isPortrait) {
 
   // 홈
   const today = page.getByTestId('today-dialogue');
-  check('홈: 오늘의 대화문 + 큰 시작 버튼', (await visible(today.getByText('저녁 메뉴 정하기'))) && (await visible(today.getByRole('link', { name: /대화문 열기/ }))));
+  check('홈: 오늘의 대화문 + 큰 암기 버튼(5단계 암기 화면으로)', (await visible(today.getByText('저녁 메뉴 정하기'))) && (await today.getByTestId('today-memorize').getAttribute('href'))?.endsWith('/memorize') === true);
   check('홈: 이어서 할 단계 표시', /2단계.*3단계/.test((await page.getByTestId('today-step').textContent()) ?? ''));
   check('홈: 예상 소요 시간', await visible(today.getByText(/약 \d+분/)));
   check('홈: 작은 목표 (실패 표현 없음)', await visible(page.getByTestId('small-goal')));
-  const reviewCount = await page.getByLabel('우선순위 순 복습 목록').locator('li').count();
-  check('홈: 오늘 다시 만나면 좋아요 — 최대 3개만', reviewCount > 0 && reviewCount <= 3, `${reviewCount}개`);
+  const reviewCard = page.getByTestId('today-review');
+  check('홈: 오늘의 복습 — 대화문 단위(오늘 복습할 Day 또는 다음 복습일 안내)', (await visible(reviewCard.getByText('오늘의 복습'))) && (await reviewCard.locator('[data-testid="review-sentence"], [data-testid="review-next-date"], [data-testid="review-empty"]').count()) === 1);
   check('홈: 성장 기록 (외운 대화문·모은 핵심 표현·이번 주)', (await visible(page.getByTestId('stat-외운 대화문'))) && (await visible(page.getByTestId('stat-모은 핵심 표현'))) && (await visible(page.getByTestId('stat-이번 주 학습'))));
   const cheer1 = await page.getByTestId('home-cheer').textContent();
   await page.getByRole('button', { name: '톡이에게 다른 응원 듣기' }).click();
@@ -135,8 +135,8 @@ async function suite(label, device, isPortrait) {
   await page.screenshot({ path: `${SHOTS}/sA-${label}-01-home-full.png`, fullPage: true });
 
   // 오늘의 대화문 → 상세
-  await today.getByRole('link', { name: /대화문 열기/ }).click();
-  check('대화문 열기 → 대화문 상세', await visible(page.getByRole('heading', { name: '저녁 메뉴 정하기' })));
+  await today.getByRole('link', { name: /대화문 먼저 읽어 보기/ }).click();
+  check('대화문 먼저 읽어 보기 → 대화문 상세', await visible(page.getByRole('heading', { name: '저녁 메뉴 정하기' })));
   await look('02-dialogue-detail');
 
   // 외우기

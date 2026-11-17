@@ -31,7 +31,7 @@ export function HighlightedText({ text, cores, chunks }: { text: string; cores: 
   spans.forEach((sp, i) => {
     if (sp.s > pos) out.push(text.slice(pos, sp.s));
     out.push(
-      <mark key={i} className={`rounded px-0.5 text-ink ${sp.core ? 'bg-key font-bold' : 'bg-brand-soft underline decoration-dashed decoration-brand underline-offset-4'}`}>
+      <mark key={i} className={`rounded px-0.5 text-ink ${sp.core ? 'bg-key font-bold' : 'bg-info-soft'}`}>
         {text.slice(sp.s, sp.e)}
       </mark>,
     );
@@ -180,11 +180,11 @@ export function StudyContentPanel({
       {listChunks.length > 0 && (
         <Card className="p-4" data-testid="extra-chunks">
           <div className="mb-1 flex flex-wrap items-center gap-2">
-            <h3 className="font-bold">{hasCore ? '추가 덩어리 표현' : '문장 속 Chunk'}</h3>
-            {hasCore && <Badge tone="info">AI 추가</Badge>}
+            <h3 className="font-bold">{hasCore ? '✨ 유용한 회화 표현' : '문장 속 Chunk'}</h3>
+            {hasCore && <Badge tone="info">원문 문장에서 찾음</Badge>}
           </div>
           <p className="mb-2 text-xs text-subtle">
-            {hasCore ? '강사가 직접 가르치지는 않았지만, 영상 문맥에서 찾은 자연스럽고 유용한 회화 표현이에요.' : '이 영상은 핵심 Chunk가 아직 정리되지 않았어요. 학습 자료가 만들어지면 핵심 Chunk와 추가 표현으로 나뉘어요.'}
+            {hasCore ? '강사가 직접 가르치지는 않았지만, 통째로 외워 두면 다른 상황에도 쓸 수 있는 표현이에요. 핵심 Chunk와 따로 관리해요.' : '이 영상은 핵심 Chunk가 아직 정리되지 않았어요. 학습 자료가 만들어지면 핵심 Chunk와 추가 표현으로 나뉘어요.'}
           </p>
           <ul className="space-y-2">
             {listChunks
@@ -222,12 +222,12 @@ export function StudyContentPanel({
           </label>
         </div>
         <p className="mt-1 text-sm text-muted" data-testid="content-counts">
-          원문 문장 {shown.length}개 · 핵심 Chunk {patterns.length}개 · {hasCore ? '추가 표현' : 'Chunk'} {listChunks.length}개 · 고른 문장 {selectedS} · 고른 Chunk {selectedC}
+          원문 문장 {shown.length}개 · 핵심 Chunk {patterns.length}개 · {hasCore ? '✨ 유용한 표현' : 'Chunk'} {listChunks.length}개 · 고른 문장 {selectedS} · 고른 Chunk {selectedC}
         </p>
         {(hasCore || listChunks.length > 0) && (
           <p className="mt-1 flex flex-wrap gap-3 text-xs text-subtle">
             <span><mark className="rounded bg-key px-1 text-ink">노란 표시</mark> 핵심 Chunk</span>
-            <span><mark className="rounded bg-brand-soft px-1 text-ink underline decoration-dashed decoration-brand underline-offset-4">점선 표시</mark> {hasCore ? '추가 덩어리 표현' : 'Chunk'}</span>
+            <span><mark className="rounded bg-info-soft px-1 text-ink">하늘색 표시</mark> {hasCore ? '✨ 유용한 회화 표현' : 'Chunk'}</span>
           </p>
         )}
         <ol className="mt-3 space-y-3">
@@ -334,11 +334,11 @@ function ChunkRow({ item, expression, sentence, number, extra, qa }: { item: Lea
   return (
     <li className="rounded-xl bg-canvas p-3" data-testid="content-chunk">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="en rounded bg-brand-soft px-1.5 font-semibold text-ink underline decoration-dashed decoration-brand underline-offset-4" data-testid="chunk-base">
+        <span className="en rounded bg-info-soft px-1.5 font-semibold text-ink" data-testid="chunk-base">
           {v.base || '(Chunk)'}
         </span>
         {expression?.meaningKo && <span className="text-sm text-muted">{expression.meaningKo}</span>}
-        {extra && <Badge tone="info">AI 추가</Badge>}
+        {extra && <Badge tone="info">✨</Badge>}
         <span className="ml-auto">
           <SelectToggle on={!!item.selected} label="암기할 Chunk" testId="select-chunk" onChange={(val) => void contentStore.setChunkSelected(item.id, val)} />
         </span>

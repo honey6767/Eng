@@ -128,7 +128,9 @@ export function computeDashboardStats(input: StatsInput, now = new Date()): Dash
       return p && !p.memorized && p.highestCompletedStep > 0;
     })
     .sort((a, b) => (progressById.get(b.id)!.updatedAt ?? '').localeCompare(progressById.get(a.id)!.updatedAt ?? ''));
-  const notStarted = dialogues.filter((d) => !progressById.get(d.id));
+  // 아직 시작 안 한 대화문은 Day 번호 순 (줄이 없는 빈 대화문은 제외)
+  const dayOf = (d: (typeof dialogues)[number]) => d.sourceDays?.[0] ?? Number.MAX_SAFE_INTEGER;
+  const notStarted = dialogues.filter((d) => !progressById.get(d.id) && d.lines.length > 0).sort((a, b) => dayOf(a) - dayOf(b));
   const next = inProgress[0] ?? notStarted[0] ?? null;
 
   return {

@@ -6,8 +6,8 @@ import { handleYouTubeApi } from './youtube/handler.ts';
 import { DEFAULT_LOCAL_CAP, QuotaTracker, type QuotaState, type QuotaStore } from './youtube/quota.ts';
 import { mockFetch } from './youtube/mock.ts';
 import { AUTH_CHECK_PATH, memoryFailureLimiter, verifyAccess } from './accessAuth.ts';
-import { AI_EXTRACT_PATH } from '../src/types/aiApi.ts';
-import { handleAiExtract, parseCaps } from './ai/extractHandler.ts';
+import { AI_EXTRACT_PATH, AI_USAGE_PATH } from '../src/types/aiApi.ts';
+import { handleAiExtract, parseCaps, readUsage } from './ai/extractHandler.ts';
 import { memoryLedgerStore } from './ai/ledger.ts';
 import { createGeminiClient } from './ai/gemini.ts';
 import { createMockGemini } from './ai/mockGemini.ts';
@@ -80,6 +80,18 @@ export function youtubeProxyPlugin(): Plugin {
     };
 
     return async (req, res, next) => {
+      if (req.url?.split('?')[0] === AI_USAGE_PATH) {
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.end();
+          return;
+        }
+        if (accessCode != null) {
+          const access = await verifyAccess({ authorization: req.headers.authorization ?? null, secret: accessCode, clientKey: req.socket.remoteAddress ?? 'local', limiter });
+          if (!access.ok) return sendJson(res, access.status, { ok: false, code: access.code, message: access.message });
+        }
+        return sendJson(res, 200, readUsage(aiStore, aiCaps));
+      }
       if (req.url?.split('?')[0] === AI_EXTRACT_PATH) {
         if (req.method !== 'POST') {
           res.statusCode = 405;

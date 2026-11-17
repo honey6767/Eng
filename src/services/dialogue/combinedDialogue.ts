@@ -3,6 +3,8 @@ import { AI_DIALOGUE_PROMPT_VERSION, DIALOGUE_LIMITS, type AiDialogueRequest } f
 import type { Dialogue, DialogueChunkUsage, DialogueLine, DialogueSegment, Expression, LearningItem, Video } from '@/types/models';
 import type { CombineContext } from '@/repositories/contentStore';
 import { extraViewOf, rolesByItem } from '@/services/prep/chunkRoles';
+import { phraseSpansByLine, validateUsefulPhrases } from '@/services/phrases/usefulPhrases';
+import { buildBlankPlan } from '@/services/prep/packService';
 
 /**
  * 여러 Day의 Chunk를 결합한 통합 대화문
@@ -175,6 +177,8 @@ export function segmentLine(en: string, uses: { learningItemId: string; usedAs: 
 
 export type DialogueValidation = { ok: true; dialogue: Dialogue; issues: string[] } | { ok: false; error: string };
 
+let phraseSeq = 0;
+
 export function buildDialogueRecord(text: string, req: AiDialogueRequest, groups: CandidateGroup[], requestId: string, now: string): DialogueValidation {
   let raw: Record<string, unknown>;
   try {
@@ -224,11 +228,18 @@ export function buildDialogueRecord(text: string, req: AiDialogueRequest, groups
   const sourceVideoIds = [...new Set(usages.map((u) => u.videoId).filter((v): v is string => !!v))];
   const unused = [...sentRefs].filter((r) => !usedAsById.has(r));
   const note = txt(raw.notes, 500);
+  // ✨ 유용한 회화 표현 (대화문 자체 출처) — 이번에 고른 Chunk와 겹치지 않게, 상한 안에서
+  const extraIds = new Set(usages.filter((u) => u.kind === 'extra').map((u) => u.learningItemId));
+  const phrases = validateUsefulPhrases(raw.usefulPhrases, lines, { coreTexts: usages.map((u) => u.text), extraIds, newId: () => `ph-${requestId}-${++phraseSeq}` });
+  const coreIds = new Set(usages.filter((u) => u.kind !== 'extra').map((u) => u.learningItemId));
   const dialogue: Dialogue = {
     id: `dlg-ai-${requestId}`, createdAt: now, updatedAt: now, kind: 'combined', videoId: null, sourceVideoIds, orderInVideo: 0,
     title: txt(raw.title, 100) || '통합 대화문', situation: txt(raw.situation, 800), lines, expressionIds: [...new Set(usages.map((u) => u.expressionId))], generatedBy: 'ai',
     compositionNote: [`${sourceDays.length ? `Day ${sourceDays.join(', ')}` : '일반 영상'}의 Chunk ${usages.length}개로 만든 대화문`, note].filter(Boolean).join(' · '),
     isFavorite: false, chunkUsages: usages, sourceDays, unusedLearningItemIds: unused, aiRequestId: requestId,
+    ...(phrases.length ? { phrases } : {}),
+    // 새 통합 대화문부터: 핵심 Chunk 1순위 · ✨(원문 출처 추가 표현 + 대화문 출처) 2순위 빈칸
+    blankPlan: buildBlankPlan(lines, coreIds, phraseSpansByLine(phrases)),
   };
   return { ok: true, dialogue, issues };
 }

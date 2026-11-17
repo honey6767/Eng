@@ -1,5 +1,5 @@
 import { createGeminiClient } from './gemini.ts';
-import { handleAiExtract, parseCaps, sweepLedger } from './extractHandler.ts';
+import { handleAiExtract, parseCaps, sweepLedger, readUsage } from './extractHandler.ts';
 import { RESULT_RETENTION_MS, ROW_RETENTION_MS, type LedgerRow, type LedgerStore, type UsageRow } from './ledger.ts';
 
 /**
@@ -101,6 +101,10 @@ export class AiLedger {
   }
 
   async fetch(request: Request): Promise<Response> {
+    // 읽기 전용 사용량 조회 — Gemini를 부르지 않고 기록도 바꾸지 않는다
+    if (new URL(request.url).pathname === '/usage') {
+      return new Response(JSON.stringify(readUsage(this.store, parseCaps(this.env))), { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
+    }
     const body = await request.json().catch(() => null);
     const gemini = createGeminiClient({ apiKey: this.env.GEMINI_API_KEY?.trim() || null, model: this.env.GEMINI_MODEL, fetch: (i, init) => fetch(i, init) });
     const result = await handleAiExtract({ idempotencyKey: request.headers.get('Idempotency-Key'), body }, { store: this.store, gemini, caps: parseCaps(this.env) });

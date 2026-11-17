@@ -178,6 +178,8 @@ export interface StudyLogRepository {
   listSince(dateKey: string): Promise<StudyLog[]>;
   countReviews(): Promise<number>;
   count(): Promise<number>;
+  /** 학습 한 번 기록 (추가만) */
+  add(log: StudyLog): Promise<void>;
 }
 
 export interface MetaRepository {

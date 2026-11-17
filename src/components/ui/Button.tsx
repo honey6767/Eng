@@ -39,15 +39,17 @@ export function LinkButton({
   size = 'md',
   className = '',
   children,
+  'data-testid': testId,
 }: {
   to: string;
   variant?: Variant;
   size?: Size;
   className?: string;
   children: ReactNode;
+  'data-testid'?: string;
 }) {
   return (
-    <Link to={to} className={buttonClass(variant, size, className)}>
+    <Link to={to} className={buttonClass(variant, size, className)} data-testid={testId}>
       {children}
     </Link>
   );

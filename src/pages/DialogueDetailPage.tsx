@@ -12,6 +12,7 @@ import { LinkButton } from '@/components/ui/Button';
 import { Loading } from '@/components/ui/Loading';
 import { Icon } from '@/components/ui/Icon';
 import { DialogueView } from '@/components/dialogue/DialogueView';
+import { UsefulPanel, useUseful } from '@/components/dialogue/UsefulPanel';
 import { STEP_NAMES, weaknessTone } from '@/utils/labels';
 import { relativeDayLabel } from '@/utils/date';
 import type { MemorizeStep } from '@/types/models';
@@ -41,6 +42,8 @@ export function DialogueDetailPage() {
     return { dialogue, sentences, expressions, exprStates, progress, review, video };
   }, [id]);
 
+  const useful = useUseful(data?.dialogue);
+  const [openRef, setOpenRef] = useState<string | null>(null);
   if (data === undefined) return <Loading />;
   if (data === null) return <NotFoundPage message="대화문을 찾을 수 없어요." />;
   const { dialogue, sentences, expressions, exprStates, progress, review, video } = data;
@@ -99,15 +102,19 @@ export function DialogueDetailPage() {
           </div>
 
           <Card className="p-4 sm:p-5">
-            <DialogueView lines={dialogue.lines} sentences={sentences} showKorean={showKorean} highlightKeys={highlight} extraIds={new Set((dialogue.chunkUsages ?? []).filter((u) => u.kind === 'extra').map((u) => u.learningItemId))} />
-            <p className="mt-4 flex items-center gap-2 border-t border-line pt-3 text-xs text-muted">
-              <mark className="shrink-0 rounded bg-key px-1 whitespace-nowrap text-ink">노란 표시</mark>
-              {dialogue.kind === 'combined'
-                ? ' 이전 Day에서 배운 Chunk · 나머지는 자연스러운 대화를 위한 말'
-                : dialogue.generatedBy === 'ai'
-                  ? ' 강사가 가르친 핵심 Chunk · 점선은 AI가 찾은 추가 덩어리 표현'
-                  : ' 영상의 핵심 문장(원문 그대로) · 나머지는 자연스러운 대화를 위한 연결 문장'}
-            </p>
+            <DialogueView lines={dialogue.lines} sentences={sentences} showKorean={showKorean} highlightKeys={highlight} useful={useful.model} openRef={openRef} onOpen={setOpenRef} />
+            <div className="mt-4 border-t border-line pt-3">
+              {dialogue.generatedBy === 'ai' ? (
+                <UsefulPanel dialogue={dialogue} useful={useful} onOpen={(k) => {
+                  setOpenRef(k);
+                  document.getElementById(`dl-${k.split(':').pop()}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }} />
+              ) : (
+                <p className="flex items-center gap-2 text-xs text-muted">
+                  <mark className="shrink-0 rounded bg-key px-1 whitespace-nowrap text-ink">노란 표시</mark> 영상의 핵심 문장(원문 그대로) · 나머지는 자연스러운 대화를 위한 연결 문장
+                </p>
+              )}
+            </div>
           </Card>
 
           {dialogue.compositionNote && (
@@ -126,8 +133,8 @@ export function DialogueDetailPage() {
                       <div className="flex flex-wrap items-center gap-2">
                         <mark className={`en rounded px-1 font-semibold text-ink ${u.kind === 'extra' ? 'bg-brand-soft underline decoration-dashed decoration-brand underline-offset-4' : 'bg-key'}`}>{u.usedAs}</mark>
                         {u.usedAs.toLowerCase() !== u.text.toLowerCase() && <span className="text-xs text-subtle">(배운 형태: {u.text})</span>}
-                        {u.kind === 'extra' && <Badge tone="info">추가 덩어리 표현 · AI</Badge>}
-                        {u.kind === 'core' && <Badge tone="key">핵심 Chunk</Badge>}
+                        {u.kind === 'extra' && <Badge tone="info">✨ 유용한 회화 표현</Badge>}
+                        {u.kind === 'core' && <Badge tone="key">★ 핵심 Chunk</Badge>}
                         <Badge tone={u.dayNumber ? 'info' : 'neutral'}>
                           {(u.dayNumber ? `Day ${u.dayNumber}` : '일반 영상') + (u.kind === 'extra' ? ' 문장에서 찾음' : '에서 배움')}
                         </Badge>

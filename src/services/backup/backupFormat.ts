@@ -34,6 +34,8 @@ export interface BackupFile {
   integrity: { brokenLinks: number };
   checksum: { algorithm: 'SHA-256'; value: string };
   tables: BackupTables;
+  /** (선택) AI 부가 기록 — 자기 검증값을 따로 가진다. 위 항목과 검증값에는 영향 없음 */
+  aiNotes?: import('./aiNotesBackup').AiNotesBlock;
 }
 
 export function computeChecksum(schemaVersion: number, tables: BackupTables): string {

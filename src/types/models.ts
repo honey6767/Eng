@@ -299,12 +299,35 @@ export interface Dialogue extends BaseRecord {
   chunkUsages?: DialogueChunkUsage[];
   /** 통합 대화문 — 사용한 Chunk의 출처 Day (일반 영상은 제외) */
   sourceDays?: number[];
+  /** ✨ 유용한 회화 표현 (새로 만든 대화문만, 대화문 자체에서 찾은 것) */
+  phrases?: UsefulPhrase[];
   /** 생성에 쓰려고 골랐지만 대화문에 쓰지 않은 Chunk */
   unusedLearningItemIds?: string[];
   /** 이 대화문을 만든 AI 요청 식별자 */
   aiRequestId?: string;
   /** 빈칸 암기 자료 (AI 없이 기기에서 계산) */
   blankPlan?: BlankPlan;
+}
+
+/**
+ * ✨ 유용한 회화 표현 — 대화문 자체에서 찾은 것 (원문 문장에서 찾은 추가 표현은 기존 학습 항목·chunkUsages 그대로)
+ * 핵심 Chunk와 따로 관리하고, 핵심 Chunk 개수에 넣지 않는다.
+ */
+export interface UsefulPhrase {
+  id: string;
+  /** 출처: 대화문 자체 */
+  source: 'dialogue';
+  /** 기본형 (구동사는 take someone up on something) */
+  base: string;
+  category: 'phrasal' | 'idiom' | 'reaction' | 'pattern' | 'chunk';
+  meaningKo: string;
+  nuance: string;
+  usage: string;
+  pattern?: string;
+  slotNote?: string;
+  swapExamples?: { en: string; ko: string; note?: string }[];
+  /** 대화문 안 위치 (줄 영어 문장에서의 글자 위치) */
+  occurrences: { lineId: string; usedAs: string; start: number; end: number }[];
 }
 
 export interface DialogueChunkUsage {

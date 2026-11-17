@@ -18,6 +18,15 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { canShareFiles, downloadTextFile, shareTextFile } from '@/utils/download';
+import { qaDb } from '@/services/qa';
+import { exportAiNotes, planAiNotesRestore, restoreAiNotes, validateAiNotes, type AiNotesBlock, type AiNotesPlan } from '@/services/backup/aiNotesBackup';
+
+/** 학습 데이터 백업 + (있으면) AI 부가 기록 블록 */
+const createFullBackup = async () => {
+  const file = await createBackup(backupStore);
+  const notes = await exportAiNotes(qaDb);
+  return notes ? { ...file, aiNotes: notes } : file;
+};
 
 const LAST_BACKUP_KEY = 'mes:lastBackupFileAt';
 const readLastBackup = () => {
@@ -70,7 +79,8 @@ export function BackupPanel() {
   const [lastBackup, setLastBackup] = useState<string | null>(readLastBackup);
   const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [snapshots, setSnapshots] = useState<SnapshotSummary[]>([]);
-  const [pending, setPending] = useState<{ fileName: string; backup: BackupFile; plan: RestorePlan } | null>(null);
+  const [pending, setPending] = useState<{ fileName: string; backup: BackupFile; plan: RestorePlan; notes: { block: AiNotesBlock | null; plan: AiNotesPlan | null; errors: string[] | null } } | null>(null);
+  const [notesResult, setNotesResult] = useState<string | null>(null);
   const [fileErrors, setFileErrors] = useState<string[] | null>(null);
   const [result, setResult] = useState<(RestoreResult & { replacedMeta: string[] }) | null>(null);
   /** 바꿀 수 있는 설정(빈 기본값) 중 사용자가 바꾸기로 고른 키 — 기본은 바꾸지 않음 */
@@ -100,7 +110,7 @@ export function BackupPanel() {
 
   /** 현재 데이터를 백업 파일로 */
   const exportNow = async (prefix?: string) => {
-    const file = await createBackup(backupStore);
+    const file = await createFullBackup();
     const name = backupFileName(new Date(), prefix);
     downloadTextFile(name, serializeBackup(file));
     const now = new Date().toISOString();
@@ -121,7 +131,10 @@ export function BackupPanel() {
         return;
       }
       setReplaceChoice({});
-      setPending({ fileName: f.name, backup: parsed.backup, plan: await previewRestore(backupStore, parsed.backup) });
+      const nv = validateAiNotes((parsed.backup as BackupFile).aiNotes);
+      const notes = nv.ok ? { block: nv.block, plan: nv.block ? await planAiNotesRestore(qaDb, nv.block) : null, errors: null } : { block: null, plan: null, errors: nv.errors };
+      setNotesResult(null);
+      setPending({ fileName: f.name, backup: parsed.backup, plan: await previewRestore(backupStore, parsed.backup), notes });
     });
     if (fileInput.current) fileInput.current.value = '';
   };
@@ -152,10 +165,14 @@ export function BackupPanel() {
       const res = await applyRestore(backupStore, snapshotStore, pending.backup, {
         replaceMeta: chosen.map((m) => ({ key: m.key, expectedDeviceValue: m.deviceValue })),
       });
+      // 3) AI 부가 기록 (있고 검사를 통과했을 때만, 추가만) — 문제가 있으면 이 블록만 건너뜀
+      let notesAdded = 0;
+      if (pending.notes.block) notesAdded = await restoreAiNotes(qaDb, pending.notes.block);
+      setNotesResult(pending.notes.errors ? `AI 기록은 문제가 있어 건너뛰었어요 (${pending.notes.errors[0]})` : pending.notes.block ? `AI 기록 ${notesAdded}개 추가` : null);
       setResult(res);
       setPending(null);
       await refresh();
-      toast(`복원했어요 · ${res.plan.totals.add}개 추가${res.replacedMeta.length ? ' · 학습 순서 바꿈' : ''}`);
+      toast(`복원했어요 · ${res.plan.totals.add}개 추가${notesAdded ? ` · AI 기록 ${notesAdded}개` : ''}${res.replacedMeta.length ? ' · 학습 순서 바꿈' : ''}`);
     });
 
   const onPersist = () =>
@@ -175,7 +192,7 @@ export function BackupPanel() {
           <Badge tone="ok">실제 백업</Badge>
         </div>
         <p className="text-sm text-muted">
-          모든 학습 데이터(영상·표현·대화문·즐겨찾기·복습 상태·학습 기록)를 JSON 파일 하나로 받아요. 이 파일이 실제 백업이에요. iPad라면 파일 앱의 ‘다운로드’에
+          모든 학습 데이터(영상·표현·대화문·즐겨찾기·복습 상태·학습 기록)와 AI 질문·✨ 기록을 JSON 파일 하나로 받아요. 이 파일이 실제 백업이에요. iPad라면 파일 앱의 ‘다운로드’에
           저장되니, iCloud Drive 등 기기 밖 다른 곳에도 옮겨 두세요.
         </p>
         <div className="flex flex-wrap items-center gap-2">
@@ -188,7 +205,7 @@ export function BackupPanel() {
               disabled={busy}
               onClick={() =>
                 run(async () => {
-                  const file = await createBackup(backupStore);
+                  const file = await createFullBackup();
                   await shareTextFile(backupFileName(), serializeBackup(file));
                 })
               }
@@ -312,9 +329,23 @@ export function BackupPanel() {
               </p>
             )}
             {pending && (
+              <p className="text-sm text-muted" data-testid="restore-ainotes">
+                {pending.notes.errors
+                  ? `AI 질문·✨ 기록: 문제가 있어 이 부분만 건너뛰어요 (${pending.notes.errors[0]}). 학습 데이터는 그대로 복원돼요.`
+                  : pending.notes.plan
+                    ? `AI 질문·✨ 기록: 새로 추가 ${pending.notes.plan.add}개 · 이미 있음 ${pending.notes.plan.same}개 (추가만 해요)`
+                    : 'AI 질문·✨ 기록: 이 백업 파일에는 없어요.'}
+              </p>
+            )}
+            {result && notesResult && (
+              <p className="text-sm text-muted" data-testid="restore-ainotes-result">
+                {notesResult}
+              </p>
+            )}
+            {pending && (
               <div className="flex flex-wrap gap-2">
                 <Button
-                  disabled={busy || (shownPlan.totals.add === 0 && !shownPlan.replaceableMeta.some((m) => replaceChoice[m.key]))}
+                  disabled={busy || (shownPlan.totals.add === 0 && !shownPlan.replaceableMeta.some((m) => replaceChoice[m.key]) && !(pending.notes.plan && pending.notes.plan.add > 0))}
                   onClick={onRestore}
                   data-testid="restore-apply"
                 >

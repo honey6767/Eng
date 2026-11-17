@@ -1,11 +1,11 @@
 import { Link } from 'react-router-dom';
 import { useMemo, useState } from 'react';
-import { repos } from '@/repositories';
+import { contentStore, repos } from '@/repositories';
+import { dialogueReviewSchedule, reviewDateLabel, todaySentence } from '@/services/dialogueReview';
 import { useLiveData } from '@/hooks/useLiveData';
 import { loadDashboardStats, type DashboardStats } from '@/services/statsService';
-import type { ReviewPriority } from '@/services/scheduler';
 import { Card } from '@/components/ui/Card';
-import { Badge, type BadgeTone } from '@/components/ui/Badge';
+import { Badge } from '@/components/ui/Badge';
 import { LinkButton } from '@/components/ui/Button';
 import { StepBar } from '@/components/ui/ProgressBar';
 import { Icon } from '@/components/ui/Icon';
@@ -30,15 +30,6 @@ const CHEERS = [
   '틀려도 괜찮아요. 확인하면서 외우는 거예요.',
   '천천히 해도 기억은 쌓여요.',
 ];
-
-/** 복습 우선순위를 부드러운 말로 (틀린 횟수를 강조하지 않음) */
-const SOFT_PRIORITY: Record<ReviewPriority, { label: string; tone: BadgeTone }> = {
-  1: { label: '다시 만나기', tone: 'info' },
-  2: { label: '다시 만나기', tone: 'info' },
-  3: { label: '한 번 더', tone: 'butter' },
-  4: { label: '복습하기 좋은 때', tone: 'brand' },
-  5: { label: '기억 지키기', tone: 'neutral' },
-};
 
 function todayLabel(d = new Date()) {
   return `${d.getMonth() + 1}월 ${d.getDate()}일 ${'일월화수목금토'[d.getDay()]}요일`;
@@ -95,7 +86,7 @@ export function DashboardPage() {
         <TodayDialogueCard stats={stats} />
         <div className="flex flex-col gap-5">
           <SmallGoalCard todayCount={stats.todayCount} />
-          <TodayReviewCard stats={stats} />
+          <TodayReviewCard />
         </div>
       </div>
 
@@ -117,7 +108,7 @@ function TodayDialogueCard({ stats }: { stats: DashboardStats }) {
         <p className="text-xl font-extrabold">{hasVideos ? '대화문을 준비해 볼까요?' : '학습할 대화문이 없어요'}</p>
         <p className="max-w-sm text-[15px] text-muted">
           {hasVideos
-            ? '영상의 핵심 표현 5개를 정하면 그걸로 대화문을 만들 수 있어요.'
+            ? '영상의 학습 자료(핵심 Chunk · 통합 대화문)가 준비되면 여기에 오늘 외울 대화문이 나타나요.'
             : '영상을 등록하고 핵심 표현을 정리하면, 여기에 오늘 외울 대화문이 나타나요.'}
         </p>
         <LinkButton to="/videos" size="lg" className="mt-2">
@@ -184,11 +175,13 @@ function TodayDialogueCard({ stats }: { stats: DashboardStats }) {
       </div>
 
       <div className="flex flex-col gap-2">
-        <LinkButton to={`/dialogues/${dialogue.id}`} size="xl" className="w-full">
+        <LinkButton to={`/dialogues/${dialogue.id}/memorize`} size="xl" className="w-full" data-testid="today-memorize">
           <Icon name="play" className="size-5" />
-          대화문 열기
+          {done > 0 ? `${nextStep}단계 이어서 외우기` : '5단계 암기 시작'}
         </LinkButton>
-        <p className="text-center text-xs text-subtle">5단계 암기 화면은 다음 개발 단계에서 열려요</p>
+        <Link to={`/dialogues/${dialogue.id}`} className="text-center text-sm font-semibold text-brand">
+          대화문 먼저 읽어 보기
+        </Link>
       </div>
     </Card>
   );
@@ -219,39 +212,56 @@ function SmallGoalCard({ todayCount }: { todayCount: number }) {
   );
 }
 
-function TodayReviewCard({ stats }: { stats: DashboardStats }) {
-  const items = stats.dueItems.slice(0, 3);
-  const more = stats.dueItems.length > items.length;
+/** 누적 복습 — 오늘 복습할 대화문 (통합 대화문 전체 단위). 없으면 다음 복습 예정일 */
+function TodayReviewCard() {
+  const sched = useLiveData(async () => dialogueReviewSchedule(await contentStore.readReviewInput()), []);
+  if (!sched) return null;
+  const { due, upcoming } = sched;
   return (
     <Card className="flex flex-col gap-3 p-5" data-testid="today-review">
-      <p className="text-lg font-extrabold">오늘 다시 만나면 좋아요</p>
-      {items.length === 0 ? (
-        <p className="rounded-2xl bg-canvas px-4 py-3 text-sm text-muted">오늘은 다시 볼 것이 없어요. 새 대화문에 집중해요!</p>
-      ) : (
-        <ul className="flex flex-col gap-2" aria-label="우선순위 순 복습 목록">
-          {items.map((item) => {
-            const p = SOFT_PRIORITY[item.priority];
-            return (
-              <li key={item.state.id}>
-                <Link to={item.href ?? '/review'} className="flex items-center gap-3 rounded-2xl bg-info-soft/60 px-3.5 py-3 hover:bg-info-soft">
+      <p className="text-lg font-extrabold">오늘의 복습</p>
+      {due.length > 0 ? (
+        <>
+          <p className="text-[15px] font-semibold text-ink" data-testid="review-sentence">
+            {todaySentence(due)}
+          </p>
+          <ul className="flex flex-col gap-2" aria-label="오늘 복습할 대화문">
+            {due.map((x) => (
+              <li key={x.dialogue.id}>
+                <Link to={`/dialogues/${x.dialogue.id}/memorize`} className="flex items-center gap-3 rounded-2xl bg-info-soft/60 px-3.5 py-3 hover:bg-info-soft" data-testid="review-due">
                   <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-surface text-info">
-                    <Icon name={item.state.itemType === 'dialogue' ? 'chat' : 'review'} className="size-4.5" />
+                    <Icon name="review" className="size-4.5" />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="en block truncate font-bold">{item.title}</span>
-                    <span className="block truncate text-xs text-muted">{item.subtitle}</span>
+                    <span className="block truncate font-bold">{x.label}</span>
+                    <span className="block truncate text-xs text-muted">{x.dialogue.title}</span>
                   </span>
-                  <Badge tone={p.tone}>{p.label}</Badge>
+                  <span className="shrink-0 text-right text-xs text-muted">
+                    {x.reviewNo}번째 복습
+                    {x.overdueDays > 0 && <span className="block font-semibold text-warn">{x.overdueDays}일 지남</span>}
+                  </span>
                 </Link>
               </li>
-            );
-          })}
-        </ul>
+            ))}
+          </ul>
+        </>
+      ) : upcoming.length > 0 ? (
+        <p className="rounded-2xl bg-canvas px-4 py-3 text-sm text-muted" data-testid="review-next-date">
+          오늘 복습할 대화문은 없어요. 다음 복습은 <b className="text-ink">{reviewDateLabel(upcoming[0].dueAt)}</b> · {upcoming.filter((x) => x.dueAt.slice(0, 10) === upcoming[0].dueAt.slice(0, 10)).map((x) => x.label).join(', ')}
+        </p>
+      ) : (
+        <p className="rounded-2xl bg-canvas px-4 py-3 text-sm text-muted" data-testid="review-empty">
+          아직 복습할 대화문이 없어요. 대화문을 5단계까지 외우면 1일 · 3일 · 7일 · 14일 · 30일 뒤 복습이 자동으로 잡혀요.
+        </p>
+      )}
+      {upcoming.length > 0 && due.length > 0 && (
+        <p className="text-xs text-subtle">
+          그다음 복습: {reviewDateLabel(upcoming[0].dueAt)} · {upcoming[0].label}
+        </p>
       )}
       <p className="text-sm text-muted">
-        {more ? '나머지는 천천히 봐도 괜찮아요 · ' : ''}
         <Link to="/review" className="font-semibold text-brand">
-          복습 화면 보기
+          복습 일정 전체 보기
         </Link>
       </p>
     </Card>

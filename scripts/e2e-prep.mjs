@@ -203,7 +203,7 @@ async function main() {
     check('활용형(could seriously use 등)은 핵심 Chunk 아래 활용 사례로 묶임', /활용 사례/.test(await page.getByTestId('core-occurrences').first().innerText()));
     const extraCard = (await page.getByTestId('extra-chunks').count()) ? await page.getByTestId('extra-chunks').innerText() : '';
     const extraTexts = await page.locator('[data-testid="extra-chunks"] [data-testid="content-chunk"] > div > span.en').allInnerTexts();
-    check('추가 덩어리 표현은 별도 카드·AI 추가 표시, 핵심 Chunk 활용형 없음', /추가 덩어리 표현/.test(extraCard) && /AI 추가/.test(extraCard) && extraTexts.length > 0 && !extraTexts.some((t) => /\bcould\b/i.test(t)), extraTexts.join(', '));
+    check('추가 덩어리 표현은 별도 카드·AI 추가 표시, 핵심 Chunk 활용형 없음', /✨ 유용한 회화 표현/.test(extraCard) && /원문 문장에서 찾음/.test(extraCard) && extraTexts.length > 0 && !extraTexts.some((t) => /\bcould\b/i.test(t)), extraTexts.join(', '));
     const tired = page.locator('[data-testid="extra-chunks"] [data-testid="content-chunk"]').filter({ hasText: 'look super tired' });
     check('새 자료: AI가 정리한 기본 Chunk look tired · 원문 look super tired · look + 형용사', (await tired.count()) === 1 && (await tired.getByTestId('chunk-base').innerText()) === 'look tired' && /look super tired/.test(await tired.getByTestId('chunk-origin').innerText()) && /look \+ 형용사/.test((await tired.getByTestId('chunk-pattern').innerText()).replace(/\s+/g, ' ')));
     check('추가 덩어리 표현에 의미·실제 문맥 문장', (await page.locator('[data-testid="extra-chunks"] [data-testid="chunk-context"]').count()) > 0);
@@ -247,6 +247,14 @@ async function main() {
       const ex = db.tables.expressions.find((e) => e.text === 'look tired');
       const li = ex && db.tables.learningItems.find((i) => i.expressionId === ex.id && i.videoId === 'd11');
       check('저장: 기본 Chunk(look tired)와 원문 형태(look super tired)를 나눠 저장, 활용 예시는 검사 통과한 것만(뜻 포함), 원문 문장은 그대로', !!li && li.chunkRole === 'extra' && li.chunk.surface === 'look super tired' && li.chunk.pattern === 'look + 형용사' && li.chunk.swapExamples.map((x) => x.en).join(',') === 'look happy,look busy' && li.chunk.swapExamples.every((x) => x.ko) && db.tables.keySentences.some((k) => k.english === 'You look super tired. You could use some rest.'));
+    }
+    {
+      const db = await dumpDb(page);
+      const dd = db.tables.dialogues.find((x) => x.videoId === 'd11' && x.generatedBy === 'ai');
+      const ph = dd?.phrases ?? [];
+      const occ = ph.flatMap((p) => p.occurrences);
+      check('새 대화문: ✨ 유용한 회화 표현(대화문 출처) 저장 · 같은 요청 안에서 (추가 호출 없음)', ph.some((p) => p.base === 'Same here' && p.source === 'dialogue') && !ph.some((p) => /hit the road|could use|honestly/.test(p.base)), ph.map((p) => p.base).join(', '));
+      check('새 대화문: ✨ 위치는 2순위 빈칸 (2단계 핵심 Chunk만은 그대로)', occ.length > 0 && occ.every((o) => (dd.blankPlan.lines[o.lineId] ?? []).includes(2)) && Object.values(dd.blankPlan.lines).some((r) => r.includes(1)));
     }
     check('저장: 대화문에 빈칸 자료·출처 Day·Chunk 사용', d11 && d11.blankPlan && Object.keys(d11.blankPlan.lines).length === d11.lines.length && d11.sourceDays[0] === 11 && d11.chunkUsages.length > 0);
     for (const t of ['videos', 'transcripts', 'reviewStates', 'studyLogs', 'playlists', 'expressionNotes']) {

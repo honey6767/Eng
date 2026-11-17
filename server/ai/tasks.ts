@@ -9,6 +9,8 @@ import {
   type AiPackRequest,
   type AiTaskRequest,
   ASK_LIMITS,
+  PHRASES_LIMITS,
+  type AiPhrasesRequest,
   type AiAskContext,
   type AiAskRequest,
 } from '../../src/types/aiApi.ts';
@@ -24,7 +26,7 @@ import { isValidVideoId } from '../../src/utils/youtubeUrl.ts';
  * 프롬프트는 서버만 가진다(앱은 재료만 보낸다). 키·비밀정보는 여기 없다.
  */
 
-export type TaskKind = 'extract' | 'content' | 'dialogue' | 'pack' | 'daypack' | 'ask';
+export type TaskKind = 'extract' | 'content' | 'dialogue' | 'pack' | 'daypack' | 'ask' | 'phrases';
 export const taskOf = (r: AiTaskRequest): TaskKind => r.task ?? 'extract';
 
 const str = (v: unknown, max: number, min = 1): v is string => typeof v === 'string' && v.trim().length >= min && v.length <= max;
@@ -57,6 +59,15 @@ export function validateTaskRequest(raw: unknown): AiTaskRequest | null {
     return { task: 'pack', videoId: r.videoId, title: r.title, seriesKind: r.seriesKind, dayNumber: r.dayNumber as number | null, transcript: r.transcript, promptVersion: r.promptVersion } satisfies AiPackRequest;
   }
   if (r.task === 'ask') return validateAsk(r);
+  if (r.task === 'phrases') {
+    const L = PHRASES_LIMITS;
+    if (typeof r.dialogueId !== 'string' || !REF.test(r.dialogueId)) return null;
+    if (!Array.isArray(r.lines) || r.lines.length < L.minLines || r.lines.length > L.maxLines) return null;
+    const lines = r.lines as Record<string, unknown>[];
+    if (!lines.every((x) => x && (x.speaker === 'A' || x.speaker === 'B') && str(x.en, L.lineChars))) return null;
+    if (!Array.isArray(r.exclude) || r.exclude.length > L.maxExclude || !r.exclude.every((x) => str(x, L.excludeChars))) return null;
+    return { task: 'phrases', dialogueId: r.dialogueId, lines: lines.map((x) => ({ speaker: x.speaker as 'A' | 'B', en: x.en as string })), exclude: r.exclude as string[], promptVersion: r.promptVersion as string } satisfies AiPhrasesRequest;
+  }
   if (r.task === 'daypack') {
     const L = DAYPACK_LIMITS;
     if (typeof r.videoId !== 'string' || !isValidVideoId(r.videoId)) return null;
@@ -213,6 +224,56 @@ ${r.transcript}`;
 // dialogue — 여러 Day의 Chunk로 통합 대화문
 // ─────────────────────────────────────────────
 
+/** ✨ 유용한 회화 표현 — 대화문 안에서 통째로 외워 다른 상황에도 쓸 수 있는 표현 (핵심 Chunk와 별도) */
+export const USEFUL_RULES = `usefulPhrases(✨ 유용한 회화 표현): 대화문 안에서, 학습자가 통째로 외워 두면 실제 회화의 다른 상황에도 자연스럽게 쓸 수 있는 표현만 고릅니다.
+- 대상: 구동사(take someone up on something, figure out, run into), 관용·회화 덩어리(that rings a bell, I'm all for it), 공감·반응 표현(I can imagine, I know what you mean), 자주 쓰는 문장 패턴(I'm so ready for ~).
+- 제외: 핵심 Chunk와 그 활용형, 어려운 단어 하나, 문법 포인트, 너무 평범한 말. 강사가 가르친 것처럼 쓰지 않습니다.
+- 학습 가치가 높은 순서로 최대 6개, 한 줄에 1개까지. 많이 표시하지 않습니다. 확신이 없으면 넣지 않습니다.
+- base: 기본형 (구동사는 someone/something 자리를 넣은 형태, 예: take someone up on something)
+- usedAs: 대화문에 실제로 쓰인 형태 그대로 (en에 그대로 있는 부분, 여러 번 나오면 모두)
+- category: phrasal(구동사) / idiom(관용·회화 덩어리) / reaction(공감·반응) / pattern(문장 패턴) / chunk(그 밖의 덩어리)
+- meaningKo(한국어 뜻), nuance(이 대화 문맥의 뉘앙스), usage(어떤 상황에서 쓰는지)
+- pattern·slotNote·swapExamples: 단어를 바꿔 쓸 수 있을 때만 (자리 이름은 명사, 불가산명사, 형용사, 동사원형, 동사-ing, 사람, 장소 중 하나, 예: "I'm so ready for + 명사"), 활용 예시 0~3개(en, ko, note). 없으면 "", "", []`;
+
+export const USEFUL_PHRASE_SCHEMA = {
+  type: 'object',
+  properties: {
+    base: { type: 'string' },
+    usedAs: { type: 'array', items: { type: 'string' } },
+    category: { type: 'string', enum: ['phrasal', 'idiom', 'reaction', 'pattern', 'chunk'] },
+    meaningKo: { type: 'string' },
+    nuance: { type: 'string' },
+    usage: { type: 'string' },
+    pattern: { type: 'string' },
+    slotNote: { type: 'string' },
+    swapExamples: {
+      type: 'array',
+      items: { type: 'object', properties: { en: { type: 'string' }, ko: { type: 'string' }, note: { type: 'string' } }, required: ['en', 'ko', 'note'] },
+    },
+  },
+  required: ['base', 'usedAs', 'category', 'meaningKo', 'nuance', 'usage', 'pattern', 'slotNote', 'swapExamples'],
+} as const;
+
+export const PHRASES_SCHEMA = {
+  type: 'object',
+  properties: { usefulPhrases: { type: 'array', items: USEFUL_PHRASE_SCHEMA } },
+  required: ['usefulPhrases'],
+} as const;
+
+export function buildPhrasesPrompt(r: AiPhrasesRequest): string {
+  const lines = r.lines.map((l, i) => `${i + 1}. ${l.speaker}: ${l.en}`).join('\n');
+  const exclude = r.exclude.length ? r.exclude.map((x) => `- ${x}`).join('\n') : '- (없음)';
+  return `당신은 한국인 학습자를 돕는 영어 회화 튜터입니다. 아래 대화문에서 ✨ 유용한 회화 표현을 골라 주세요. 한국어로 설명합니다.
+
+[대화문]
+${lines}
+
+[제외할 핵심 Chunk — 강사가 가르친 표현, 이것과 그 활용형은 고르지 않음]
+${exclude}
+
+${USEFUL_RULES}`;
+}
+
 export const DIALOGUE_SCHEMA = {
   type: 'object',
   properties: {
@@ -247,9 +308,10 @@ export const DIALOGUE_SCHEMA = {
       },
     },
     unusedRefs: { type: 'array', items: { type: 'string' } },
+    usefulPhrases: { type: 'array', items: USEFUL_PHRASE_SCHEMA },
     notes: { type: 'string' },
   },
-  required: ['title', 'situation', 'lines', 'chunkNotes', 'unusedRefs', 'notes'],
+  required: ['title', 'situation', 'lines', 'chunkNotes', 'unusedRefs', 'usefulPhrases', 'notes'],
 } as const;
 
 export function buildDialoguePrompt(r: AiDialogueRequest): string {
@@ -271,6 +333,8 @@ export function buildDialoguePrompt(r: AiDialogueRequest): string {
 - lines: speaker(A/B), en(영어 대사), ko(자연스러운 한국어 번역), chunkRefs
 - chunkNotes: 실제로 쓴 Chunk마다 하나. usedAs(대화 속 실제 형태, en 문장에 그대로 있는 부분), meaningInContext(이 상황에서의 의미), nuance(뉘앙스), whyUsed(대화 속에서 이 표현을 쓴 이유), example(다른 상황에 응용한 짧은 예문 en·ko)
 - unusedRefs: 쓰지 않은 ref
+
+${USEFUL_RULES}
 - notes: 참고할 점(없으면 빈 문자열)
 설명은 모두 한국어로 씁니다. JSON으로만 답하세요.
 
@@ -368,8 +432,9 @@ const DAY_DIALOGUE_SCHEMA = {
         required: ['text', 'kind', 'usedAs', 'meaningInContext', 'nuance', 'whyUsed', 'example'],
       },
     },
+    usefulPhrases: { type: 'array', items: USEFUL_PHRASE_SCHEMA },
   },
-  required: ['title', 'situation', 'lines', 'chunkNotes'],
+  required: ['title', 'situation', 'lines', 'chunkNotes', 'usefulPhrases'],
 } as const;
 
 export const PACK_SCHEMA = {
@@ -449,7 +514,8 @@ const DIALOGUE_RULES = (dayLabel: string) => `Day 통합 대화문(dialogue): �
 - 화자 A와 B가 번갈아 8~14줄. 모든 줄에 자연스러운 한국어 번역(ko).
 - chunkTexts: 그 줄에 들어간 핵심 Chunk·추가 덩어리 표현의 text (없으면 빈 배열)
 - chunkNotes: 대화에 쓴 표현마다 하나. kind는 핵심 Chunk면 "core", 추가 덩어리 표현이면 "extra". usedAs(대화에 실제로 쓴 형태들, en에 그대로 있는 부분), meaningInContext(이 대화에서의 의미), nuance, whyUsed(대화 속에서 쓴 이유), example(다른 상황 응용 예문 en·ko)
-- title은 짧은 한국어 제목(${dayLabel} 포함), situation은 상황과 맥락(한국어 2~3문장).`;
+- title은 짧은 한국어 제목(${dayLabel} 포함), situation은 상황과 맥락(한국어 2~3문장).
+- ${USEFUL_RULES}`;
 
 const dayLabelOf = (r: { seriesKind: string; dayNumber: number | null; title: string }) => (r.seriesKind === 'day' && r.dayNumber ? `Day ${r.dayNumber}` : '이 영상');
 

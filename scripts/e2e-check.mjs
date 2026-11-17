@@ -105,8 +105,8 @@ async function runSuite(label, contextOptions) {
   check('오늘의 대화문 = 이어서 학습할 대화문(저녁 메뉴 정하기)', await visible(page.getByTestId('today-dialogue').getByText('저녁 메뉴 정하기')));
   check('모은 핵심 표현 = 10', await textIs(stat(page, '모은 핵심 표현'), 10));
   check('외운 대화문 = 1', await textIs(stat(page, '외운 대화문'), 1));
-  check('오늘 다시 만날 항목: 우선순위 상위 3개만 (압박 없이)', await countIs(page.getByLabel('우선순위 순 복습 목록').locator('li'), 3));
-  check('미구현 암기 화면은 열린 척하지 않음', await visible(page.getByText('5단계 암기 화면은 다음 개발 단계에서 열려요')));
+  check('오늘의 복습: 대화문 단위 안내', await visible(page.getByTestId('today-review').getByText('오늘의 복습')));
+  check('오늘의 대화문: 5단계 암기 화면으로 바로 가는 버튼', ((await page.getByTestId('today-memorize').getAttribute('href')) ?? '').endsWith('/memorize'));
   await checkOverflow('대시보드');
   await page.screenshot({ path: `${SHOTS}/${label}-01-dashboard.png`, fullPage: true });
 

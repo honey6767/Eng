@@ -2,7 +2,7 @@ import { AI_ASK_PROMPT_VERSION, ASK_LIMITS, type AiAskContext, type AiAskRequest
 import type { AiClient } from '@/services/integrations/aiClient';
 import { markApplied, runAiTask, type TaskProgress } from '@/services/ai/taskRunner';
 import type { AiTaskState } from '@/repositories/contentStore';
-import type { AskAnswer, QaDatabase, QaSession, QaTurn } from './qaDb';
+import type { AskAnswer, PhraseAttempt, PhraseSet, QaDatabase, QaSession, QaTurn } from './qaDb';
 
 /**
  * Chunk별 AI 질문
@@ -25,6 +25,13 @@ export interface QaStore {
   allTurns(): Promise<QaTurn[]>;
   getTask(key: string): Promise<AiTaskState | null>;
   putTask(key: string, state: AiTaskState | null): Promise<void>;
+  getPhraseSet(dialogueId: string): Promise<PhraseSet | undefined>;
+  /** 이미 있으면 그대로 두고 false (덮어쓰지 않음) */
+  addPhraseSet(set: PhraseSet): Promise<boolean>;
+  allPhraseSets(): Promise<PhraseSet[]>;
+  attemptsOf(dialogueId: string): Promise<PhraseAttempt[]>;
+  addAttempt(a: PhraseAttempt): Promise<void>;
+  allAttempts(): Promise<PhraseAttempt[]>;
 }
 
 export function createQaStore(db: QaDatabase): QaStore {
@@ -42,6 +49,17 @@ export function createQaStore(db: QaDatabase): QaStore {
       if (state) await db.tasks.put({ key, state });
       else await db.tasks.delete(key);
     },
+    getPhraseSet: (id) => db.phraseSets.get(id),
+    addPhraseSet: (set) =>
+      db.transaction('rw', db.phraseSets, async () => {
+        if (await db.phraseSets.get(set.dialogueId)) return false;
+        await db.phraseSets.add(set);
+        return true;
+      }),
+    allPhraseSets: () => db.phraseSets.toArray(),
+    attemptsOf: async (id) => (await db.phraseAttempts.where('dialogueId').equals(id).toArray()).sort((a, b) => a.at.localeCompare(b.at)),
+    addAttempt: async (a) => void (await db.phraseAttempts.add(a)),
+    allAttempts: () => db.phraseAttempts.toArray(),
   };
 }
 

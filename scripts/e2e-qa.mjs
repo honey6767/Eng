@@ -253,7 +253,7 @@ async function main() {
     await page.getByTestId('qa-session').first().waitFor();
     const sessions = await page.getByTestId('qa-session').allInnerTexts();
     check('대화(Chunk)별로 최신 질문 순', sessions.length === 3 && /look tired/.test(sessions[0]), sessions.map((s) => s.split('\n')[0]).join(' | '));
-    check('Day·Chunk·구분 표시', /Day 11/.test(sessions[0]) && sessions.some((s) => /핵심 Chunk/.test(s)) && sessions.some((s) => /추가 덩어리 표현/.test(s)));
+    check('Day·Chunk·구분 표시', /Day 11/.test(sessions[0]) && sessions.some((s) => /핵심 Chunk/.test(s)) && sessions.some((s) => /✨ 유용한 회화 표현/.test(s)));
     await page.getByTestId('qa-filter-chunk').selectOption({ label: 'which car to buy' });
     check('Chunk 필터', (await page.getByTestId('qa-session').count()) === 1);
     await page.getByTestId('qa-filter-chunk').selectOption('');
@@ -289,7 +289,7 @@ async function main() {
     }
     check('학습 DB 버전 30 그대로', before.version === 30 && after.version === 30, String(after.version));
     const qa = await page.evaluate(() => new Promise((resolve) => {
-      const r = indexedDB.open('my-english-study-ai-qa');
+      const r = indexedDB.open('my-english-study-ai-notes');
       r.onsuccess = () => {
         const db = r.result;
         const tx = db.transaction(['turns', 'sessions'], 'readonly');

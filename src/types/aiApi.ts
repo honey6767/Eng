@@ -25,7 +25,7 @@ export interface AiExtractRequest {
 /** 학습 콘텐츠(문장·Chunk) 생성 — 저장된 자막 텍스트만 보낸다 (영상은 다시 보내지 않음) */
 export const AI_CONTENT_PROMPT_VERSION = 'c1';
 /** 통합 대화문 생성 */
-export const AI_DIALOGUE_PROMPT_VERSION = 'd1';
+export const AI_DIALOGUE_PROMPT_VERSION = 'd2';
 
 export type SeriesKind = 'day' | 'general';
 
@@ -61,9 +61,9 @@ export interface AiDialogueRequest {
 }
 
 /** 학습 자료 전체 (자막 → 원문 문장·문장별 Chunk·공통 핵심 Chunk·Day 통합 대화문) */
-export const AI_PACK_PROMPT_VERSION = 'p4';
+export const AI_PACK_PROMPT_VERSION = 'p5';
 /** 이미 저장된 원문 문장 → 공통 핵심 Chunk·Day 통합 대화문 */
-export const AI_DAYPACK_PROMPT_VERSION = 'dp4';
+export const AI_DAYPACK_PROMPT_VERSION = 'dp5';
 
 export interface AiPackRequest {
   task: 'pack';
@@ -146,7 +146,36 @@ export interface AiAskRequest {
 
 export const ASK_LIMITS = { questionChars: 500, minQuestionChars: 2, historyTurns: 3, historyAnswerChars: 600, fieldChars: 400, maxSentences: 2, maxExamples: 3, maxTurns: 200 } as const;
 
-export type AiTaskRequest = AiExtractRequest | AiContentRequest | AiDialogueRequest | AiPackRequest | AiDayPackRequest | AiAskRequest;
+/**
+ * 기존 대화문의 ✨ 유용한 회화 표현 분석 — 사용자가 고른 대화문 1개당 1회 (자동 호출 없음).
+ * 대화문 줄과 제외할 핵심 Chunk만 보낸다. 같은 대화문은 서버에 보관된 결과를 다시 쓴다.
+ */
+export const AI_PHRASES_PROMPT_VERSION = 'ph1';
+
+export interface AiPhrasesRequest {
+  task: 'phrases';
+  dialogueId: string;
+  lines: { speaker: 'A' | 'B'; en: string }[];
+  /** 핵심 Chunk (✨에서 제외) */
+  exclude: string[];
+  promptVersion: string;
+}
+
+export const PHRASES_LIMITS = { minLines: 2, maxLines: 24, lineChars: 300, maxExclude: 15, excludeChars: 120 } as const;
+
+/** 읽기 전용 사용량 조회 (Gemini를 부르지 않음) */
+export const AI_USAGE_PATH = '/api/ai/usage';
+export interface AiUsageResponse {
+  ok: true;
+  /** 태평양 시간 기준 날짜 */
+  date: string;
+  requests: number;
+  dailyRequests: number;
+  ask: { used: number; cap: number };
+  phrases: { used: number };
+}
+
+export type AiTaskRequest = AiExtractRequest | AiContentRequest | AiDialogueRequest | AiPackRequest | AiDayPackRequest | AiAskRequest | AiPhrasesRequest;
 
 export const DAYPACK_LIMITS = { minSentences: 1, maxSentences: 20, sentenceChars: 500, chunkChars: 120, maxChunksPerSentence: 8 } as const;
 

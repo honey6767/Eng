@@ -94,7 +94,11 @@ function mockDayPack(sentences: { number: number; text: string }[], dayLabel: st
   sentences.forEach((s, i) => {
     lines.push({ speaker: i % 2 === 0 ? 'A' : 'B', en: s.text, ko: `(번역) ${s.text}`, sourceSentenceNumber: s.number, chunkTexts: core.length && findForm(s.text, core[0].parts) ? [core[0].text] : [] });
     if (i === 0) lines.push({ speaker: 'B', en: 'Same here, honestly.', ko: '나도 그래, 솔직히.', sourceSentenceNumber: 0, chunkTexts: [] });
+    if (i === 1) lines.push({ speaker: 'A', en: 'I know what you mean.', ko: '무슨 말인지 알아.', sourceSentenceNumber: 0, chunkTexts: [] });
   });
+  // 실제 대화문처럼 8줄 이상 (✨ 상한은 줄 수의 40%)
+  lines.push({ speaker: lines.length % 2 === 0 ? 'A' : 'B', en: "Let's figure it out after lunch.", ko: '점심 먹고 해결해 보자.', sourceSentenceNumber: 0, chunkTexts: [] });
+  lines.push({ speaker: lines.length % 2 === 0 ? 'A' : 'B', en: 'Sure, no big deal.', ko: '그래, 별일 아니야.', sourceSentenceNumber: 0, chunkTexts: [] });
   const usedAs = core.length ? [...new Set(sentences.map((s) => findForm(s.text, core[0].parts)).filter((x): x is string => !!x))] : [];
   return {
     coreChunks: core,
@@ -104,6 +108,7 @@ function mockDayPack(sentences: { number: number; text: string }[], dayLabel: st
       situation: '퇴근 후 지친 두 동료가 카페에서 이야기합니다.',
       lines,
       chunkNotes: core.map((c) => ({ text: c.text, kind: 'core', usedAs, meaningInContext: `여기서는 ${c.meaningKo}`, nuance: '편한 사이의 말투', whyUsed: '피곤함을 부드럽게 말하려고', example: { en: `I ${c.text} a break.`, ko: '좀 쉬고 싶다.' } })),
+      usefulPhrases: mockUsefulPhrases(lines.map((l) => l.en), core.map((c) => c.text)),
     },
     notes: '',
   };
@@ -121,6 +126,26 @@ export function mockPackResult(r: AiPackRequest) {
 
 export function mockDayPackResult(r: AiDayPackRequest) {
   return mockDayPack(r.sentences, r.dayNumber ? `Day ${r.dayNumber}` : '영상', r.transcript ?? '');
+}
+
+/** 가짜 ✨ 유용한 회화 표현: 알려진 회화 표현이 대화문에 있으면 (핵심 Chunk 제외), 일부러 문제 있는 항목도 섞어 앱의 걸러내기를 확인 */
+const MOCK_USEFUL: { base: string; forms: string[]; category: string; meaningKo: string; pattern?: string; slotNote?: string; swapExamples?: { en: string; ko: string; note: string }[] }[] = [
+  { base: 'I know what you mean', forms: ['I know what you mean'], category: 'reaction', meaningKo: '무슨 말인지 알아' },
+  { base: 'Same here', forms: ['Same here'], category: 'reaction', meaningKo: '나도 그래' },
+  { base: 'take someone up on something', forms: ['take you up on'], category: 'phrasal', meaningKo: '(제안을) 받아들이다' },
+  { base: 'figure out', forms: ['figure it out', 'figure out'], category: 'phrasal', meaningKo: '알아내다, 해결하다' },
+  { base: "I'm so ready for", forms: ["I'm so ready for"], category: 'pattern', meaningKo: '~할 준비가 완전히 됐어', pattern: "I'm so ready for + 명사", slotNote: '명사 자리: 기다리던 것', swapExamples: [{ en: "I'm so ready for the weekend", ko: '주말이 너무 기다려져', note: '' }, { en: "I'm so ready for", ko: '(패턴에 안 맞는 예)', note: '' }] },
+  { base: 'no big deal', forms: ['no big deal', 'No big deal'], category: 'idiom', meaningKo: '별일 아니야' },
+];
+export function mockUsefulPhrases(lines: string[], exclude: string[]) {
+  const text = lines.join('\n').toLowerCase();
+  const out = MOCK_USEFUL.filter((p) => p.forms.some((f) => text.includes(f.toLowerCase())) && !exclude.some((x) => p.base.toLowerCase().includes(x.toLowerCase())))
+    .map((p) => ({ base: p.base, usedAs: p.forms.filter((f) => text.includes(f.toLowerCase())), category: p.category, meaningKo: p.meaningKo, nuance: `${p.base}의 이 대화 속 뉘앙스`, usage: '친구와의 일상 대화', pattern: p.pattern ?? '', slotNote: p.slotNote ?? '', swapExamples: p.swapExamples ?? [] }));
+  // 대화문에 없는 표현 · 핵심 Chunk와 같은 표현 · 한 단어 — 앱이 빼야 함
+  out.push({ base: 'hit the road', usedAs: ['hit the road'], category: 'idiom', meaningKo: '출발하다', nuance: '', usage: '', pattern: '', slotNote: '', swapExamples: [] });
+  if (exclude[0]) out.push({ base: exclude[0], usedAs: [exclude[0]], category: 'chunk', meaningKo: '핵심과 중복', nuance: '', usage: '', pattern: '', slotNote: '', swapExamples: [] });
+  out.push({ base: 'honestly', usedAs: ['honestly'], category: 'chunk', meaningKo: '솔직히', nuance: '', usage: '', pattern: '', slotNote: '', swapExamples: [] });
+  return out;
 }
 
 /** 가짜 AI 질문 답변: 받은 문맥(Chunk·이전 대화)을 답에 드러내 테스트에서 확인할 수 있게 */
@@ -143,13 +168,14 @@ export function mockAskResult(r: AiAskRequest) {
 export function mockDialogueResult(r: AiDialogueRequest) {
   const used = r.chunks.slice(0, Math.max(2, r.chunks.length - 1));
   const lines = used.map((c, i) => ({ speaker: i % 2 === 0 ? 'A' : 'B', en: `Well, ${c.text} is exactly what I mean.`, ko: `음, 그게 바로 '${c.meaningKo}'라는 뜻이야.`, chunkRefs: [c.ref] }));
-  lines.push({ speaker: lines.length % 2 === 0 ? 'A' : 'B', en: 'Sounds good to me.', ko: '나도 좋아.', chunkRefs: [] });
+  lines.push({ speaker: lines.length % 2 === 0 ? 'A' : 'B', en: 'Sounds good to me. I know what you mean.', ko: '나도 좋아. 무슨 말인지 알아.', chunkRefs: [] });
   return {
     title: '퇴근 후 카페에서',
     situation: '퇴근한 두 친구가 카페에서 오늘 있었던 일을 이야기합니다.',
     lines,
     chunkNotes: used.map((c) => ({ ref: c.ref, usedAs: c.text, meaningInContext: `여기서는 ${c.meaningKo}`, nuance: '편한 사이의 말투', whyUsed: '상대의 말에 자연스럽게 이어 가려고', example: { en: `${c.text} again.`, ko: `다시 ${c.meaningKo}.` } })),
     unusedRefs: r.chunks.slice(used.length).map((c) => c.ref),
+    usefulPhrases: mockUsefulPhrases(lines.map((l) => l.en), r.chunks.map((c) => c.text)),
     notes: '',
   };
 }
@@ -174,6 +200,14 @@ export function createMockGemini(): GeminiClient & { createCalls: string[]; getC
     createCalls,
     getCalls,
     async create(input) {
+      if (input.task === 'phrases') {
+        // '[실패]'가 든 줄이 있으면 처리 후 실패 (실패 기록 확인용)
+        createCalls.push(`phrases:${input.dialogueId}`);
+        const id = `mock-interaction-${++seq}-phrases`;
+        const fail = input.lines.some((l) => l.en.includes('[실패]'));
+        jobs.set(id, fail ? { videoId: 'mockFail', durationSec: 0, polls: 0 } : { videoId: 'phrases', durationSec: 0, polls: 0, text: JSON.stringify({ usefulPhrases: mockUsefulPhrases(input.lines.map((l) => l.en), input.exclude) }) });
+        return { kind: 'created', interactionId: id, status: 'in_progress' };
+      }
       if (input.task === 'ask') {
         // 가짜 질문 답변: 질문에 '[실패]'가 있으면 처리 후 실패, '[한도]'면 무료 한도 거절 (실패 처리 확인용)
         createCalls.push(`ask:${input.sessionId}:${input.turn}`);

@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { contentStore } from '@/repositories';
+import { contentStore, repos } from '@/repositories';
 import { useLiveData } from '@/hooks/useLiveData';
 import { useToast } from '@/hooks/useToast';
 import { blankIndexes, blankPlanOf, DEFAULT_BLANK_LEVELS, normalizedRanks, tokensOf } from '@/services/prep/blanks';
-import type { DialogueProgress, MemorizeStep, Rating } from '@/types/models';
+import type { DialogueProgress, MemorizeStep, Rating, ReviewState, StudyLog } from '@/types/models';
+import { dayLabelOf, isReviewDue, memorizedDate, recordReview, REVIEW_RATING_LABEL, reviewDateLabel, scheduleAfterMemorized, virtualState } from '@/services/dialogueReview';
+import { intervalDaysForIndex } from '@/services/scheduler';
+import { createId } from '@/utils/id';
+import { toDateKey } from '@/utils/date';
 import { STEP_NAMES } from '@/utils/labels';
+import { wordsOf } from '@/utils/chunkMatch';
+import { useUseful } from '@/components/dialogue/UsefulPanel';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -25,7 +31,10 @@ const ACCURACY: Record<Rating, number> = { easy: 1, hard: 0.6, wrong: 0.2 };
 export function MemorizePage() {
   const { id = '' } = useParams();
   const toast = useToast();
-  const data = useLiveData(() => contentStore.readDialogueStudy(id), [id]);
+  const data = useLiveData(async () => {
+    const study = await contentStore.readDialogueStudy(id);
+    return study ? { ...study, review: (await repos.reviewStates.get('dialogue', id)) ?? null } : study;
+  }, [id]);
   const [step, setStep] = useState<MemorizeStep | null>(null);
   const [levels, setLevels] = useState<Record<3 | 4, number>>(DEFAULT_BLANK_LEVELS);
   const [firstLetter, setFirstLetter] = useState(true);
@@ -37,7 +46,10 @@ export function MemorizePage() {
   useEffect(() => {
     if (!data || step !== null) return;
     const p = data.progress;
-    setStep(p?.currentStep ?? 1);
+    // 오늘 복습할 차례면 5단계(보지 않고 말하기)로 바로 연다
+    const at = memorizedDate(p);
+    const review = data.review ?? (at ? virtualState(id, at) : null);
+    setStep(p?.memorized && isReviewDue(review) ? 5 : (p?.currentStep ?? 1));
     setLevels({ 3: p?.blankLevels?.[3] ?? DEFAULT_BLANK_LEVELS[3], 4: p?.blankLevels?.[4] ?? DEFAULT_BLANK_LEVELS[4] });
   }, [data, step]);
   useEffect(() => {
@@ -46,16 +58,34 @@ export function MemorizePage() {
   }, [step]);
 
   const plan = useMemo(() => (data ? blankPlanOf(data.dialogue) : null), [data]);
+  // ✨ 유용한 회화 표현 — 1단계 표시용 (기존 대화문의 분석 결과는 빈칸 자료를 바꾸지 않음)
+  const useful = useUseful(data?.dialogue);
   if (data === undefined || step === null) return <Loading />;
   if (data === null || !plan) return <NotFoundPage message="대화문을 찾을 수 없어요." />;
   const { dialogue, progress } = data;
   const level = step === 3 || step === 4 ? levels[step] : 0;
+  const memorizedAt = memorizedDate(progress);
+  const reviewState: ReviewState | null = data.review ?? (memorizedAt ? virtualState(dialogue.id, memorizedAt) : null);
+
+  const rateReview = async (rating: Rating) => {
+    const next = recordReview(dialogue.id, data.review, memorizedAt, rating);
+    await repos.reviewStates.put(next);
+    await log(rating, true);
+    toast(rating === 'wrong' ? '오늘 한 번 더 복습해요. 다시 외운 뒤 평가해 주세요.' : `복습 완료 — 다음 복습: ${reviewDateLabel(next.nextReviewAt)}`);
+  };
   const numberOf = new Map(data.sentences.map((s) => [s.id, s.aiNumber ?? s.order]));
 
   const save = async (patch: Partial<DialogueProgress>) => {
     const now = new Date().toISOString();
     const base: DialogueProgress = progress ?? { id: dialogue.id, dialogueId: dialogue.id, currentStep: 1, highestCompletedStep: 0, stepResults: [], memorized: false, memorizedAt: null, blankMastery: {}, updatedAt: now };
     await contentStore.putDialogueProgress({ ...base, ...patch, blankLevels: { ...base.blankLevels, ...levels, ...patch.blankLevels }, updatedAt: now });
+  };
+
+  /** 학습 기록 한 줄 (홈의 '오늘 학습' 횟수) */
+  const log = (rating: Rating, isReview: boolean) => {
+    const now = new Date();
+    const entry: StudyLog = { id: createId(), timestamp: now.toISOString(), date: toDateKey(now), activity: 'dialogue_step', itemType: 'dialogue', itemId: dialogue.id, step, rating, accuracy: ACCURACY[rating], isReview };
+    return repos.studyLogs.add(entry);
   };
 
   const rate = async (rating: Rating) => {
@@ -70,7 +100,12 @@ export function MemorizePage() {
       memorized,
       memorizedAt: memorized ? (progress?.memorizedAt ?? new Date().toISOString()) : null,
     });
-    if (memorized && step === 5) toast('대화문을 통째로 외웠어요!');
+    await log(rating, false);
+    // 처음 암기를 마친 순간: 1일 뒤 첫 복습 일정 (이미 일정이 있으면 그대로)
+    const first = memorized && !progress?.memorized ? scheduleAfterMemorized(dialogue.id, data.review) : null;
+    if (first) await repos.reviewStates.put(first);
+    if (first) toast('대화문을 통째로 외웠어요! 내일 첫 복습이 잡혔어요.');
+    else if (memorized && step === 5) toast('대화문을 통째로 외웠어요!');
     else if (done) toast(`${step}단계 완료 — 다음 단계로 넘어가요`);
     else toast('이 단계를 한 번 더 해 봐요');
     if (next !== step) setStep(next);
@@ -79,6 +114,15 @@ export function MemorizePage() {
   return (
     <div className="space-y-4" data-testid="memorize-page">
       <PageHeader back={{ to: `/dialogues/${dialogue.id}`, label: '대화문' }} title={dialogue.title} description="대화문을 통째로 외워요. 단계마다 빈칸이 늘어나요." />
+
+      {reviewState && progress?.memorized && (
+        <ReviewCard
+          due={isReviewDue(reviewState)}
+          label={dayLabelOf(dialogue.sourceDays ?? [], '이 대화문')}
+          state={reviewState}
+          onRate={(r) => void rateReview(r)}
+        />
+      )}
 
       <div className="flex gap-1 overflow-x-auto" role="tablist" aria-label="암기 단계">
         {STEPS.map((s) => {
@@ -134,9 +178,9 @@ export function MemorizePage() {
           )}
         </div>
         <p className="text-xs text-subtle">
-          {step === 1 && '노란 표시 = 강사가 가르친 핵심 Chunk, 점선 표시 = AI가 찾은 추가 덩어리 표현이에요. 소리 내어 몇 번 읽어 보세요.'}
+          {step === 1 && '노란 표시 = 강사가 가르친 ★ 핵심 Chunk, 하늘색 표시 = ✨ 유용한 회화 표현이에요. 소리 내어 몇 번 읽어 보세요.'}
           {step === 2 && '핵심 Chunk가 빈칸이에요. 빈칸을 누르면 정답이 보여요.'}
-          {step === 3 && '핵심 Chunk에 더해 추가 덩어리 표현과 주요 단어가 빈칸이에요. 빈칸 양을 조절할 수 있어요.'}
+          {step === 3 && '핵심 Chunk에 더해 ✨ 유용한 회화 표현과 주요 단어가 빈칸이에요. 빈칸 양을 조절할 수 있어요.'}
           {step === 4 && '문장 대부분이 빈칸이에요. 한국어를 보고 영어로 말해 보세요.'}
           {step === 5 && '영어를 보지 않고 한국어만 보고 대화 전체를 말해 보세요. 줄을 누르면 영어가 보여요.'}
         </p>
@@ -147,6 +191,8 @@ export function MemorizePage() {
           {dialogue.lines.map((line) => {
             const en = line.segments.map((s) => s.text).join(' ');
             const ranks = normalizedRanks(plan, line.id);
+            const wpos = wordsOf(en);
+            const uspans = useful.model?.spans.get(line.id) ?? [];
             const blanks = blankIndexes(ranks, line.id, step, level);
             const lineOpen = revealAll || revealed.has(`${line.id}:all`);
             const isA = line.speaker === 'A';
@@ -164,7 +210,7 @@ export function MemorizePage() {
                       {tokensOf(en).map((t, i) => {
                         if (!t.word) return <span key={i}>{t.text}</span>;
                         const isChunk = ranks[t.index] === 1;
-                        const isExtra = ranks[t.index] === 2;
+                        const isExtra = ranks[t.index] === 2 || (step === 1 && !isChunk && uspans.some((u) => wpos[t.index] && wpos[t.index].start >= u.s && wpos[t.index].end <= u.e));
                         const key = `${line.id}:${t.index}`;
                         const hidden = step !== 5 && blanks.has(t.index) && !revealAll && !revealed.has(key);
                         if (hidden)
@@ -174,7 +220,7 @@ export function MemorizePage() {
                               type="button"
                               onClick={() => setRevealed(new Set([...revealed, key]))}
                               data-testid="blank"
-                              className={`mx-px inline-block rounded border-b-2 px-0.5 text-left align-baseline ${isChunk ? 'border-key-ink bg-key/60' : isExtra ? 'border-dashed border-brand bg-brand-soft' : 'border-line-strong bg-canvas'}`}
+                              className={`mx-px inline-block rounded border-b-2 px-0.5 text-left align-baseline ${isChunk ? 'border-key-ink bg-key/60' : isExtra ? 'border-info bg-info-soft' : 'border-line-strong bg-canvas'}`}
                               style={{ minWidth: `${Math.max(2, t.text.length) * 0.62}em` }}
                               aria-label="빈칸 — 눌러서 정답 보기"
                             >
@@ -182,7 +228,7 @@ export function MemorizePage() {
                             </button>
                           );
                         return (
-                          <span key={i} className={step === 1 && isChunk ? 'rounded bg-key px-0.5' : step === 1 && isExtra ? 'rounded bg-brand-soft px-0.5 underline decoration-dashed decoration-brand underline-offset-4' : blanks.has(t.index) ? 'font-semibold text-brand' : ''}>
+                          <span key={i} className={step === 1 && isChunk ? 'rounded bg-key px-0.5' : step === 1 && isExtra ? 'rounded bg-info-soft px-0.5' : blanks.has(t.index) ? 'font-semibold text-brand' : ''}>
                             {t.text}
                           </span>
                         );
@@ -215,5 +261,37 @@ export function MemorizePage() {
         </div>
       </Card>
     </div>
+  );
+}
+
+/** 누적 복습 — 오늘 복습할 차례면 평가 버튼, 아니면 다음 복습일 */
+function ReviewCard({ due, label, state, onRate }: { due: boolean; label: string; state: ReviewState; onRate: (r: Rating) => void }) {
+  const no = Math.max(1, state.reviewCount);
+  if (!due)
+    return (
+      <p className="rounded-2xl bg-ok-soft px-4 py-3 text-sm text-ok" data-testid="review-next">
+        암기 완료 · 다음 복습: <b>{reviewDateLabel(state.nextReviewAt)}</b> ({intervalDaysForIndex(state.intervalIndex)}일 간격)
+      </p>
+    );
+  return (
+    <Card className="space-y-3 border-brand/40 p-4" data-testid="review-card">
+      <div>
+        <p className="font-extrabold">
+          오늘 복습할 차례예요 · {label} · {no}번째 복습
+        </p>
+        <p className="mt-1 text-sm text-muted">5단계 ‘보지 않고 말하기’로 대화문 전체를 떠올려 본 뒤, 얼마나 기억했는지 골라 주세요. 다음 복습일이 자동으로 정해져요.</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="secondary" onClick={() => onRate('wrong')} data-testid="review-wrong">
+          {REVIEW_RATING_LABEL.wrong}
+        </Button>
+        <Button size="sm" variant="soft" onClick={() => onRate('hard')} data-testid="review-hard">
+          {REVIEW_RATING_LABEL.hard}
+        </Button>
+        <Button size="sm" onClick={() => onRate('easy')} data-testid="review-easy">
+          {REVIEW_RATING_LABEL.easy}
+        </Button>
+      </div>
+    </Card>
   );
 }

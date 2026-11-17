@@ -1,4 +1,4 @@
-import type { AiExtractRequest, AiExtractResponse, AiFailureCode } from '../../src/types/aiApi.ts';
+import type { AiExtractRequest, AiExtractResponse, AiFailureCode, AiUsageResponse } from '../../src/types/aiApi.ts';
 import { isValidVideoId } from '../../src/utils/youtubeUrl.ts';
 import { bodyHashSource, taskOf, validateTaskRequest } from './tasks.ts';
 import type { GeminiClient } from './gemini.ts';
@@ -153,7 +153,7 @@ async function handleInner(input: { idempotencyKey: string | null; body: unknown
   const workKey = workKeyOf(bodyHash);
   // 자막 추출만 영상 분량을 쓴다. 문장·Chunk·대화문은 텍스트만 보내므로 요청 수만 센다
   const task = taskOf(req);
-  const ledgerVideoId = req.task === 'dialogue' ? 'dialogue' : req.task === 'ask' ? 'ask' : req.videoId;
+  const ledgerVideoId = req.task === 'dialogue' ? 'dialogue' : req.task === 'ask' ? 'ask' : req.task === 'phrases' ? 'phrases' : req.videoId;
   const videoSec = task === 'extract' ? (req as { durationSec: number }).durationSec : 0;
   const { store, caps } = deps;
 
@@ -269,4 +269,15 @@ export function sweepLedger(store: LedgerStore, now: number, retention: { result
 export async function workKeyForBody(body: unknown): Promise<string | null> {
   const req = validateTaskRequest(body);
   return req ? workKeyOf(await sha256(bodyHashSource(req))) : null;
+}
+
+/** 읽기 전용 사용량 (오늘·태평양 시간) — Gemini를 부르지 않고 기록도 바꾸지 않는다 */
+export function readUsage(store: LedgerStore, caps: AiCaps, now = Date.now()): AiUsageResponse {
+  const date = pacificDate(now);
+  const u = store.getUsage(date);
+  return {
+    ok: true, date, requests: u.requests, dailyRequests: caps.dailyRequests,
+    ask: { used: store.countCounted('ask', date), cap: caps.dailyAsk ?? DEFAULT_AI_CAPS.dailyAsk ?? 10 },
+    phrases: { used: store.countCounted('phrases', date) },
+  };
 }

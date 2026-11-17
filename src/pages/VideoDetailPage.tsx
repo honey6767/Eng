@@ -17,6 +17,7 @@ import { KeySentenceManager } from '@/components/sentences/KeySentenceManager';
 import { ExpressionNotesPanel } from '@/components/sentences/ExpressionNotesPanel';
 import { Button, LinkButton } from '@/components/ui/Button';
 import { DialogueView } from '@/components/dialogue/DialogueView';
+import { UsefulPanel, useUseful } from '@/components/dialogue/UsefulPanel';
 import { useToast } from '@/hooks/useToast';
 import { useYouTubeStatus } from '@/hooks/useYouTubeStatus';
 import { startVideo } from '@/services/studyQueue';
@@ -353,6 +354,8 @@ function DialogueList({
 /** Day 통합 대화문 — 영상 화면에서 바로 읽고 암기로 이어 간다 */
 function DayDialogueInline({ dialogue, sentences }: { dialogue: Dialogue; sentences: KeySentence[] }) {
   const [showKorean, setShowKorean] = useState(true);
+  const useful = useUseful(dialogue);
+  const [openRef, setOpenRef] = useState<string | null>(null);
   const used = new Set(dialogue.lines.map((l) => l.sourceSentenceId).filter(Boolean));
   const ai = sentences.filter((s) => s.origin === 'ai_extracted' || used.has(s.id)).sort((a, b) => (a.aiNumber ?? a.order) - (b.aiNumber ?? b.order));
   return (
@@ -373,7 +376,11 @@ function DayDialogueInline({ dialogue, sentences }: { dialogue: Dialogue; senten
         <p className="font-bold">{dialogue.title}</p>
         <p className="mt-0.5 text-sm text-muted">{dialogue.situation}</p>
       </div>
-      <DialogueView lines={dialogue.lines} sentences={sentences} showKorean={showKorean} highlightKeys extraIds={new Set((dialogue.chunkUsages ?? []).filter((u) => u.kind === 'extra').map((u) => u.learningItemId))} />
+      <DialogueView lines={dialogue.lines} sentences={sentences} showKorean={showKorean} highlightKeys useful={useful.model} openRef={openRef} onOpen={setOpenRef} />
+      <UsefulPanel dialogue={dialogue} useful={useful} onOpen={(k) => {
+        setOpenRef(k);
+        document.getElementById(`dl-${k.split(':').pop()}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }} />
       {ai.length > 0 && (
         <div className="rounded-xl bg-canvas p-3 text-sm" data-testid="source-map">
           <p className="mb-1 text-xs font-semibold text-subtle">원문 문장 연결</p>
@@ -395,8 +402,8 @@ function DayDialogueInline({ dialogue, sentences }: { dialogue: Dialogue; senten
             <li key={u.learningItemId} className="rounded-xl border border-line p-3 text-sm">
               <p className="flex flex-wrap items-center gap-1.5">
                 <mark className={`en rounded px-1 font-bold text-ink ${u.kind === 'extra' ? 'bg-brand-soft underline decoration-dashed decoration-brand underline-offset-4' : 'bg-key'}`}>{u.text}</mark>
-                {u.kind === 'extra' && <Badge tone="info">추가 덩어리 표현 · AI</Badge>}
-                {u.kind === 'core' && <Badge tone="key">핵심 Chunk</Badge>}
+                {u.kind === 'extra' && <Badge tone="info">✨ 유용한 회화 표현</Badge>}
+                {u.kind === 'core' && <Badge tone="key">★ 핵심 Chunk</Badge>}
                 <span className="text-xs text-subtle">대화 속 형태: {u.usedAs}</span>
               </p>
               {u.meaningInContext && <p className="mt-1"><span className="text-xs font-semibold text-subtle">이 대화의 의미 · </span>{u.meaningInContext}</p>}

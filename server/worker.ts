@@ -21,7 +21,7 @@ import { handleYouTubeApi } from './youtube/handler.ts';
 import { QuotaTracker, memoryQuotaStore, DEFAULT_LOCAL_CAP } from './youtube/quota.ts';
 import { checkOrigin, parseAllowedOrigins } from './originPolicy.ts';
 import { AUTH_CHECK_PATH, memoryFailureLimiter, verifyAccess } from './accessAuth.ts';
-import { AI_EXTRACT_PATH } from '../src/types/aiApi.ts';
+import { AI_EXTRACT_PATH, AI_USAGE_PATH } from '../src/types/aiApi.ts';
 
 /** AI 요청 장부 Durable Object 클래스 — 배포 설정(new_sqlite_classes)에서 이 이름으로 선언한다 */
 export { AiLedger } from './ai/durableObject.ts';
@@ -59,7 +59,8 @@ export default {
     const decision = checkOrigin(request.headers.get('Origin'), parseAllowedOrigins(env.ALLOWED_ORIGIN));
     if (!decision.ok) return new Response('Forbidden', { status: 403, headers: BASE_HEADERS });
     const cors: Record<string, string> = { 'Access-Control-Allow-Origin': decision.origin };
-    const isAi = url.pathname === AI_EXTRACT_PATH;
+    const isUsage = url.pathname === AI_USAGE_PATH;
+    const isAi = url.pathname === AI_EXTRACT_PATH || isUsage;
     if (request.method === 'OPTIONS') {
       const allow = isAi
         ? { 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Authorization, Accept, Content-Type, Idempotency-Key' }
@@ -87,6 +88,15 @@ export default {
     if (isAi) {
       const unavailable = { ok: false, state: 'failed', requestId: null, code: 'ledger_unavailable', message: 'AI 요청 장부를 쓸 수 없어 요청하지 않았어요.', consumed: false };
       if (!env.AI_LEDGER) return json(503, unavailable);
+      if (isUsage) {
+        try {
+          const stub = env.AI_LEDGER.get(env.AI_LEDGER.idFromName(AI_LEDGER_NAME));
+          const res = await stub.fetch(new Request('https://ai-ledger/usage', { method: 'POST' }));
+          return json(res.status, await res.json());
+        } catch {
+          return json(503, unavailable);
+        }
+      }
       const text = await request.text();
       if (text.length > MAX_AI_BODY_BYTES) return json(413, { ok: false, state: 'failed', requestId: null, code: 'bad_request', message: '요청이 너무 커요.', consumed: false });
       try {

@@ -92,6 +92,8 @@ export interface ContentStore {
   setSentenceSelected(id: string, selected: boolean): Promise<void>;
   setChunkSelected(id: string, selected: boolean): Promise<void>;
   readCombine(): Promise<CombineContext>;
+  /** 누적 복습 일정 계산용 (읽기만) */
+  readReviewInput(): Promise<{ dialogues: Dialogue[]; progress: DialogueProgress[]; reviewStates: ReviewState[]; days: DayAssignment[] }>;
   getPrep(): Promise<PrepState>;
   /** 읽고 바꾸기 (한 트랜잭션) */
   updatePrep(fn: (s: PrepState) => PrepState): Promise<PrepState>;
@@ -159,6 +161,13 @@ export function createContentStore(db: StudyDatabase): ContentStore {
         expressions: await db.expressions.toArray(),
         sentences: await db.keySentences.toArray(),
         expressionReviews: await db.reviewStates.where('itemType').equals('expression').toArray(),
+      })),
+    readReviewInput: () =>
+      db.transaction('r', [db.dialogues, db.dialogueProgress, db.reviewStates, db.dayAssignments], async () => ({
+        dialogues: await db.dialogues.toArray(),
+        progress: await db.dialogueProgress.toArray(),
+        reviewStates: await db.reviewStates.where('itemType').equals('dialogue').toArray(),
+        days: await db.dayAssignments.toArray(),
       })),
     getPrep: async () => ({ ...emptyPrepState(), ...(((await db.appMeta.get(META_PREP))?.value as Partial<PrepState> | undefined) ?? {}) }),
     updatePrep: (fn) =>

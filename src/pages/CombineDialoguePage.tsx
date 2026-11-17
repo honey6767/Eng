@@ -139,8 +139,8 @@ export function CombineDialoguePage() {
                           <span className="min-w-0 flex-1">
                             <span className="en font-semibold text-ink">{c.learnText ?? c.expression.text}</span>
                             {c.originText && <span className="ml-1 text-xs text-subtle">(원문: <span className="en">{c.originText}</span>)</span>}
-                            {c.role === 'core' && <Badge tone="key" className="ml-2">{c.coreOf ? `핵심 ${c.coreOf} 활용` : '핵심'}</Badge>}
-                            {c.role === 'extra' && <Badge tone="info" className="ml-2">추가 · AI</Badge>}
+                            {c.role === 'core' && <Badge tone="key" className="ml-2">{c.coreOf ? `★ 핵심 ${c.coreOf} 활용` : '★ 핵심'}</Badge>}
+                            {c.role === 'extra' && <Badge tone="info" className="ml-2">✨ 유용한 표현</Badge>}
                             {c.expression.meaningKo && <span className="ml-2 text-sm text-muted">{c.expression.meaningKo}</span>}
                             {c.learned && <Badge tone="ok" className="ml-2">학습함</Badge>}
                             {c.selected && <Badge tone="brand" className="ml-1">고름</Badge>}
