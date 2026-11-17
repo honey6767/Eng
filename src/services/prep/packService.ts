@@ -9,6 +9,7 @@ import {
 import type { BlankPlan, DayAssignment, Dialogue, DialogueChunkUsage, DialogueLine, DialogueSegment, Expression, KeySentence, LearningItem, Transcript, Video } from '@/types/models';
 import { normalizeExpressionKey } from '@/utils/text';
 import { chunkLabel, matchAllParts, matchParts, partsFrom, wordsOf } from '@/utils/chunkMatch';
+import { isSafeBase, locateChunk, parsePatternFields } from '@/utils/chunkBase';
 import { contentChunkId, planContent, seriesOf, transcriptText, validateContent, type ContentChunk, type ContentResult } from '@/services/content/contentService';
 
 /**
@@ -162,16 +163,24 @@ function validateDayPackObject(raw: Record<string, unknown>, sentences: { number
   const extras: ExtraChunk[] = [];
   const extraSeen = new Set<string>();
   for (const x of Array.isArray(raw.extraChunks) ? (raw.extraChunks as Record<string, unknown>[]) : []) {
-    const text = txt(x?.text, 120);
+    let text = txt(x?.text, 120);
     const sentence = sentences.find((s) => s.number === x?.sentenceNumber);
-    const key = normalizeExpressionKey(text);
-    if (!text || !key || !sentence || extraSeen.has(key)) continue;
-    const parts = partsFrom(text, x.parts);
-    const m = matchParts(sentence.text, parts);
-    if (!m) {
+    if (!text || !sentence) continue;
+    const found = locateChunk(sentence.text, text, x.parts);
+    if (!found) {
       issues.push(`추가 표현 '${text}'는 ${sentence.number}번 문장에서 찾지 못해 뺐어요.`);
       continue;
     }
+    let { parts } = found;
+    const { m } = found;
+    // 기본형으로 줄이면서 뜻이 바뀌는 말(not, too …)을 뺐다면 원문 형태 그대로
+    if (!isSafeBase(m.surface, text)) {
+      issues.push(`'${text}'로 줄이면 뜻이 달라져 원문 형태 '${m.surface}'로 뒀어요.`);
+      text = m.surface;
+      parts = [text];
+    }
+    const key = normalizeExpressionKey(text);
+    if (!key || extraSeen.has(key)) continue;
     if (isCoreVariant(text, core)) {
       issues.push(`'${text}'는 핵심 Chunk의 활용형이라 추가 표현에서 뺐어요.`);
       continue;
@@ -182,6 +191,10 @@ function validateDayPackObject(raw: Record<string, unknown>, sentences: { number
       chunk: {
         text, meaningKo: txt(x.meaningKo, 200), meaningInSentence: txt(x.meaningInSentence), nuance: txt(x.nuance), usage: txt(x.usage), comparison: txt(x.comparison), examples: examplesOf(x.examples),
         ...(parts.length > 1 && m.surface.toLowerCase() !== text.toLowerCase() ? { parts, surface: m.surface } : {}),
+        ...((() => {
+          const pat = parsePatternFields(x, text);
+          return pat ? { pattern: pat.pattern, swaps: pat.swaps } : {};
+        })()),
       },
     });
   }
@@ -412,7 +425,7 @@ export function planPack(ctx: PackContext): PackPlan {
     items.push({
       id: contentChunkId(requestId, exprId), createdAt: now, updatedAt: now, expressionId: exprId, videoId: video.id, sourceType, dayNumber: ctx.dayNumber, kind: 'chunk', dialogueId: null,
       sourceText: sentence.english, timestampSec: sentence.timestampSec, onScreen: false, origin: 'ai_extracted', status: 'confirmed', extractionDraftId: null, legacyKeySentenceId: null, sentenceId,
-      chunk: { meaningInSentence: x.chunk.meaningInSentence, nuance: x.chunk.nuance, usage: x.chunk.usage, comparison: x.chunk.comparison, examples: x.chunk.examples, ...(x.chunk.parts ? { parts: x.chunk.parts } : {}), ...(x.chunk.surface ? { surface: x.chunk.surface } : {}) },
+      chunk: { meaningInSentence: x.chunk.meaningInSentence, nuance: x.chunk.nuance, usage: x.chunk.usage, comparison: x.chunk.comparison, examples: x.chunk.examples, ...(x.chunk.parts ? { parts: x.chunk.parts } : {}), ...(x.chunk.surface ? { surface: x.chunk.surface } : {}), ...(x.chunk.pattern !== undefined ? { pattern: x.chunk.pattern, swaps: x.chunk.swaps ?? [] } : {}) },
       chunkRole: 'extra', selected: false, contentRequestId: requestId,
     });
   }

@@ -2,7 +2,7 @@ import { parseDayNumber } from '@/db/upgradeV2toV3';
 import { AI_DIALOGUE_PROMPT_VERSION, DIALOGUE_LIMITS, type AiDialogueRequest } from '@/types/aiApi';
 import type { Dialogue, DialogueChunkUsage, DialogueLine, DialogueSegment, Expression, LearningItem, Video } from '@/types/models';
 import type { CombineContext } from '@/repositories/contentStore';
-import { rolesByItem } from '@/services/prep/chunkRoles';
+import { extraViewOf, rolesByItem } from '@/services/prep/chunkRoles';
 
 /**
  * 여러 Day의 Chunk를 결합한 통합 대화문
@@ -22,6 +22,10 @@ export interface ChunkCandidate {
   role: 'core' | 'extra' | 'chunk';
   /** 예전 기준 활용형을 핵심 Chunk로 묶었을 때 그 핵심 Chunk (예: could use) */
   coreOf?: string;
+  /** 학습용 기본 Chunk (추가 덩어리 표현은 look super tired → look tired). 대화문 요청에 이 형태를 쓴다 */
+  learnText?: string;
+  /** 원문에 실제로 쓰인 형태 (기본형과 다를 때만) */
+  originText?: string;
   expression: Expression;
   /** 원본 문장 */
   sentence: string | null;
@@ -86,7 +90,12 @@ export function buildCandidateGroups(ctx: CombineContext): CandidateGroup[] {
     const sentence = item.sentenceId ? (sentenceById.get(item.sentenceId)?.english ?? item.sourceText) : item.sourceText;
     const r = roles.get(item.id);
     const role = item.kind === 'chunk' ? (r?.role ?? 'chunk') : 'core';
-    g.chunks.push({ item, role, ...(r?.variantOf ? { coreOf: r.variantOf.text } : {}), expression, sentence: sentence ?? null, learned: learned.has(expression.id), selected: !!item.selected || selectedVia.has(item.id) });
+    const v = item.kind === 'chunk' ? extraViewOf(item, expression) : null;
+    g.chunks.push({
+      item, role, ...(r?.variantOf ? { coreOf: r.variantOf.text } : {}), expression,
+      learnText: v?.base || expression.text, ...(v?.surface ? { originText: v.surface } : {}),
+      sentence: sentence ?? null, learned: learned.has(expression.id), selected: !!item.selected || selectedVia.has(item.id),
+    });
   }
   return [...groups.values()].sort((a, b) => (a.dayNumber ?? 1e6) - (b.dayNumber ?? 1e6) || a.label.localeCompare(b.label));
 }
@@ -119,7 +128,7 @@ export function buildDialogueRequest(groups: CandidateGroup[], checkedItemIds: s
     task: 'dialogue',
     chunks: picked.map(({ c, g }) => ({
       ref: c.item.id,
-      text: c.expression.text.slice(0, DIALOGUE_LIMITS.textChars),
+      text: (c.learnText ?? c.expression.text).slice(0, DIALOGUE_LIMITS.textChars),
       meaningKo: (c.expression.meaningKo ?? '').slice(0, DIALOGUE_LIMITS.meaningChars),
       day: g.dayNumber,
       source: (g.dayNumber ? `Day ${g.dayNumber}` : g.label).slice(0, DIALOGUE_LIMITS.sourceChars),
@@ -191,16 +200,16 @@ export function buildDialogueRecord(text: string, req: AiDialogueRequest, groups
     const found = cand.get(ref);
     if (!found) continue;
     const n = notes.get(ref);
-    const forms = [txt(n?.usedAs, 120), found.c.expression.text].filter(Boolean);
+    const forms = [txt(n?.usedAs, 120), found.c.learnText ?? "", found.c.expression.text].filter(Boolean);
     const form = forms.find((f) => rawLines.some((l) => findSpan(l.en, f)));
     if (!form) {
-      if (rawLines.some((l) => l.refs.includes(ref)) || n) issues.push(`'${found.c.expression.text}'는 대사에서 찾지 못해 사용한 Chunk로 표시하지 않았어요.`);
+      if (rawLines.some((l) => l.refs.includes(ref)) || n) issues.push(`'${found.c.learnText ?? found.c.expression.text}'는 대사에서 찾지 못해 사용한 Chunk로 표시하지 않았어요.`);
       continue;
     }
     usedAsById.set(ref, form);
     const ex = (n?.example ?? {}) as Record<string, unknown>;
     usages.push({
-      learningItemId: ref, ...(found.c.role !== 'chunk' ? { kind: found.c.role } : {}), expressionId: found.c.expression.id, text: found.c.expression.text, usedAs: form, dayNumber: found.g.dayNumber, videoId: found.c.item.videoId,
+      learningItemId: ref, ...(found.c.role !== 'chunk' ? { kind: found.c.role } : {}), expressionId: found.c.expression.id, text: found.c.learnText ?? found.c.expression.text, usedAs: form, dayNumber: found.g.dayNumber, videoId: found.c.item.videoId,
       meaningInContext: txt(n?.meaningInContext), nuance: txt(n?.nuance), whyUsed: txt(n?.whyUsed), example: { en: txt(ex.en, 300), ko: txt(ex.ko, 300) },
     });
   }

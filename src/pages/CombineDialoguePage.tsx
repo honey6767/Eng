@@ -137,7 +137,8 @@ export function CombineDialoguePage() {
                         <label className="flex cursor-pointer items-start gap-2.5 rounded-xl p-2 hover:bg-canvas">
                           <input type="checkbox" className="mt-1" checked={checked.includes(c.item.id)} onChange={() => toggleChunk(c.item.id)} data-testid="combine-chunk" />
                           <span className="min-w-0 flex-1">
-                            <span className="en font-semibold text-ink">{c.expression.text}</span>
+                            <span className="en font-semibold text-ink">{c.learnText ?? c.expression.text}</span>
+                            {c.originText && <span className="ml-1 text-xs text-subtle">(원문: <span className="en">{c.originText}</span>)</span>}
                             {c.role === 'core' && <Badge tone="key" className="ml-2">{c.coreOf ? `핵심 ${c.coreOf} 활용` : '핵심'}</Badge>}
                             {c.role === 'extra' && <Badge tone="info" className="ml-2">추가 · AI</Badge>}
                             {c.expression.meaningKo && <span className="ml-2 text-sm text-muted">{c.expression.meaningKo}</span>}

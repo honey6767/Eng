@@ -479,6 +479,13 @@ export interface ChunkDetail {
   surface?: string;
   /** 핵심 Chunk — 강사가 강의에서 설명한 부분 (자막 인용) */
   taught?: string;
+  /**
+   * 추가 덩어리 표현 — 바꿔 쓸 수 있는 틀 (예: "look + 형용사", 없으면 빈 문자열).
+   * 이 값이 있으면 AI가 기본형 규칙으로 정리한 기록 (표현 text = 학습용 기본 Chunk, surface = 원문 형태)
+   */
+  pattern?: string;
+  /** 추가 덩어리 표현 — 바꿔 넣은 활용 예 (예: look happy, look familiar) */
+  swaps?: string[];
 }
 /** Day 영상에서 왔는지(day), 그 밖의 영상인지(other) */
 export type LearningItemSourceType = 'day' | 'other';

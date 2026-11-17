@@ -61,9 +61,9 @@ export interface AiDialogueRequest {
 }
 
 /** 학습 자료 전체 (자막 → 원문 문장·문장별 Chunk·공통 핵심 Chunk·Day 통합 대화문) */
-export const AI_PACK_PROMPT_VERSION = 'p2';
+export const AI_PACK_PROMPT_VERSION = 'p3';
 /** 이미 저장된 원문 문장 → 공통 핵심 Chunk·Day 통합 대화문 */
-export const AI_DAYPACK_PROMPT_VERSION = 'dp2';
+export const AI_DAYPACK_PROMPT_VERSION = 'dp3';
 
 export interface AiPackRequest {
   task: 'pack';

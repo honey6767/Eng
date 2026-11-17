@@ -33,6 +33,19 @@ export function mockContentResult(r: AiContentRequest) {
   };
 }
 
+/** 가짜 기본형 규칙: 'look super tired' → 기본 Chunk 'look tired' (정도만 강조하는 말 제거) + 바꿔 쓰기 틀 */
+function mockBaseExtras(sentence: string) {
+  const m = /\b(look|looks|feel|feels|seem|seems|sound|sounds)\s+(super|really|so|very)\s+([a-z]+)/i.exec(sentence);
+  if (!m) return [];
+  const verb = m[1].toLowerCase().replace(/s$/, '');
+  const base = `${m[1]} ${m[3]}`;
+  return [{
+    text: base, parts: [m[1], m[3]], surface: m[0], pattern: `${verb} + 형용사`, swaps: [`${verb} happy`, `${verb} familiar`, `${verb} busy`].filter((x) => x !== `${verb} ${m[3].toLowerCase()}`),
+    meaningKo: `${base}의 뜻`, meaningInSentence: `이 문장에서 ${base}`, nuance: '상태를 보고 느낀 그대로 말함', usage: '상대 모습을 보고 말할 때', comparison: '강조 말을 넣으면 정도가 커짐',
+    examples: [{ en: `You ${base} today.`, ko: '오늘 그래 보여.' }],
+  }];
+}
+
 /** parts가 순서대로(사이 단어 2개까지) 문장에 있으면 그 실제 형태 */
 function findForm(sentence: string, parts: string[]): string | null {
   const words = sentence.split(/\s+/);
@@ -64,10 +77,13 @@ function mockDayPack(sentences: { number: number; text: string }[], dayLabel: st
     : [];
   // 추가 덩어리 표현: 핵심 Chunk가 아닌 아는 표현 (활용형 제외)
   const extraChunks = sentences.flatMap((s) =>
-    MOCK_CHUNKS.filter((c) => c !== best?.c && s.text.toLowerCase().includes(c) && !(best && findForm(c, best.parts))).map((c) => ({
-      sentenceNumber: s.number, text: c, parts: [c], meaningKo: `${c}의 뜻`, meaningInSentence: `이 문장에서 ${c}`, nuance: '자연스러운 구어', usage: '일상 대화', comparison: '비슷한 표현보다 가벼움',
-      examples: [{ en: `Let's ${c}.`, ko: `${c} 하자.` }],
-    })),
+    [
+      ...MOCK_CHUNKS.filter((c) => c !== best?.c && s.text.toLowerCase().includes(c) && !(best && findForm(c, best.parts))).map((c) => ({
+        sentenceNumber: s.number, text: c, parts: [c], surface: c, pattern: '', swaps: [] as string[], meaningKo: `${c}의 뜻`, meaningInSentence: `이 문장에서 ${c}`, nuance: '자연스러운 구어', usage: '일상 대화', comparison: '비슷한 표현보다 가벼움',
+        examples: [{ en: `Let's ${c}.`, ko: `${c} 하자.` }],
+      })),
+      ...mockBaseExtras(s.text).map((x) => ({ sentenceNumber: s.number, ...x })),
+    ],
   );
   const lines: { speaker: 'A' | 'B'; en: string; ko: string; sourceSentenceNumber: number; chunkTexts: string[] }[] = [];
   sentences.forEach((s, i) => {
@@ -92,7 +108,7 @@ export function mockPackResult(r: AiPackRequest) {
   const c = mockContentResult({ ...r, task: 'content' });
   const day = mockDayPack(c.sentences, r.dayNumber ? `Day ${r.dayNumber}` : '영상', r.transcript);
   // 문장별 chunks = 추가 덩어리 표현 (핵심 Chunk·활용형 제외) — 실제 Gemini처럼 가끔 활용형을 섞어 앱의 걸러내기도 확인
-  const sentences = c.sentences.map((s) => ({ ...s, chunks: s.chunks.map((k) => ({ ...k, parts: [k.text] })) }));
+  const sentences = c.sentences.map((s) => ({ ...s, chunks: [...s.chunks.map((k) => ({ ...k, parts: [k.text], surface: k.text, pattern: '', swaps: [] as string[] })), ...mockBaseExtras(s.text)] }));
   const { extraChunks: _e, ...rest } = day;
   void _e;
   return { sentences, ...rest, notes: '' };

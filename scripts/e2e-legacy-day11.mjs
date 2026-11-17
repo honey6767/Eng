@@ -163,6 +163,15 @@ async function main() {
     const extraTexts = await page.locator('[data-testid="extra-chunks"] [data-testid="content-chunk"] > div > span.en').allInnerTexts();
     check('get much sleep 등 나머지는 추가 덩어리 표현으로 분리', extraTexts.length === 4 && extraTexts.some((t) => /get much sleep/.test(t)) && !extraTexts.some((t) => /\bcould\b/.test(t)), extraTexts.join(', '));
     check('추가 덩어리 표현 카드에 AI 추가 표시', /추가 덩어리 표현/.test(await page.getByTestId('extra-chunks').innerText()) && /AI 추가/.test(await page.getByTestId('extra-chunks').innerText()));
+    const tiredRow = page.locator('[data-testid="extra-chunks"] [data-testid="content-chunk"]').filter({ hasText: 'look super tired' });
+    check('look super tired는 기본 Chunk look tired로 표시', (await tiredRow.getByTestId('chunk-base').innerText()) === 'look tired');
+    const origin = await tiredRow.getByTestId('chunk-origin').innerText();
+    check('원문 표현과 기본 Chunk 구분 (super를 뺐다고 표시)', /look super tired/.test(origin) && /look tired/.test(origin) && /super/.test(origin) && /화면에서만/.test(origin), origin);
+    const pat = await tiredRow.getByTestId('chunk-pattern').innerText();
+    check('바꿔 쓰기: look + 형용사 · look happy · look familiar · look busy', /look \+ 형용사/.test(pat) && ['look happy', 'look familiar', 'look busy'].every((x) => pat.includes(x)), pat.replace(/\n/g, ' '));
+    check('문맥 문장은 원문 그대로 (super 포함)', /You look super tired\./.test(await tiredRow.getByTestId('chunk-context').innerText()));
+    const sleepRow = page.locator('[data-testid="extra-chunks"] [data-testid="content-chunk"]').filter({ hasText: "didn't get much sleep" });
+    check("didn't get much sleep은 줄이지 않음 (much는 덩어리의 일부)", (await sleepRow.getByTestId('chunk-base').innerText()) === "didn't get much sleep" && (await sleepRow.getByTestId('chunk-origin').count()) === 0);
     check('개수 표시', /핵심 Chunk 1개 · 추가 표현 4개/.test(await page.getByTestId('content-counts').innerText()), await page.getByTestId('content-counts').innerText());
     await page.screenshot({ path: `${SHOTS}/legacy-01-day11.png`, fullPage: true });
 
@@ -172,6 +181,7 @@ async function main() {
     const cands = await day11Card.locator('label').allInnerTexts();
     const variantCands = cands.filter((t) => /could (seriously|really) use|could use some/.test(t.split('\n')[0]));
     check('통합 대화문 후보: could use(핵심)·추가 표현 4개, 활용형은 따로 없음', cands.length === 5 && variantCands.length === 0 && cands.some((t) => /^could use/.test(t) && /핵심/.test(t)) && cands.filter((t) => /추가 · AI/.test(t)).length === 4, cands.map((t) => t.split('\n')[0]).join(' | '));
+    check('통합 대화문 후보에도 기본 Chunk look tired (원문: look super tired)', cands.some((t) => /^look tired/.test(t) && /원문: look super tired/.test(t)), cands.find((t) => /tired/.test(t))?.split('\n')[0]);
     check('활용형의 고름 표시는 could use 후보에 이어짐', cands.some((t) => /^could use/.test(t) && /고름/.test(t)));
 
     await page.goto(`${BASE}/extraction`);

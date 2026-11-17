@@ -375,3 +375,53 @@ describe('Day 11 실제 저장 형태: 핵심 Chunk 기록 없이 활용형 Chun
     expect([r2.role, r2.variantOf?.basis, r2.variantOf?.item]).toEqual(['core', 'common', null]);
   });
 });
+
+describe('추가 덩어리 표현 기본형 규칙 (look super tired → look tired)', () => {
+  it('정도만 강조하는 말만 빼고, 뜻이 바뀌는 말은 그대로', async () => {
+    const { deriveBase, isSafeBase, derivePattern } = await import('@/utils/chunkBase');
+    expect(deriveBase('look super tired')).toEqual({ base: 'look tired', parts: ['look', 'tired'], dropped: ['super'] });
+    expect(deriveBase('look really happy')?.base).toBe('look happy');
+    expect(deriveBase('look so familiar')?.base).toBe('look familiar');
+    expect(deriveBase("didn't get much sleep")).toBeNull(); // much는 덩어리의 일부
+    expect(deriveBase('look too tired')).toBeNull(); // too는 뜻이 바뀜
+    expect(deriveBase('which car to buy')).toBeNull();
+    expect(isSafeBase("don't look tired", 'look tired')).toBe(false); // 부정은 빼지 않음
+    expect(isSafeBase('look super tired', 'look tired')).toBe(true);
+    expect(derivePattern('look tired', ['super'])).toEqual({ pattern: 'look + 형용사', swaps: ['look happy', 'look familiar', 'look busy'] });
+  });
+
+  it('AI 결과: 기본형(text)·원문 형태(surface)·바꿔 쓰기(pattern·swaps)를 저장, parts를 안 나눠도 원문에서 찾음', () => {
+    const sentences = [{ number: 3, text: 'You look super tired. You could use some rest.' }];
+    const core = { text: 'could use', parts: ['could', 'use'], meaningKo: '', nuance: '', usage: '', comparison: '', examples: [], sentenceNumbers: [3], taughtEvidence: '' };
+    const dialogue = { title: 't', situation: 's', lines: [{ speaker: 'A', en: 'You look tired.', ko: '피곤해 보여.', sourceSentenceNumber: 0, chunkTexts: [] }, { speaker: 'B', en: 'I could use some rest.', ko: '좀 쉬고 싶어.', sourceSentenceNumber: 0, chunkTexts: [] }], chunkNotes: [] };
+    const v = validateDayPack(JSON.stringify({ coreChunks: [core], extraChunks: [{ sentenceNumber: 3, text: 'look tired', parts: ['look tired'], surface: 'look super tired', pattern: 'look + 형용사', swaps: ['look happy', 'look familiar', 'look busy', 'look tired'], meaningKo: '피곤해 보이다' }], dialogue, notes: '' }), sentences);
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.pack.extras[0].chunk).toMatchObject({ text: 'look tired', parts: ['look', 'tired'], surface: 'look super tired', pattern: 'look + 형용사', swaps: ['look happy', 'look familiar', 'look busy'] });
+  });
+
+  it('AI가 뜻이 바뀌게 줄이면(too 제거) 원문 형태 그대로 둠', () => {
+    const v = validateDayPack(JSON.stringify({ coreChunks: [], extraChunks: [{ sentenceNumber: 1, text: 'look tired', parts: ['look', 'tired'], surface: 'look too tired', pattern: '', swaps: [] }], dialogue: { title: 't', situation: 's', lines: [{ speaker: 'A', en: 'a', ko: 'a', sourceSentenceNumber: 0, chunkTexts: [] }, { speaker: 'B', en: 'b', ko: 'b', sourceSentenceNumber: 0, chunkTexts: [] }], chunkNotes: [] }, notes: '' }), [{ number: 1, text: "You don't look too tired." }]);
+    expect(v.ok && v.pack.extras.map((x) => x.chunk.text)).toEqual(['look too tired']);
+  });
+
+  it('예전 Day 11 자료(look super tired 그대로 저장): 화면에서만 기본형 look tired · look + 형용사, 저장값은 그대로', async () => {
+    const { extraViewOf } = await import('./chunkRoles');
+    const e = { id: 'e', text: 'look super tired', normalizedKey: 'look super tired', meaningKo: '', sourceRefs: [], isFavorite: false, isMarkedDifficult: false, createdAt: T, updatedAt: T } as never;
+    const item = { id: 'li', kind: 'chunk', expressionId: 'e', videoId: 'd11', chunk: { meaningInSentence: '', nuance: '', usage: '', comparison: '', examples: [], surface: 'look super tired' } } as never;
+    const before = JSON.stringify(item);
+    const v = extraViewOf(item, e);
+    expect(v).toMatchObject({ base: 'look tired', parts: ['look', 'tired'], surface: 'look super tired', dropped: ['super'], pattern: 'look + 형용사', source: 'app' });
+    expect(v.swaps).toEqual(['look happy', 'look familiar', 'look busy']);
+    expect(JSON.stringify(item)).toBe(before);
+    const sleep = extraViewOf({ ...(item as object), chunk: undefined } as never, { ...(e as object), text: "didn't get much sleep" } as never);
+    expect([sleep.base, sleep.source]).toEqual(["didn't get much sleep", 'none']);
+  });
+
+  it('요청 형식: p3/dp3, 프롬프트에 기본형 규칙과 무조건 줄이지 않기 규칙', () => {
+    const pp = buildPackPrompt({ task: 'pack', videoId: 'eNODHkrNuDA', title: 'x', seriesKind: 'day', dayNumber: 11, transcript: 'a'.repeat(30), promptVersion: 'p3' });
+    expect(pp).toContain('look super tired → look tired');
+    expect(pp).toContain('무조건 짧게 줄이지 않습니다');
+    expect(pp).toContain('pattern');
+  });
+});

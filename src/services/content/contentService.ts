@@ -2,7 +2,8 @@ import { parseDayNumber } from '@/db/upgradeV2toV3';
 import { AI_CONTENT_PROMPT_VERSION, CONTENT_LIMITS, type AiContentRequest, type SeriesKind } from '@/types/aiApi';
 import type { ChunkDetail, DayAssignment, Expression, KeySentence, LearningItem, Transcript, Video } from '@/types/models';
 import { normalizeExpressionKey } from '@/utils/text';
-import { matchParts, partsFrom } from '@/utils/chunkMatch';
+import { partsFrom } from '@/utils/chunkMatch';
+import { isSafeBase, locateChunk, parsePatternFields } from '@/utils/chunkBase';
 
 /**
  * AI 학습 콘텐츠 — 저장된 자막에서 ① 원문 문장 ② 문장 속 Chunk 를 만든다.
@@ -106,16 +107,26 @@ export function validateContent(text: string, durationSec: number | null): Conte
     const chunks: ContentChunk[] = [];
     const chunkSeen = new Set<string>();
     for (const c of Array.isArray(s.chunks) ? (s.chunks as Record<string, unknown>[]) : []) {
-      const ct = txt(c?.text, 120);
+      let ct = txt(c?.text, 120);
       if (!ct) continue;
-      const lk = loose(ct);
-      // 붙어 있는 형태 → 그대로, 아니면 parts로 떨어진 형태(could … use) 확인
-      const parts = partsFrom(ct, c.parts);
-      const m = loose(en).includes(lk) ? null : matchParts(en, parts);
-      if (!loose(en).includes(lk) && !m) {
+      let lk = loose(ct);
+      // 붙어 있는 형태 → 그대로, 아니면 parts로 떨어진 형태(could … use, look … tired) 확인
+      const found = loose(en).includes(lk) ? null : locateChunk(en, ct, c.parts);
+      if (!loose(en).includes(lk) && !found) {
         issues.push(`문장 ${number}: '${ct}'는 문장에 없어서 뺐어요.`);
         continue;
       }
+      let parts = found?.parts ?? partsFrom(ct, c.parts);
+      let m = found?.m ?? null;
+      // 기본형으로 줄이면서 뜻이 바뀌는 말(not, too …)을 뺐다면 원문 형태 그대로 둔다
+      if (m && !isSafeBase(m.surface, ct)) {
+        issues.push(`문장 ${number}: '${ct}'로 줄이면 뜻이 달라져 원문 형태 '${m.surface}'로 뒀어요.`);
+        ct = m.surface;
+        lk = loose(ct);
+        parts = [ct];
+        m = null;
+      }
+      const pat = parsePatternFields(c, ct);
       if (normalizeExpressionKey(ct) === key || lk.split(' ').length > 10) continue; // 문장 전체는 Chunk가 아님
       if (chunkSeen.has(lk)) continue;
       chunkSeen.add(lk);
@@ -133,6 +144,7 @@ export function validateContent(text: string, durationSec: number | null): Conte
         examples,
         ...(m && parts.length > 1 ? { parts } : {}),
         ...(m ? { surface: m.surface } : {}),
+        ...(pat ? { pattern: pat.pattern, swaps: pat.swaps } : {}),
       });
     }
     sentences.push({ number, text: en, meaningKo: txt(s.meaningKo, 500), timestampSec: ts, chunks });
@@ -246,7 +258,7 @@ export function planContent(ctx: ContentContext): ContentPlan {
         id: contentChunkId(requestId, exprId), createdAt: now, updatedAt: now, expressionId: exprId, videoId: video.id, sourceType, dayNumber: ctx.dayNumber,
         kind: 'chunk', dialogueId: null, sourceText: s.text, timestampSec: s.timestampSec, onScreen: false, origin: 'ai_extracted', status: 'confirmed',
         extractionDraftId: null, legacyKeySentenceId: null, sentenceId,
-        chunk: { meaningInSentence: c.meaningInSentence, nuance: c.nuance, usage: c.usage, comparison: c.comparison, examples: c.examples, ...(c.parts ? { parts: c.parts } : {}), ...(c.surface ? { surface: c.surface } : {}) },
+        chunk: { meaningInSentence: c.meaningInSentence, nuance: c.nuance, usage: c.usage, comparison: c.comparison, examples: c.examples, ...(c.parts ? { parts: c.parts } : {}), ...(c.surface ? { surface: c.surface } : {}), ...(c.pattern !== undefined ? { pattern: c.pattern, swaps: c.swaps ?? [] } : {}) },
         selected: false, contentRequestId: requestId,
         ...(ctx.chunkRole ? { chunkRole: ctx.chunkRole } : {}),
       });

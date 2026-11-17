@@ -3,7 +3,7 @@ import { contentStore } from '@/repositories';
 import { seriesOf } from '@/services/content/contentService';
 import type { DayAssignment, Dialogue, Expression, KeySentence, LearningItem, Video } from '@/types/models';
 import { chunkLabel, matchAllParts, matchParts } from '@/utils/chunkMatch';
-import { classifyChunks, corePatterns, partsOfItem } from '@/services/prep/chunkRoles';
+import { classifyChunks, corePatterns, extraViewOf } from '@/services/prep/chunkRoles';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { LinkButton } from '@/components/ui/Button';
@@ -227,7 +227,7 @@ export function StudyContentPanel({
                   <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-brand text-sm font-bold text-white">{s.aiNumber ?? s.order}</span>
                   <div className="min-w-0 flex-1">
                     <p className="en text-[17px] font-semibold leading-snug text-ink">
-                      <HighlightedText text={s.english} cores={coreParts} chunks={own.map((c) => partsOfItem(c, exprById.get(c.expressionId)))} />
+                      <HighlightedText text={s.english} cores={coreParts} chunks={own.map((c) => extraViewOf(c, exprById.get(c.expressionId)).parts)} />
                     </p>
                     {s.korean && <p className="mt-0.5 text-sm text-muted">{s.korean}</p>}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -317,22 +317,49 @@ function ChunkDetails({ item }: { item: LearningItem }) {
 }
 
 function ChunkRow({ item, expression, sentence, number, extra }: { item: LearningItem; expression: Expression | undefined; sentence?: KeySentence; number?: number; extra: boolean }) {
-  const parts = item.chunk?.parts;
+  const v = extraViewOf(item, expression);
   return (
     <li className="rounded-xl bg-canvas p-3" data-testid="content-chunk">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="en rounded bg-brand-soft px-1.5 font-semibold text-ink underline decoration-dashed decoration-brand underline-offset-4">{chunkLabel(expression?.text ?? '(Chunk)', parts, [item.chunk?.surface])}</span>
+        <span className="en rounded bg-brand-soft px-1.5 font-semibold text-ink underline decoration-dashed decoration-brand underline-offset-4" data-testid="chunk-base">
+          {v.base || '(Chunk)'}
+        </span>
         {expression?.meaningKo && <span className="text-sm text-muted">{expression.meaningKo}</span>}
         {extra && <Badge tone="info">AI 추가</Badge>}
         <span className="ml-auto">
-          <SelectToggle on={!!item.selected} label="암기할 Chunk" testId="select-chunk" onChange={(v) => void contentStore.setChunkSelected(item.id, v)} />
+          <SelectToggle on={!!item.selected} label="암기할 Chunk" testId="select-chunk" onChange={(val) => void contentStore.setChunkSelected(item.id, val)} />
         </span>
       </div>
+      {v.surface && (
+        <p className="mt-1.5 text-sm" data-testid="chunk-origin">
+          <span className="text-xs font-semibold text-subtle">원문 표현 · </span>
+          <span className="en text-muted">{v.surface}</span>
+          <span className="mx-1 text-subtle">→</span>
+          <span className="text-xs font-semibold text-subtle">기본 Chunk </span>
+          <span className="en font-semibold text-ink">{v.base}</span>
+          {v.dropped.length > 0 && (
+            <span className="ml-1 text-xs text-subtle">
+              (뺀 말: <span className="en">{v.dropped.join(' ')}</span> — 정도만 강조하는 말{v.source === 'app' ? ' · 예전 자료라 화면에서만 정리' : ''})
+            </span>
+          )}
+        </p>
+      )}
+      {(v.pattern || v.swaps.length > 0) && (
+        <p className="mt-1 flex flex-wrap items-center gap-1.5 text-sm" data-testid="chunk-pattern">
+          <span className="text-xs font-semibold text-subtle">바꿔 쓰기 · </span>
+          {v.pattern && <span className="rounded-md border border-line bg-surface px-1.5 font-semibold text-ink">{v.pattern}</span>}
+          {v.swaps.map((x) => (
+            <span key={x} className="en rounded-md bg-surface px-1.5 text-muted ring-1 ring-line">
+              {x}
+            </span>
+          ))}
+        </p>
+      )}
       {item.chunk?.nuance && <p className="mt-1 text-sm"><span className="text-xs font-semibold text-subtle">뉘앙스 · </span>{item.chunk.nuance}</p>}
       {sentence && (
         <p className="mt-1 text-sm text-muted" data-testid="chunk-context">
           <span className="text-xs font-semibold text-subtle">문맥 {number ?? ''}번 · </span>
-          <span className="en">{sentence.english}</span>
+          <span className="en"><HighlightedText text={sentence.english} cores={[]} chunks={[v.parts]} /></span>
         </p>
       )}
       <ChunkDetails item={item} />

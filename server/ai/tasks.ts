@@ -269,6 +269,9 @@ const PACK_CHUNK_SCHEMA = {
   properties: {
     text: { type: 'string' },
     parts: { type: 'array', items: { type: 'string' } },
+    surface: { type: 'string' },
+    pattern: { type: 'string' },
+    swaps: { type: 'array', items: { type: 'string' } },
     meaningKo: { type: 'string' },
     meaningInSentence: { type: 'string' },
     nuance: { type: 'string' },
@@ -276,7 +279,7 @@ const PACK_CHUNK_SCHEMA = {
     comparison: { type: 'string' },
     examples: EXAMPLES,
   },
-  required: ['text', 'parts', 'meaningKo', 'meaningInSentence', 'nuance', 'usage', 'comparison', 'examples'],
+  required: ['text', 'parts', 'surface', 'pattern', 'swaps', 'meaningKo', 'meaningInSentence', 'nuance', 'usage', 'comparison', 'examples'],
 } as const;
 
 const CORE_CHUNK_SCHEMA = {
@@ -387,7 +390,16 @@ const CORE_RULES = `핵심 Chunk(coreChunks): 강사가 영상에서 직접 소�
 const EXTRA_RULES = `추가 덩어리 표현: 강사가 가르치지는 않았지만 원문 문장에서 발견되는, 통째로 익히면 유용한 자연스러운 회화 덩어리(구동사·연어·관용 표현 등, 예: get much sleep).
 - 핵심 Chunk와 그 활용형(could use some rest, could seriously use 등)은 넣지 않습니다. 너무 평범한 단어, 고유명사는 제외합니다.
 - 문장마다 0~2개. 없으면 넣지 않습니다. 강사가 가르친 것처럼 쓰지 않습니다.
-- text는 문장에 있는 형태 그대로, meaningKo(뜻), meaningInSentence(이 문장 문맥에서의 의미), nuance, usage, comparison, examples(짧은 응용 예문 2개)`;
+- 실제 원어민이 일상 회화에서 반복해서 쓰는 자연스러운 덩어리만 고릅니다.
+- 기본형 규칙: 문장에 정도만 강조하는 말(super, really, so, very, pretty, totally 등)이 끼어 있고 빼도 핵심 뜻이 그대로면, 뺀 형태를 학습용 기본 Chunk로 적습니다.
+  예) look super tired → look tired, look really happy → look happy, look so familiar → look familiar
+- 무조건 짧게 줄이지 않습니다. 빼면 뜻이나 자연스러움이 달라지는 말(not, never, too, only, almost 등, 예: too tired ≠ tired)이나 덩어리의 일부인 말(get much sleep의 much 등)은 그대로 둡니다.
+- text: 학습용 기본 Chunk (원문 형태와 같아도 됩니다)
+- parts: text를 원문에서 찾을 수 있게 나눈 조각. 원문에서 사이에 뺀 말이 있으면 그 앞뒤로 나눕니다 (look tired ← look super tired: ["look", "tired"]). 붙어 있으면 [text]
+- surface: 원문 문장에 실제로 쓰인 형태 그대로 (예: look super tired)
+- pattern: 단어를 바꿔 넣어 쓸 수 있으면 그 틀 (예: "look + 형용사", "get + 명사"). 고정된 표현이면 ""
+- swaps: pattern으로 바꿔 넣은 자연스러운 활용 예 0~3개 (예: look happy, look familiar, look busy). pattern이 ""이면 []
+- meaningKo(뜻), meaningInSentence(이 문장 문맥에서의 의미), nuance, usage, comparison, examples(짧은 응용 예문 2개)`;
 
 const DIALOGUE_RULES = (dayLabel: string) => `Day 통합 대화문(dialogue): 이 영상의 원문 문장과 핵심 Chunk로, 학습자가 통째로 외울 자연스러운 대화문 1개를 만듭니다.
 - 대화의 흐름과 상황이 우선입니다. 실제 원어민이 일상에서 주고받을 법한 대화로 만듭니다.

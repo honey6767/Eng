@@ -1,5 +1,6 @@
 import type { Expression, LearningItem } from '@/types/models';
 import { matchParts, wordsOf } from '@/utils/chunkMatch';
+import { deriveBase, derivePattern, droppedWords } from '@/utils/chunkBase';
 
 /**
  * 영상(Day)의 Chunk 분류 — 저장된 기록은 바꾸지 않고 보여 줄 때만 나눈다 (읽기 전용).
@@ -144,4 +145,36 @@ export function rolesByItem(items: LearningItem[], exprById: Map<string, Express
     for (const [pid, vs] of view.variantsByCore) for (const v of vs) out.set(v.id, { role: 'core', variantOf: all.find((p) => p.id === pid) });
   }
   return out;
+}
+
+/** 추가 덩어리 표현을 학습용 기본형으로 보기 (저장된 기록은 바꾸지 않음) */
+export interface ExtraView {
+  /** 학습용 기본 Chunk (예: look tired) */
+  base: string;
+  /** 원문 문장에서 기본 Chunk 부분을 찾는 조각 (사이에 뺀 말이 있으면 나뉨) */
+  parts: string[];
+  /** 원문에 실제로 쓰인 형태 (기본형과 같으면 null) */
+  surface: string | null;
+  /** 원문에서 빼낸 말 (예: super) */
+  dropped: string[];
+  /** 바꿔 쓰는 틀 (예: look + 형용사, 없으면 '') */
+  pattern: string;
+  swaps: string[];
+  /** ai = AI가 기본형 규칙으로 정리 · app = 예전 자료라 화면에서만 정리 · none = 정리할 것 없음 */
+  source: 'ai' | 'app' | 'none';
+}
+
+export function extraViewOf(item: LearningItem, e: Expression | undefined): ExtraView {
+  const text = e?.text ?? item.chunk?.surface ?? '';
+  const c = item.chunk;
+  if (c && c.pattern !== undefined) {
+    const surface = c.surface && c.surface.toLowerCase() !== text.toLowerCase() ? c.surface : null;
+    return { base: text, parts: c.parts ?? [text], surface, dropped: surface ? (droppedWords(surface, text) ?? []) : [], pattern: c.pattern, swaps: c.swaps ?? [], source: 'ai' };
+  }
+  // 예전 자료: 저장된 표현(원문 형태)에서 정도만 강조하는 말을 뺀 기본형을 계산 (look super tired → look tired)
+  const original = c?.surface ?? text;
+  const d = deriveBase(original);
+  if (!d) return { base: text, parts: partsOfItem(item, e), surface: c?.surface && c.surface.toLowerCase() !== text.toLowerCase() ? c.surface : null, dropped: [], pattern: '', swaps: [], source: 'none' };
+  const p = derivePattern(d.base, d.dropped);
+  return { base: d.base, parts: d.parts, surface: original, dropped: d.dropped, pattern: p?.pattern ?? '', swaps: p?.swaps ?? [], source: 'app' };
 }
