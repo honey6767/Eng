@@ -21,7 +21,8 @@
     "e2e:stageB1b": "node scripts/e2e-stageB1b.mjs",
     "e2e:stageB1cd": "node scripts/e2e-stageB1cd.mjs",
     "e2e:content": "node scripts/e2e-content.mjs",
-    "e2e:prep": "node scripts/e2e-prep.mjs"
+    "e2e:prep": "node scripts/e2e-prep.mjs",
+    "e2e:legacy": "node scripts/e2e-legacy-day11.mjs"
   },
   "dependencies": {
     "@fontsource-variable/plus-jakarta-sans": "^5.2.8",

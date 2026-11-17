@@ -229,7 +229,8 @@ describe('빈칸 단계', () => {
   });
 });
 
-import { classifyChunks } from './chunkRoles';
+import { classifyChunks, commonPattern, rolesByItem } from './chunkRoles';
+import { matchParts } from '@/utils/chunkMatch';
 import { buildDayPackRequest, validateDayPack, validatePack } from './packService';
 import { buildDayPackPrompt, buildPackPrompt } from '../../../server/ai/tasks';
 
@@ -292,8 +293,8 @@ describe('핵심 Chunk(강사가 가르친 표현)와 추가 덩어리 표현(AI
     expect(v.variantsByCore.get('c')!.map((i) => i.id)).toEqual(['a', 'd']);
     expect(v.extras.map((i) => i.id)).toEqual(['b']);
     expect(JSON.stringify(items)).toBe(before);
-    // 핵심 Chunk가 아직 없는 영상은 분류하지 않음
-    expect(classifyChunks(items.slice(1), exprById).unclassified).toHaveLength(3);
+    // 핵심 Chunk도, 공통 부분도 없는 예전 자료는 분류하지 않음
+    expect(classifyChunks([li('b', 'chunk', 'e3')], exprById).unclassified).toHaveLength(1);
   });
 
   it('요청·프롬프트: daypack은 강의 자막과 자막 추출 때 찾은 핵심 표현을 근거로, 예전 Chunk 목록은 보내지 않음', () => {
@@ -310,5 +311,67 @@ describe('핵심 Chunk(강사가 가르친 표현)와 추가 덩어리 표현(AI
     expect(dp).toContain('추가 덩어리 표현');
     const pp = buildPackPrompt({ task: 'pack', videoId: 'eNODHkrNuDA', title: 'x', seriesKind: 'day', dayNumber: 11, transcript: 'a'.repeat(30), promptVersion: 'p2' });
     expect(pp).toContain('"추가 덩어리 표현"만 적습니다');
+  });
+});
+
+describe('Day 11 실제 저장 형태: 핵심 Chunk 기록 없이 활용형 Chunk만 있는 경우 (화면에서만 추론)', () => {
+  // 운영 앱에서 실제 Gemini로 만든 Day 11 자료와 같은 형태 (원문 문장 5개 · Chunk 9개 · 핵심 Chunk 기록 없음)
+  const SENT = ['I could seriously use a cup of coffee right now.', 'We could use some help from chatGPT.', 'You look super tired. You could use some rest.', 'I could use some advice on which car to buy.', "I didn't get much sleep last night. I could really use a nap."];
+  const CHUNKS: [string, number][] = [['look super tired', 3], ['could use some advice on', 4], ['which car to buy', 4], ['could seriously use', 1], ['a cup of coffee', 1], ["didn't get much sleep", 5], ['could really use a nap', 5], ['could use some rest', 3], ['could use some help from', 2]];
+  const exprs = new Map<string, import('@/types/models').Expression>();
+  const ex = (id: string, text: string, meaningKo = '') => {
+    exprs.set(id, { id, text, normalizedKey: text, meaningKo, sourceRefs: [], isFavorite: false, isMarkedDifficult: false, createdAt: T, updatedAt: T } as never);
+  };
+  const li = (id: string, kind: 'chunk' | 'key', expressionId: string, extra: Partial<import('@/types/models').LearningItem> = {}) =>
+    ({ id, kind, expressionId, videoId: 'd11', sourceType: 'day', dayNumber: 11, dialogueId: null, sourceText: null, timestampSec: null, onScreen: false, origin: 'ai_extracted', status: 'confirmed', extractionDraftId: null, legacyKeySentenceId: null, createdAt: T, updatedAt: T, ...extra }) as import('@/types/models').LearningItem;
+  const chunkItems = CHUNKS.map(([t, n], i) => {
+    ex(`c${i}`, t);
+    return li(`li-c${i}`, 'chunk', `c${i}`, { sentenceId: `ks-${n}`, selected: t === 'could seriously use' });
+  });
+  ex('k1', 'could use', '~가 필요하다, ~했으면 좋겠다');
+  const keyItem = li('li-key', 'key', 'k1', { sourceText: "Today's expression is could use." });
+  const variantTexts = ['could use some advice on', 'could seriously use', 'could really use a nap', 'could use some rest', 'could use some help from'];
+  const extraTexts = ['look super tired', 'which car to buy', 'a cup of coffee', "didn't get much sleep"];
+  const textsOf = (l: import('@/types/models').LearningItem[]) => l.map((i) => exprs.get(i.expressionId)!.text);
+
+  it('자막 추출 때 찾은 강사 표현(could use)이 있으면: 그것을 핵심 Chunk로, 활용형 5개는 그 아래, 나머지 4개는 추가 표현', () => {
+    const items = [...chunkItems, keyItem];
+    const before = JSON.stringify(items);
+    const v = classifyChunks(items, exprs);
+    expect(v.cores).toHaveLength(0); // 저장된 핵심 Chunk 기록은 여전히 없음
+    expect(v.inferred.map((p) => [p.basis, p.text, p.parts, p.taught])).toEqual([['key', 'could use', ['could', 'use'], "Today's expression is could use."]]);
+    expect(textsOf(v.variantsByCore.get(v.inferred[0].id)!).sort()).toEqual([...variantTexts].sort());
+    expect(textsOf(v.extras).sort()).toEqual([...extraTexts].sort());
+    expect(v.unclassified).toHaveLength(0);
+    expect(JSON.stringify(items)).toBe(before); // 저장 데이터 그대로
+  });
+
+  it('강사 표현 기록도 없으면: 여러 Chunk의 공통 부분 could use를 핵심 Chunk로 추정', () => {
+    const v = classifyChunks(chunkItems, exprs);
+    expect(v.inferred.map((p) => [p.basis, p.text])).toEqual([['common', 'could use']]);
+    expect(textsOf(v.variantsByCore.get(v.inferred[0].id)!).sort()).toEqual([...variantTexts].sort());
+    expect(textsOf(v.extras).sort()).toEqual([...extraTexts].sort());
+  });
+
+  it('원문 5문장 중 could use가 들어간 문장이 모두 활용 사례 (could seriously use · could really use 포함)', () => {
+    const [p] = classifyChunks(chunkItems, exprs).inferred;
+    expect(SENT.filter((s) => matchParts(s, p.parts)).length).toBe(5);
+    expect(matchParts(SENT[0], p.parts)!.surface).toBe('could seriously use');
+  });
+
+  it('우연히 겹친 단어로는 추정하지 않음', () => {
+    expect(commonPattern(['a cup of coffee', 'which car to buy', 'look super tired'])).toBeNull();
+    expect(commonPattern(['make a decision', 'make up my mind', 'take a break', 'get some rest', 'have a look'])).toBeNull();
+  });
+
+  it('통합 대화문 후보: 강사 표현 기록이 있으면 활용형은 그 기록에 포함(고름 표시도 넘김), 나머지는 추가 · AI', () => {
+    const roles = rolesByItem([...chunkItems, keyItem], exprs);
+    const role = (t: string) => roles.get(chunkItems[CHUNKS.findIndex(([x]) => x === t)].id)!;
+    expect(role('could seriously use').variantOf?.item?.id).toBe('li-key');
+    expect(role("didn't get much sleep").role).toBe('extra');
+    // 강사 표현 기록이 없으면 활용형은 '핵심 could use 활용' 후보로 남음
+    const roles2 = rolesByItem(chunkItems, exprs);
+    const r2 = roles2.get(chunkItems[3].id)!;
+    expect([r2.role, r2.variantOf?.basis, r2.variantOf?.item]).toEqual(['core', 'common', null]);
   });
 });

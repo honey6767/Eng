@@ -2,8 +2,8 @@ import { useState, type ReactNode } from 'react';
 import { contentStore } from '@/repositories';
 import { seriesOf } from '@/services/content/contentService';
 import type { DayAssignment, Dialogue, Expression, KeySentence, LearningItem, Video } from '@/types/models';
-import { chunkLabel, matchAllParts } from '@/utils/chunkMatch';
-import { classifyChunks, partsOfItem } from '@/services/prep/chunkRoles';
+import { chunkLabel, matchAllParts, matchParts } from '@/utils/chunkMatch';
+import { classifyChunks, corePatterns, partsOfItem } from '@/services/prep/chunkRoles';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { LinkButton } from '@/components/ui/Button';
@@ -60,24 +60,38 @@ export function StudyContentPanel({
   const series = seriesOf(video, day);
   const exprById = new Map(expressions.map((e) => [e.id, e]));
   const view = classifyChunks(items, exprById);
-  const { cores, extras, unclassified } = view;
+  const { cores, extras, unclassified, variantsByCore } = view;
   const listChunks = [...extras, ...unclassified];
-  const coreParts = cores.map((c) => partsOfItem(c, exprById.get(c.expressionId)));
+  const patterns = corePatterns(items, exprById);
+  const coreParts = patterns.map((p) => p.parts);
+  const hasCore = patterns.length > 0;
   const linkedIds = new Set([...items.filter((i) => i.kind === 'chunk').map((c) => c.sentenceId), ...cores.flatMap((c) => (c.occurrences ?? []).map((o) => o.sentenceId))].filter(Boolean));
   const shown = sentences
     .filter((s) => s.origin === 'ai_extracted' || linkedIds.has(s.id))
     .sort((a, b) => (a.aiNumber ?? a.order) - (b.aiNumber ?? b.order) || a.order - b.order);
   const byId = new Map(shown.map((s) => [s.id, s]));
   const numberOf = new Map(shown.map((s) => [s.id, s.aiNumber ?? s.order]));
+  // 핵심 Chunk 카드 — 저장된 핵심 Chunk, 또는 예전 기준 자료에서 화면에서만 추론한 핵심 Chunk
+  const cards = patterns.map((p) => {
+    const variants = variantsByCore.get(p.id) ?? [];
+    const core = p.basis === 'core' ? p.item : null;
+    const occ: { sentenceId: string; surface: string }[] = core
+      ? (core.occurrences ?? [])
+      : shown.flatMap((s) => {
+          const m = matchParts(s.english, p.parts);
+          return m ? [{ sentenceId: s.id, surface: m.surface }] : [];
+        });
+    return { p, core, occ, variants, nuance: core?.chunk?.nuance ?? '' };
+  });
   const dayDialogue = dialogues.find((d) => d.videoId === video.id && d.kind === 'original' && d.generatedBy === 'ai');
-  if (shown.length === 0 && cores.length === 0) return null;
+  if (shown.length === 0 && !hasCore) return null;
   const selectedS = shown.filter((s) => s.selected).length;
-  const selectedC = [...cores, ...listChunks].filter((c) => c.selected).length;
+  const selectedC = [...cores, ...listChunks, ...[...variantsByCore.values()].flat()].filter((c) => c.selected).length;
   const label = series.seriesKind === 'day' ? `Day ${series.dayNumber}` : '이 영상';
 
   return (
     <div className="space-y-4" data-testid="study-content">
-      {cores.length > 0 && (
+      {cards.length > 0 && (
         <Card className="border-key/60 p-4" data-testid="core-chunks">
           <div className="mb-1 flex flex-wrap items-center gap-2">
             <h3 className="font-bold">★ 핵심 Chunk</h3>
@@ -85,45 +99,64 @@ export function StudyContentPanel({
           </div>
           <p className="mb-2 text-xs text-subtle">강사가 영상에서 직접 소개하고 설명한 표현이에요. 원문 속 활용형은 아래 ‘활용 사례’로 모았어요.</p>
           <ul className="space-y-4">
-            {cores.map((c) => {
-              const e = exprById.get(c.expressionId);
-              const parts = partsOfItem(c, e);
-              const occ = c.occurrences ?? [];
+            {cards.map(({ p, core, occ, variants, nuance }) => {
+              const e = core ? exprById.get(core.expressionId) : undefined;
+              const variantOf = (sentenceId: string) => variants.filter((v) => v.sentenceId === sentenceId);
+              const loose = variants.filter((v) => !occ.some((o) => o.sentenceId === v.sentenceId));
               return (
-                <li key={c.id} data-testid="core-chunk">
+                <li key={p.id} data-testid="core-chunk" data-basis={p.basis}>
                   <div className="flex flex-wrap items-baseline gap-2">
-                    <span className="en rounded bg-key px-1.5 text-lg font-extrabold text-ink">{chunkLabel(e?.text ?? parts.join(' '), parts, occ.map((o) => o.surface))}</span>
-                    {(c.chunk?.meaningInSentence || e?.meaningKo) && <span className="text-[15px] text-ink">{c.chunk?.meaningInSentence || e?.meaningKo}</span>}
-                    <span className="ml-auto">
-                      <SelectToggle on={!!c.selected} label="암기할 Chunk" testId="select-core" onChange={(v) => void contentStore.setChunkSelected(c.id, v)} />
-                    </span>
+                    <span className="en rounded bg-key px-1.5 text-lg font-extrabold text-ink">{chunkLabel(e?.text ?? p.text, p.parts, occ.map((o) => o.surface))}</span>
+                    {p.meaningKo && <span className="text-[15px] text-ink">{p.meaningKo}</span>}
+                    {core && (
+                      <span className="ml-auto">
+                        <SelectToggle on={!!core.selected} label="암기할 Chunk" testId="select-core" onChange={(v) => void contentStore.setChunkSelected(core.id, v)} />
+                      </span>
+                    )}
                   </div>
-                  {c.chunk?.nuance && <p className="mt-1 text-sm"><span className="text-xs font-semibold text-subtle">뉘앙스 · </span>{c.chunk.nuance}</p>}
-                  {c.chunk?.taught && (
-                    <p className="mt-1 rounded-lg bg-canvas px-2.5 py-1.5 text-sm text-muted" data-testid="core-taught">
-                      <span className="text-xs font-semibold text-subtle">강의 설명 · </span>“{c.chunk.taught}”
+                  {p.basis !== 'core' && (
+                    <p className="mt-1 rounded-lg bg-warn-soft px-2.5 py-1.5 text-xs text-ink" data-testid="core-inferred">
+                      {p.basis === 'key'
+                        ? '예전 기준으로 만든 자료라 핵심 Chunk 기록이 따로 없어요. 자막 추출 때 찾은 강사 표현을 기준으로 화면에서만 묶었어요. 저장된 자료는 그대로예요.'
+                        : '예전 기준으로 만든 자료라 핵심 Chunk 기록이 따로 없어요. 여러 Chunk에 공통으로 들어 있는 부분을 핵심 Chunk로 추정해 화면에서만 묶었어요. 저장된 자료는 그대로예요.'}
                     </p>
                   )}
-                  {occ.length > 0 && (
+                  {nuance && <p className="mt-1 text-sm"><span className="text-xs font-semibold text-subtle">뉘앙스 · </span>{nuance}</p>}
+                  {p.taught && (
+                    <p className="mt-1 rounded-lg bg-canvas px-2.5 py-1.5 text-sm text-muted" data-testid="core-taught">
+                      <span className="text-xs font-semibold text-subtle">강의 설명 · </span>“{p.taught}”
+                    </p>
+                  )}
+                  {(occ.length > 0 || loose.length > 0) && (
                     <div className="mt-2" data-testid="core-occurrences">
-                      <p className="text-xs font-semibold text-subtle">활용 사례 {occ.length}개</p>
+                      <p className="text-xs font-semibold text-subtle">활용 사례 {occ.length + loose.length}개</p>
                       <ul className="mt-1 space-y-1">
                         {occ.map((o, i) => {
                           const sent = byId.get(o.sentenceId);
                           return (
-                            <li key={i} className="flex gap-2 text-sm">
+                            <li key={i} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
                               <b className="w-5 shrink-0 text-right text-ink">{numberOf.get(o.sentenceId) ?? '·'}</b>
                               <span className="en min-w-0">
-                                {sent ? <HighlightedText text={sent.english} cores={[parts]} chunks={[]} /> : o.surface}
-                                {o.surface.toLowerCase() !== (e?.text ?? '').toLowerCase() && <span className="ml-1 text-xs text-subtle">({o.surface})</span>}
+                                {sent ? <HighlightedText text={sent.english} cores={[p.parts]} chunks={[]} /> : o.surface}
+                                {o.surface.toLowerCase() !== p.text.toLowerCase() && <span className="ml-1 text-xs text-subtle">({o.surface})</span>}
                               </span>
+                              {variantOf(o.sentenceId).map((v) => (
+                                <VariantToggle key={v.id} item={v} text={exprById.get(v.expressionId)?.text ?? ''} />
+                              ))}
                             </li>
                           );
                         })}
+                        {loose.map((v) => (
+                          <li key={v.id} className="flex flex-wrap items-center gap-2 text-sm">
+                            <b className="w-5 shrink-0 text-right text-ink">·</b>
+                            <span className="en">{exprById.get(v.expressionId)?.text}</span>
+                            <VariantToggle item={v} text="" />
+                          </li>
+                        ))}
                       </ul>
                     </div>
                   )}
-                  <ChunkDetails item={c} />
+                  {core && <ChunkDetails item={core} />}
                 </li>
               );
             })}
@@ -134,17 +167,17 @@ export function StudyContentPanel({
       {listChunks.length > 0 && (
         <Card className="p-4" data-testid="extra-chunks">
           <div className="mb-1 flex flex-wrap items-center gap-2">
-            <h3 className="font-bold">{cores.length ? '추가 덩어리 표현' : '문장 속 Chunk'}</h3>
-            {cores.length > 0 && <Badge tone="info">AI 추가</Badge>}
+            <h3 className="font-bold">{hasCore ? '추가 덩어리 표현' : '문장 속 Chunk'}</h3>
+            {hasCore && <Badge tone="info">AI 추가</Badge>}
           </div>
           <p className="mb-2 text-xs text-subtle">
-            {cores.length ? '강사가 직접 가르치지는 않았지만, 영상 문맥에서 찾은 자연스럽고 유용한 회화 표현이에요.' : '이 영상은 핵심 Chunk가 아직 정리되지 않았어요. 학습 자료가 만들어지면 핵심 Chunk와 추가 표현으로 나뉘어요.'}
+            {hasCore ? '강사가 직접 가르치지는 않았지만, 영상 문맥에서 찾은 자연스럽고 유용한 회화 표현이에요.' : '이 영상은 핵심 Chunk가 아직 정리되지 않았어요. 학습 자료가 만들어지면 핵심 Chunk와 추가 표현으로 나뉘어요.'}
           </p>
           <ul className="space-y-2">
             {listChunks
               .filter((c) => !onlySelected || c.selected)
               .map((c) => (
-                <ChunkRow key={c.id} item={c} expression={exprById.get(c.expressionId)} sentence={c.sentenceId ? byId.get(c.sentenceId) : undefined} number={c.sentenceId ? numberOf.get(c.sentenceId) : undefined} extra={cores.length > 0} />
+                <ChunkRow key={c.id} item={c} expression={exprById.get(c.expressionId)} sentence={c.sentenceId ? byId.get(c.sentenceId) : undefined} number={c.sentenceId ? numberOf.get(c.sentenceId) : undefined} extra={hasCore} />
               ))}
           </ul>
         </Card>
@@ -176,12 +209,12 @@ export function StudyContentPanel({
           </label>
         </div>
         <p className="mt-1 text-sm text-muted" data-testid="content-counts">
-          원문 문장 {shown.length}개 · 핵심 Chunk {cores.length}개 · {cores.length ? '추가 표현' : 'Chunk'} {listChunks.length}개 · 고른 문장 {selectedS} · 고른 Chunk {selectedC}
+          원문 문장 {shown.length}개 · 핵심 Chunk {patterns.length}개 · {hasCore ? '추가 표현' : 'Chunk'} {listChunks.length}개 · 고른 문장 {selectedS} · 고른 Chunk {selectedC}
         </p>
-        {(cores.length > 0 || listChunks.length > 0) && (
+        {(hasCore || listChunks.length > 0) && (
           <p className="mt-1 flex flex-wrap gap-3 text-xs text-subtle">
             <span><mark className="rounded bg-key px-1 text-ink">노란 표시</mark> 핵심 Chunk</span>
-            <span><mark className="rounded bg-brand-soft px-1 text-ink underline decoration-dashed decoration-brand underline-offset-4">점선 표시</mark> {cores.length ? '추가 덩어리 표현' : 'Chunk'}</span>
+            <span><mark className="rounded bg-brand-soft px-1 text-ink underline decoration-dashed decoration-brand underline-offset-4">점선 표시</mark> {hasCore ? '추가 덩어리 표현' : 'Chunk'}</span>
           </p>
         )}
         <ol className="mt-3 space-y-3">
@@ -214,6 +247,22 @@ export function StudyContentPanel({
         </ol>
       </Card>
     </div>
+  );
+}
+
+/** 활용형으로 묶인 예전 Chunk — 고름 표시는 그대로 보이고 바꿀 수 있게 */
+function VariantToggle({ item, text }: { item: LearningItem; text: string }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={!!item.selected}
+      onClick={() => void contentStore.setChunkSelected(item.id, !item.selected)}
+      data-testid="select-variant"
+      title={text ? `기존 Chunk: ${text}` : '기존 Chunk'}
+      className={`inline-flex h-6 items-center rounded-full px-2 text-[11px] font-bold ${item.selected ? 'bg-ok-soft text-ok' : 'border border-line bg-surface text-muted hover:text-ink'}`}
+    >
+      {item.selected ? '✓ 고름' : '+ 고르기'}
+    </button>
   );
 }
 
