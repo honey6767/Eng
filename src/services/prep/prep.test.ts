@@ -202,24 +202,113 @@ describe('학습 자료 자동 생성 대기열', () => {
     expect(await db.dialogues.count()).toBe(1);
   });
 
-  it('빈칸 자료: Chunk=1, 주요 단어=2, 나머지=3', () => {
-    const plan = buildBlankPlan([{ id: 'l1', order: 1, speaker: 'A', korean: '', segments: [{ kind: 'connector', text: 'I' }, { kind: 'key', text: 'could', learningItemId: 'c' }, { kind: 'connector', text: 'really' }, { kind: 'key', text: 'use', learningItemId: 'c' }, { kind: 'connector', text: 'a coffee.' }] }]);
-    expect(plan.lines.l1).toEqual([3, 1, 3, 1, 3, 2]);
+  it('빈칸 자료: 핵심 Chunk=1, 추가 표현=2, 주요 단어=3, 나머지=4 (예전 형식은 1·2·3)', () => {
+    const line = { id: 'l1', order: 1, speaker: 'A' as const, korean: '', segments: [{ kind: 'connector' as const, text: 'I' }, { kind: 'key' as const, text: 'could', learningItemId: 'c' }, { kind: 'connector' as const, text: 'really' }, { kind: 'key' as const, text: 'use', learningItemId: 'c' }, { kind: 'connector' as const, text: 'a' }, { kind: 'key' as const, text: 'big coffee', learningItemId: 'x' }] };
+    expect(buildBlankPlan([line], new Set(['c']))).toEqual({ version: 2, lines: { l1: [4, 1, 4, 1, 4, 2, 2] } });
+    expect(buildBlankPlan([line]).lines.l1).toEqual([3, 1, 3, 1, 3, 1, 1]);
   });
 });
 
-import { blankIndexes } from './blanks';
+import { blankIndexes, normalizedRanks } from './blanks';
 describe('빈칸 단계', () => {
-  const ranks = [3, 1, 3, 1, 3, 2, 2, 2, 3, 3];
-  it('2단계 Chunk 전부, 3단계 주요 단어까지 비율만큼, 4단계 대부분, 5단계 전부, 같은 줄은 항상 같은 자리', () => {
+  // version 2: 1 핵심 Chunk · 2 추가 덩어리 표현 · 3 주요 단어 · 4 나머지
+  const ranks = [4, 1, 4, 1, 2, 3, 3, 3, 4, 4];
+  it('2단계 핵심 Chunk만, 3단계 추가 표현 → 주요 단어까지 비율만큼, 4단계 대부분, 5단계 전부, 같은 줄은 항상 같은 자리', () => {
     expect([...blankIndexes(ranks, 'l', 1, 30)]).toEqual([]);
     expect([...blankIndexes(ranks, 'l', 2, 30)].sort()).toEqual([1, 3]);
     const s3 = blankIndexes(ranks, 'l', 3, 30);
-    expect(s3.size).toBe(3);
-    expect([...s3].every((i) => ranks[i] <= 2)).toBe(true);
-    expect(blankIndexes(ranks, 'l', 3, 100).size).toBe(5); // 주요 단어 안에서만
+    expect([...s3].sort()).toEqual([1, 3, 4]); // 추가 표현이 주요 단어보다 먼저
+    expect(blankIndexes(ranks, 'l', 3, 100).size).toBe(6); // 나머지 단어는 3단계에서 가리지 않음
     expect(blankIndexes(ranks, 'l', 4, 70).size).toBe(7);
     expect(blankIndexes(ranks, 'l', 5, 0).size).toBe(10);
     expect([...blankIndexes(ranks, 'l', 4, 70)]).toEqual([...blankIndexes(ranks, 'l', 4, 70)]);
+  });
+  it('예전(version 1) 빈칸 자료도 같은 기준으로 읽음', () => {
+    expect(normalizedRanks({ version: 1, lines: { l: [3, 1, 2] } }, 'l')).toEqual([4, 1, 3]);
+    expect(normalizedRanks({ version: 2, lines: { l: [4, 1, 2] } }, 'l')).toEqual([4, 1, 2]);
+  });
+});
+
+import { classifyChunks } from './chunkRoles';
+import { buildDayPackRequest, validateDayPack, validatePack } from './packService';
+import { buildDayPackPrompt, buildPackPrompt } from '../../../server/ai/tasks';
+
+describe('핵심 Chunk(강사가 가르친 표현)와 추가 덩어리 표현(AI가 찾은 표현) 분리', () => {
+  const sentences = [
+    { number: 1, text: 'I could seriously use a cup of coffee right now.' },
+    { number: 2, text: "I didn't get much sleep last night. I could really use a nap." },
+  ];
+  const core = { text: 'could use', parts: ['could', 'use'], meaningKo: '~이 있으면 좋겠다', nuance: 'need보다 부드럽게', usage: '', comparison: '', examples: [], sentenceNumbers: [1, 2], taughtEvidence: '오늘 배울 표현은 could use예요' };
+  const dialogue = { title: 't', situation: 's', lines: [{ speaker: 'A', en: 'I could really use a nap.', ko: '낮잠 자고 싶다.', sourceSentenceNumber: 2, chunkTexts: ['could use'] }, { speaker: 'B', en: 'You need to get much sleep.', ko: '잠을 푹 자야 해.', sourceSentenceNumber: 0, chunkTexts: ['get much sleep'] }], chunkNotes: [] };
+
+  it('pack: 핵심 Chunk의 활용형(could seriously use 등)은 추가 표현에서 빠지고, 강의 설명이 핵심 Chunk에 남는다', () => {
+    const v = validatePack(JSON.stringify({
+      sentences: [
+        { number: 1, text: sentences[0].text, meaningKo: '', timestampSec: 1, chunks: [{ text: 'could seriously use', parts: ['could', 'seriously', 'use'] }, { text: 'a cup of coffee' }] },
+        { number: 2, text: sentences[1].text, meaningKo: '', timestampSec: 2, chunks: [{ text: 'get much sleep' }, { text: 'could really use a nap' }] },
+      ],
+      coreChunks: [core], dialogue, notes: '',
+    }), 300);
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.content!.sentences.flatMap((s) => s.chunks.map((c) => c.text))).toEqual(['a cup of coffee', 'get much sleep']);
+    expect(v.pack.core[0].taught).toBe('오늘 배울 표현은 could use예요');
+  });
+
+  it('daypack: 추가 표현은 원문 문장에 연결하고, 활용형은 거부', () => {
+    const v = validateDayPack(JSON.stringify({ coreChunks: [core], extraChunks: [{ sentenceNumber: 2, text: 'get much sleep' }, { sentenceNumber: 1, text: 'could seriously use' }, { sentenceNumber: 1, text: 'not in sentence' }], dialogue, notes: '' }), sentences);
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.pack.extras.map((x) => [x.sentenceNumber, x.chunk.text])).toEqual([[2, 'get much sleep']]);
+  });
+
+  it('저장: 새 추가 표현은 chunkRole=extra, 대화문에서 kind=extra·빈칸 2순위, 핵심 Chunk는 kind=core·1순위', async () => {
+    const { db } = createTestRepos();
+    await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 11] 필요해', { transcript: ['Today\'s expression is could use.', ...sentences.map((s) => `${s.number}. ${s.text}`)] });
+    const { client } = server();
+    await device(db, client).enqueue(['v1']);
+    await device(db, client).start();
+    const items = await db.learningItems.where('videoId').equals('v1').toArray();
+    const extras = items.filter((i) => i.kind === 'chunk');
+    expect(extras.length).toBeGreaterThan(0);
+    expect(extras.every((i) => i.chunkRole === 'extra')).toBe(true);
+    const exprs = new Map((await db.expressions.toArray()).map((e) => [e.id, e.text]));
+    expect(extras.some((i) => /could/.test(exprs.get(i.expressionId) ?? ''))).toBe(false); // 활용형은 추가 표현이 아님
+    const coreItem = items.find((i) => i.kind === 'core')!;
+    expect(coreItem.chunk?.taught).toMatch(/expression is could use/);
+    const d = (await db.dialogues.where('videoId').equals('v1').toArray())[0];
+    expect(d.blankPlan?.version).toBe(2);
+    expect(d.chunkUsages!.find((u) => u.learningItemId === coreItem.id)?.kind).toBe('core');
+  });
+
+  it('예전 기준 자료: 저장은 그대로 두고 보여 줄 때만 활용형은 핵심 Chunk 아래, 나머지는 추가 표현', () => {
+    const e = (id: string, text: string) => ({ id, text, normalizedKey: text, meaningKo: '', sourceRefs: [], isFavorite: false, isMarkedDifficult: false, createdAt: T, updatedAt: T });
+    const li = (id: string, kind: 'core' | 'chunk', expressionId: string, extra: Partial<import('@/types/models').LearningItem> = {}) =>
+      ({ id, kind, expressionId, videoId: 'v', sourceType: 'day', dayNumber: 11, dialogueId: null, sourceText: null, timestampSec: null, onScreen: false, origin: 'ai_extracted', status: 'confirmed', extractionDraftId: null, legacyKeySentenceId: null, createdAt: T, updatedAt: T, ...extra }) as import('@/types/models').LearningItem;
+    const exprById = new Map([e('e1', 'could use'), e('e2', 'could seriously use'), e('e3', 'a cup of coffee'), e('e4', 'could use some advice on')].map((x) => [x.id, x as import('@/types/models').Expression]));
+    const items = [li('c', 'core', 'e1', { chunk: { meaningInSentence: '', nuance: '', usage: '', comparison: '', examples: [], parts: ['could', 'use'] } }), li('a', 'chunk', 'e2'), li('b', 'chunk', 'e3'), li('d', 'chunk', 'e4')];
+    const before = JSON.stringify(items);
+    const v = classifyChunks(items, exprById);
+    expect(v.variantsByCore.get('c')!.map((i) => i.id)).toEqual(['a', 'd']);
+    expect(v.extras.map((i) => i.id)).toEqual(['b']);
+    expect(JSON.stringify(items)).toBe(before);
+    // 핵심 Chunk가 아직 없는 영상은 분류하지 않음
+    expect(classifyChunks(items.slice(1), exprById).unclassified).toHaveLength(3);
+  });
+
+  it('요청·프롬프트: daypack은 강의 자막과 자막 추출 때 찾은 핵심 표현을 근거로, 예전 Chunk 목록은 보내지 않음', () => {
+    const video = { id: 'v', youtubeVideoId: 'eNODHkrNuDA', title: '[Day 11] x' } as never;
+    const ks = sentences.map((s) => ({ id: `k${s.number}`, english: s.text, korean: '', order: s.number, aiNumber: s.number, origin: 'ai_extracted' })) as never;
+    const items = [{ kind: 'key', expressionId: 'e1' }, { kind: 'chunk', sentenceId: 'k1', expressionId: 'e2' }] as never;
+    const req = buildDayPackRequest(video, undefined, ks, items, new Map([['e1', { text: 'could use' }], ['e2', { text: 'could seriously use' }]]) as never, { status: 'success', segments: [{ startSec: 0, endSec: 1, text: '오늘 배울 표현은 could use' }], rawText: '' } as never);
+    expect(req.taughtHints).toEqual(['could use']);
+    expect(req.transcript).toContain('오늘 배울 표현');
+    expect(req.sentences.every((s) => s.chunks.length === 0)).toBe(true);
+    const dp = buildDayPackPrompt(req);
+    expect(dp).toContain('강사가 영상에서 직접 소개하고 설명한');
+    expect(dp).toContain('could seriously use 같은 활용형은 별도 항목으로 만들지 않습니다');
+    expect(dp).toContain('추가 덩어리 표현');
+    const pp = buildPackPrompt({ task: 'pack', videoId: 'eNODHkrNuDA', title: 'x', seriesKind: 'day', dayNumber: 11, transcript: 'a'.repeat(30), promptVersion: 'p2' });
+    expect(pp).toContain('"추가 덩어리 표현"만 적습니다');
   });
 });

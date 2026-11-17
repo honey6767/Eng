@@ -182,7 +182,7 @@ async function runPack(video: Video, kind: 'pack' | 'daypack', deps: PrepDeps, r
     return { kind: 'fail', stage: 'pack', code: 'transcript_too_short', message: '저장된 자막이 너무 짧아 학습 자료를 만들 수 없어요. 자막 탭에서 자막을 다시 넣어 주세요.', httpStatus: null };
   const exprs = new Map<string, Expression>(ctx.expressions.map((e) => [e.id, e]));
   const key = `${kind}:${video.id}`;
-  const makeBody = () => (kind === 'pack' ? buildPackRequest(video, ctx.transcript!, ctx.day) : buildDayPackRequest(video, ctx.day, ctx.sentences, ctx.items, exprs));
+  const makeBody = () => (kind === 'pack' ? buildPackRequest(video, ctx.transcript!, ctx.day) : buildDayPackRequest(video, ctx.day, ctx.sentences, ctx.items, exprs, ctx.transcript));
   const out = await runAiTask(key, makeBody, deps, (p) => onNote({ stage: kind, note: p.phase === 'processing' ? p.note : p.phase === 'sending' ? '요청 보내는 중' : undefined }), signal, { retryFailed: retry });
   if (!out.ok) {
     if (PAUSE_CODES.has(out.code)) return pauseFor(out.code, out.message, out.httpStatus, now());

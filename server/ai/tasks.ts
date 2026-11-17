@@ -68,7 +68,14 @@ export function validateTaskRequest(raw: unknown): AiTaskRequest | null {
       if (!Array.isArray(x.chunks) || x.chunks.length > L.maxChunksPerSentence || !x.chunks.every((c) => str(c, L.chunkChars))) return null;
       sentences.push({ number: x.number, text: x.text, meaningKo: x.meaningKo, chunks: x.chunks as string[] });
     }
-    return { task: 'daypack', videoId: r.videoId, title: r.title, seriesKind: r.seriesKind, dayNumber: r.dayNumber as number | null, sentences, promptVersion: r.promptVersion } satisfies AiDayPackRequest;
+    if (r.transcript !== undefined && !str(r.transcript, CONTENT_LIMITS.transcriptChars, 0)) return null;
+    if (r.taughtHints !== undefined && !(Array.isArray(r.taughtHints) && r.taughtHints.length <= 10 && r.taughtHints.every((h) => str(h, L.chunkChars)))) return null;
+    return {
+      task: 'daypack', videoId: r.videoId, title: r.title, seriesKind: r.seriesKind, dayNumber: r.dayNumber as number | null, sentences,
+      ...(typeof r.transcript === 'string' && r.transcript.trim() ? { transcript: r.transcript } : {}),
+      ...(Array.isArray(r.taughtHints) && r.taughtHints.length ? { taughtHints: r.taughtHints as string[] } : {}),
+      promptVersion: r.promptVersion,
+    } satisfies AiDayPackRequest;
   }
   if (r.task === 'dialogue') {
     const L = DIALOGUE_LIMITS;
@@ -283,8 +290,9 @@ const CORE_CHUNK_SCHEMA = {
     comparison: { type: 'string' },
     examples: EXAMPLES,
     sentenceNumbers: { type: 'array', items: { type: 'integer' } },
+    taughtEvidence: { type: 'string' },
   },
-  required: ['text', 'parts', 'meaningKo', 'nuance', 'usage', 'comparison', 'examples', 'sentenceNumbers'],
+  required: ['text', 'parts', 'meaningKo', 'nuance', 'usage', 'comparison', 'examples', 'sentenceNumbers', 'taughtEvidence'],
 } as const;
 
 const DAY_DIALOGUE_SCHEMA = {
@@ -312,13 +320,14 @@ const DAY_DIALOGUE_SCHEMA = {
         type: 'object',
         properties: {
           text: { type: 'string' },
+          kind: { type: 'string', enum: ['core', 'extra'] },
           usedAs: { type: 'array', items: { type: 'string' } },
           meaningInContext: { type: 'string' },
           nuance: { type: 'string' },
           whyUsed: { type: 'string' },
           example: { type: 'object', properties: { en: { type: 'string' }, ko: { type: 'string' } }, required: ['en', 'ko'] },
         },
-        required: ['text', 'usedAs', 'meaningInContext', 'nuance', 'whyUsed', 'example'],
+        required: ['text', 'kind', 'usedAs', 'meaningInContext', 'nuance', 'whyUsed', 'example'],
       },
     },
   },
@@ -349,60 +358,96 @@ export const PACK_SCHEMA = {
   required: ['sentences', 'coreChunks', 'dialogue', 'notes'],
 } as const;
 
+const EXTRA_CHUNK_SCHEMA = {
+  type: 'object',
+  properties: { sentenceNumber: { type: 'integer' }, ...PACK_CHUNK_SCHEMA.properties },
+  required: ['sentenceNumber', ...PACK_CHUNK_SCHEMA.required],
+} as const;
+
 export const DAYPACK_SCHEMA = {
   type: 'object',
-  properties: { coreChunks: { type: 'array', items: CORE_CHUNK_SCHEMA }, dialogue: DAY_DIALOGUE_SCHEMA, notes: { type: 'string' } },
-  required: ['coreChunks', 'dialogue', 'notes'],
+  properties: { coreChunks: { type: 'array', items: CORE_CHUNK_SCHEMA }, extraChunks: { type: 'array', items: EXTRA_CHUNK_SCHEMA }, dialogue: DAY_DIALOGUE_SCHEMA, notes: { type: 'string' } },
+  required: ['coreChunks', 'extraChunks', 'dialogue', 'notes'],
 } as const;
 
 const PARTS_RULE = `- parts: 그 표현을 이루는 단어를 문장에 나오는 순서대로 적습니다. 사이에 부사 등이 끼어 있으면 낀 단어는 빼고 적습니다.
   예) "I could seriously use a cup of coffee." → text "could use", parts ["could", "use"]`;
 
-const CORE_RULES = `공통 핵심 Chunk(coreChunks): 원문 문장들을 실제로 분석해, 여러 문장에 반복되거나 이 영상이 가르치는 가장 중요한 표현을 1~3개 고릅니다.
-- 모든 문장에 같은 표현이 있다고 가정하지 않습니다. 실제로 나오는 문장 번호만 sentenceNumbers에 적습니다.
-- 중간에 부사가 끼어도(could seriously use, could really use) 같은 표현으로 봅니다. text는 기본형("could use"), parts는 ["could", "use"].
-- 문장 전체를 Chunk로 쓰지 않습니다. 원문 문장은 그대로 두고, 그 안에서 학습할 Chunk만 식별합니다.
-- meaningKo(한국어 뜻), nuance(원어민이 쓸 때의 뉘앙스), usage(쓰는 상황), comparison(비슷한 표현과의 차이), examples(짧은 응용 예문 2개)`;
+const CORE_RULES = `핵심 Chunk(coreChunks): 강사가 영상에서 직접 소개하고 설명한(가르친) 표현만 고릅니다.
+- 자막의 강의 부분(예: "오늘 배울 표현은 …", "…는 이런 뜻이에요", 한국어 설명)을 근거로 판단합니다. 강사가 가르친 것이 아니면 핵심 Chunk에 넣지 않습니다.
+- 강사가 설명한 핵심 범위만 적습니다. 예) 강사가 could use를 가르쳤다면 핵심 Chunk는 "could use" 하나뿐입니다.
+  could use some rest, could use some help, could seriously use 같은 활용형은 별도 항목으로 만들지 않습니다(같은 Chunk의 활용 사례로 연결됩니다).
+- 보통 1~2개. 강의 설명을 찾을 수 없으면 원문 문장에 반복되는 표현 하나를 고르고 taughtEvidence는 빈 문자열로 둡니다.
+- taughtEvidence: 강사가 그 표현을 설명한 부분을 자막에서 짧게 그대로 인용(없으면 빈 문자열)
+- meaningKo·nuance는 강의에서 강사가 설명한 의미와 뉘앙스를 먼저 반영하고, 부족한 부분만 보충합니다.
+- usage(쓰는 상황), comparison(비슷한 표현과의 차이, 강사가 비교했다면 그 내용), examples(짧은 응용 예문 2개)
+- sentenceNumbers: 그 표현(사이에 부사가 낀 변형 포함)이 실제로 나오는 원문 문장 번호만. 모든 문장에 있다고 가정하지 않습니다.
+- 중간에 부사가 끼어도(could seriously use, could really use) 같은 Chunk입니다. text는 기본형, parts는 구성 단어.`;
 
-const DIALOGUE_RULES = (dayLabel: string) => `Day 통합 대화문(dialogue): 이 영상의 원문 문장과 공통 핵심 Chunk로, 학습자가 통째로 외울 자연스러운 대화문 1개를 만듭니다.
+const EXTRA_RULES = `추가 덩어리 표현: 강사가 가르치지는 않았지만 원문 문장에서 발견되는, 통째로 익히면 유용한 자연스러운 회화 덩어리(구동사·연어·관용 표현 등, 예: get much sleep).
+- 핵심 Chunk와 그 활용형(could use some rest, could seriously use 등)은 넣지 않습니다. 너무 평범한 단어, 고유명사는 제외합니다.
+- 문장마다 0~2개. 없으면 넣지 않습니다. 강사가 가르친 것처럼 쓰지 않습니다.
+- text는 문장에 있는 형태 그대로, meaningKo(뜻), meaningInSentence(이 문장 문맥에서의 의미), nuance, usage, comparison, examples(짧은 응용 예문 2개)`;
+
+const DIALOGUE_RULES = (dayLabel: string) => `Day 통합 대화문(dialogue): 이 영상의 원문 문장과 핵심 Chunk로, 학습자가 통째로 외울 자연스러운 대화문 1개를 만듭니다.
 - 대화의 흐름과 상황이 우선입니다. 실제 원어민이 일상에서 주고받을 법한 대화로 만듭니다.
 - 원문 문장을 그대로 넣어도 되고, 자연스럽게 잇기 위해 새 문장을 더해도 됩니다. 원문 문장을 그대로(또는 거의 그대로) 쓴 줄은 sourceSentenceNumber에 그 번호를, 새로 만든 줄은 0을 적습니다.
-- 공통 핵심 Chunk의 의미와 뉘앙스를 유지하고, 가능하면 대화 안에서 여러 번 자연스럽게 씁니다(억지로 반복하지 않음).
+- 핵심 Chunk의 의미와 뉘앙스를 유지하고, 가능하면 대화 안에서 여러 번 자연스럽게 씁니다(억지로 반복하지 않음). 추가 덩어리 표현은 자연스러울 때만 일부 씁니다.
 - 화자 A와 B가 번갈아 8~14줄. 모든 줄에 자연스러운 한국어 번역(ko).
-- chunkTexts: 그 줄에 들어간 공통 핵심 Chunk의 text (없으면 빈 배열)
-- chunkNotes: 공통 핵심 Chunk마다 하나. usedAs(대화에 실제로 쓴 형태들, en에 그대로 있는 부분), meaningInContext(이 대화에서의 의미), nuance, whyUsed(대화 속에서 쓴 이유), example(다른 상황 응용 예문 en·ko)
+- chunkTexts: 그 줄에 들어간 핵심 Chunk·추가 덩어리 표현의 text (없으면 빈 배열)
+- chunkNotes: 대화에 쓴 표현마다 하나. kind는 핵심 Chunk면 "core", 추가 덩어리 표현이면 "extra". usedAs(대화에 실제로 쓴 형태들, en에 그대로 있는 부분), meaningInContext(이 대화에서의 의미), nuance, whyUsed(대화 속에서 쓴 이유), example(다른 상황 응용 예문 en·ko)
 - title은 짧은 한국어 제목(${dayLabel} 포함), situation은 상황과 맥락(한국어 2~3문장).`;
 
 const dayLabelOf = (r: { seriesKind: string; dayNumber: number | null; title: string }) => (r.seriesKind === 'day' && r.dayNumber ? `Day ${r.dayNumber}` : '이 영상');
 
 export function buildPackPrompt(r: AiPackRequest): string {
-  const content = buildContentPrompt({ ...r, task: 'content' });
-  const head = content.slice(0, content.indexOf('\n\n[자막]')).replace('설명은 모두 한국어로 씁니다. JSON으로만 답하세요.', '설명은 모두 한국어로 씁니다.');
-  return `${head.replace('3. notes:', '5. notes:')}
+  const sentenceRule =
+    r.seriesKind === 'day'
+      ? `1. sentences: 영상에서 번호를 붙여 제시한 영어 문장을 영상에 나온 번호와 순서 그대로, 원문 그대로 적습니다(고치지 않음).
+- 개수는 영상에 실제로 나온 만큼만(4개든 6개든). number는 영상의 번호, 불분명하면 가르친 순서대로 1부터.
+- 인사, 구독 안내, 한국어 설명 문장은 넣지 않습니다.`
+      : `1. sentences: Day 시리즈가 아니므로 번호가 붙었다고 무조건 고르지 않습니다. 원어민이 일상회화에서 자주 쓰는, 통째로 익혀 응용할 수 있는 표현이 들어 있는 문장을 자막에서 원문 그대로 3~10개 고릅니다(단순 발췌·평범한 문장·고유명사 위주 문장 제외). number는 나온 순서대로 1부터.`;
+  return `아래는 영어 학습 영상${r.seriesKind === 'day' && r.dayNumber ? ` "Day ${r.dayNumber}"` : ''}(제목: ${r.title})의 전체 자막입니다. 강사가 한국어로 영어 표현을 설명하는 부분이 들어 있습니다.
+
+${sentenceRule}
+- text는 자막에 있는 영어 문장을 그대로 복사합니다. 자막에 없는 문장을 지어내지 않습니다.
+- meaningKo는 자연스러운 한국어 뜻, timestampSec는 그 문장이 처음 나오는 시각(초, 모르면 -1).
+- 각 문장의 chunks에는 아래 3번의 "추가 덩어리 표현"만 적습니다(핵심 Chunk와 그 활용형은 넣지 않음).
+
+2. ${CORE_RULES}
 ${PARTS_RULE}
 
-3. ${CORE_RULES}
+3. ${EXTRA_RULES}
+${PARTS_RULE}
 
 4. ${DIALOGUE_RULES(dayLabelOf(r))}
 
-JSON으로만 답하세요.
+5. notes: 확신하지 못한 부분. 없으면 빈 문자열.
+설명은 모두 한국어로 씁니다. JSON으로만 답하세요.
 
 [자막]
 ${r.transcript}`;
 }
 
 export function buildDayPackPrompt(r: AiDayPackRequest): string {
-  const list = r.sentences.map((x) => `${x.number}. ${x.text}${x.meaningKo ? ` (뜻: ${x.meaningKo})` : ''}${x.chunks.length ? ` [찾아 둔 Chunk: ${x.chunks.join(', ')}]` : ''}`).join('\n');
+  const list = r.sentences.map((x) => `${x.number}. ${x.text}${x.meaningKo ? ` (뜻: ${x.meaningKo})` : ''}`).join('\n');
+  const hints = r.taughtHints?.length ? `\n[이 영상 자막 분석에서 강사가 가르친 표현으로 찾은 것 — 참고]\n${r.taughtHints.join(', ')}\n` : '';
+  const transcript = r.transcript ? `\n[강의 자막 — 강사가 무엇을 가르쳤는지 판단하는 근거]\n${r.transcript}\n` : '';
   return `아래는 영어 학습 영상(${dayLabelOf(r)}, 제목: ${r.title})의 원문 핵심 문장입니다. 원문 문장은 고치지 않습니다.
 
 1. ${CORE_RULES}
 ${PARTS_RULE}
 
-2. ${DIALOGUE_RULES(dayLabelOf(r))}
+2. extraChunks — ${EXTRA_RULES}
+- sentenceNumber: 그 표현이 들어 있는 원문 문장 번호
+${PARTS_RULE}
 
-3. notes: 확신하지 못한 부분. 없으면 빈 문자열.
+3. ${DIALOGUE_RULES(dayLabelOf(r))}
+
+4. notes: 확신하지 못한 부분. 없으면 빈 문자열.
 설명은 모두 한국어로 씁니다. JSON으로만 답하세요.
 
 [원문 핵심 문장]
-${list}`;
+${list}
+${hints}${transcript}`;
 }

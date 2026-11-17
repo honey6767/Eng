@@ -3,6 +3,7 @@ import { contentStore } from '@/repositories';
 import { seriesOf } from '@/services/content/contentService';
 import type { DayAssignment, Dialogue, Expression, KeySentence, LearningItem, Video } from '@/types/models';
 import { chunkLabel, matchAllParts } from '@/utils/chunkMatch';
+import { classifyChunks, partsOfItem } from '@/services/prep/chunkRoles';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { LinkButton } from '@/components/ui/Button';
@@ -13,7 +14,6 @@ import { formatDuration } from '@/utils/date';
  *  ★ 공통 핵심 Chunk (could … use) → 원문 문장(번호 그대로, Chunk 강조) → 문장별 Chunk → Day 통합 대화문으로
  */
 
-const partsOfItem = (li: LearningItem, e: Expression | undefined) => li.chunk?.parts ?? (e ? [e.text] : []);
 
 /** 문장 안의 Chunk 부분만 강조 (떨어진 표현은 부분마다) */
 export function HighlightedText({ text, cores, chunks }: { text: string; cores: string[][]; chunks: string[][] }) {
@@ -29,7 +29,7 @@ export function HighlightedText({ text, cores, chunks }: { text: string; cores: 
   spans.forEach((sp, i) => {
     if (sp.s > pos) out.push(text.slice(pos, sp.s));
     out.push(
-      <mark key={i} className={`rounded px-0.5 text-ink ${sp.core ? 'bg-key font-bold' : 'bg-brand-soft'}`}>
+      <mark key={i} className={`rounded px-0.5 text-ink ${sp.core ? 'bg-key font-bold' : 'bg-brand-soft underline decoration-dashed decoration-brand underline-offset-4'}`}>
         {text.slice(sp.s, sp.e)}
       </mark>,
     );
@@ -59,53 +59,93 @@ export function StudyContentPanel({
   const [onlySelected, setOnlySelected] = useState(false);
   const series = seriesOf(video, day);
   const exprById = new Map(expressions.map((e) => [e.id, e]));
-  const chunks = items.filter((i) => i.kind === 'chunk');
-  const cores = items.filter((i) => i.kind === 'core');
+  const view = classifyChunks(items, exprById);
+  const { cores, extras, unclassified } = view;
+  const listChunks = [...extras, ...unclassified];
   const coreParts = cores.map((c) => partsOfItem(c, exprById.get(c.expressionId)));
-  const linkedIds = new Set([...chunks.map((c) => c.sentenceId), ...cores.flatMap((c) => (c.occurrences ?? []).map((o) => o.sentenceId))].filter(Boolean));
+  const linkedIds = new Set([...items.filter((i) => i.kind === 'chunk').map((c) => c.sentenceId), ...cores.flatMap((c) => (c.occurrences ?? []).map((o) => o.sentenceId))].filter(Boolean));
   const shown = sentences
     .filter((s) => s.origin === 'ai_extracted' || linkedIds.has(s.id))
     .sort((a, b) => (a.aiNumber ?? a.order) - (b.aiNumber ?? b.order) || a.order - b.order);
+  const byId = new Map(shown.map((s) => [s.id, s]));
   const numberOf = new Map(shown.map((s) => [s.id, s.aiNumber ?? s.order]));
   const dayDialogue = dialogues.find((d) => d.videoId === video.id && d.kind === 'original' && d.generatedBy === 'ai');
   if (shown.length === 0 && cores.length === 0) return null;
   const selectedS = shown.filter((s) => s.selected).length;
-  const selectedC = chunks.filter((c) => c.selected).length;
+  const selectedC = [...cores, ...listChunks].filter((c) => c.selected).length;
   const label = series.seriesKind === 'day' ? `Day ${series.dayNumber}` : '이 영상';
 
   return (
     <div className="space-y-4" data-testid="study-content">
       {cores.length > 0 && (
         <Card className="border-key/60 p-4" data-testid="core-chunks">
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            <h3 className="font-bold">★ 공통 핵심 Chunk</h3>
+          <div className="mb-1 flex flex-wrap items-center gap-2">
+            <h3 className="font-bold">★ 핵심 Chunk</h3>
             {series.seriesKind === 'day' ? <Badge tone="brand">{label}</Badge> : <Badge tone="info">일반 영상</Badge>}
           </div>
-          <ul className="space-y-3">
+          <p className="mb-2 text-xs text-subtle">강사가 영상에서 직접 소개하고 설명한 표현이에요. 원문 속 활용형은 아래 ‘활용 사례’로 모았어요.</p>
+          <ul className="space-y-4">
             {cores.map((c) => {
               const e = exprById.get(c.expressionId);
               const parts = partsOfItem(c, e);
+              const occ = c.occurrences ?? [];
               return (
                 <li key={c.id} data-testid="core-chunk">
                   <div className="flex flex-wrap items-baseline gap-2">
-                    <span className="en rounded bg-key px-1.5 text-lg font-extrabold text-ink">{chunkLabel(e?.text ?? parts.join(' '), parts, (c.occurrences ?? []).map((o) => o.surface))}</span>
+                    <span className="en rounded bg-key px-1.5 text-lg font-extrabold text-ink">{chunkLabel(e?.text ?? parts.join(' '), parts, occ.map((o) => o.surface))}</span>
                     {(c.chunk?.meaningInSentence || e?.meaningKo) && <span className="text-[15px] text-ink">{c.chunk?.meaningInSentence || e?.meaningKo}</span>}
+                    <span className="ml-auto">
+                      <SelectToggle on={!!c.selected} label="암기할 Chunk" testId="select-core" onChange={(v) => void contentStore.setChunkSelected(c.id, v)} />
+                    </span>
                   </div>
                   {c.chunk?.nuance && <p className="mt-1 text-sm"><span className="text-xs font-semibold text-subtle">뉘앙스 · </span>{c.chunk.nuance}</p>}
-                  {(c.occurrences?.length ?? 0) > 0 && (
-                    <p className="mt-1 text-sm text-muted" data-testid="core-occurrences">
-                      나오는 문장:{' '}
-                      {c.occurrences!.map((o, i) => (
-                        <span key={i} className="mr-2 whitespace-nowrap">
-                          <b className="text-ink">{numberOf.get(o.sentenceId) ?? '·'}</b> <span className="en">{o.surface}</span>
-                        </span>
-                      ))}
+                  {c.chunk?.taught && (
+                    <p className="mt-1 rounded-lg bg-canvas px-2.5 py-1.5 text-sm text-muted" data-testid="core-taught">
+                      <span className="text-xs font-semibold text-subtle">강의 설명 · </span>“{c.chunk.taught}”
                     </p>
+                  )}
+                  {occ.length > 0 && (
+                    <div className="mt-2" data-testid="core-occurrences">
+                      <p className="text-xs font-semibold text-subtle">활용 사례 {occ.length}개</p>
+                      <ul className="mt-1 space-y-1">
+                        {occ.map((o, i) => {
+                          const sent = byId.get(o.sentenceId);
+                          return (
+                            <li key={i} className="flex gap-2 text-sm">
+                              <b className="w-5 shrink-0 text-right text-ink">{numberOf.get(o.sentenceId) ?? '·'}</b>
+                              <span className="en min-w-0">
+                                {sent ? <HighlightedText text={sent.english} cores={[parts]} chunks={[]} /> : o.surface}
+                                {o.surface.toLowerCase() !== (e?.text ?? '').toLowerCase() && <span className="ml-1 text-xs text-subtle">({o.surface})</span>}
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
                   )}
                   <ChunkDetails item={c} />
                 </li>
               );
             })}
+          </ul>
+        </Card>
+      )}
+
+      {listChunks.length > 0 && (
+        <Card className="p-4" data-testid="extra-chunks">
+          <div className="mb-1 flex flex-wrap items-center gap-2">
+            <h3 className="font-bold">{cores.length ? '추가 덩어리 표현' : '문장 속 Chunk'}</h3>
+            {cores.length > 0 && <Badge tone="info">AI 추가</Badge>}
+          </div>
+          <p className="mb-2 text-xs text-subtle">
+            {cores.length ? '강사가 직접 가르치지는 않았지만, 영상 문맥에서 찾은 자연스럽고 유용한 회화 표현이에요.' : '이 영상은 핵심 Chunk가 아직 정리되지 않았어요. 학습 자료가 만들어지면 핵심 Chunk와 추가 표현으로 나뉘어요.'}
+          </p>
+          <ul className="space-y-2">
+            {listChunks
+              .filter((c) => !onlySelected || c.selected)
+              .map((c) => (
+                <ChunkRow key={c.id} item={c} expression={exprById.get(c.expressionId)} sentence={c.sentenceId ? byId.get(c.sentenceId) : undefined} number={c.sentenceId ? numberOf.get(c.sentenceId) : undefined} extra={cores.length > 0} />
+              ))}
           </ul>
         </Card>
       )}
@@ -136,12 +176,18 @@ export function StudyContentPanel({
           </label>
         </div>
         <p className="mt-1 text-sm text-muted" data-testid="content-counts">
-          원문 문장 {shown.length}개 · Chunk {chunks.length}개 · 고른 문장 {selectedS} · 고른 Chunk {selectedC}
+          원문 문장 {shown.length}개 · 핵심 Chunk {cores.length}개 · {cores.length ? '추가 표현' : 'Chunk'} {listChunks.length}개 · 고른 문장 {selectedS} · 고른 Chunk {selectedC}
         </p>
+        {(cores.length > 0 || listChunks.length > 0) && (
+          <p className="mt-1 flex flex-wrap gap-3 text-xs text-subtle">
+            <span><mark className="rounded bg-key px-1 text-ink">노란 표시</mark> 핵심 Chunk</span>
+            <span><mark className="rounded bg-brand-soft px-1 text-ink underline decoration-dashed decoration-brand underline-offset-4">점선 표시</mark> {cores.length ? '추가 덩어리 표현' : 'Chunk'}</span>
+          </p>
+        )}
         <ol className="mt-3 space-y-3">
           {shown.map((s) => {
-            const own = chunks.filter((c) => c.sentenceId === s.id && (!onlySelected || c.selected));
-            if (onlySelected && !s.selected && own.length === 0) return null;
+            const own = listChunks.filter((c) => c.sentenceId === s.id);
+            if (onlySelected && !s.selected) return null;
             return (
               <li key={s.id} className="rounded-2xl border border-line p-3.5" data-testid="content-sentence">
                 <div className="flex items-start gap-2.5">
@@ -162,13 +208,6 @@ export function StudyContentPanel({
                     </div>
                   </div>
                 </div>
-                {own.length > 0 && (
-                  <ul className="mt-3 space-y-2 border-t border-line pt-3">
-                    {own.map((c) => (
-                      <ChunkRow key={c.id} item={c} expression={exprById.get(c.expressionId)} />
-                    ))}
-                  </ul>
-                )}
               </li>
             );
           })}
@@ -228,18 +267,25 @@ function ChunkDetails({ item }: { item: LearningItem }) {
   );
 }
 
-function ChunkRow({ item, expression }: { item: LearningItem; expression: Expression | undefined }) {
+function ChunkRow({ item, expression, sentence, number, extra }: { item: LearningItem; expression: Expression | undefined; sentence?: KeySentence; number?: number; extra: boolean }) {
   const parts = item.chunk?.parts;
   return (
     <li className="rounded-xl bg-canvas p-3" data-testid="content-chunk">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="en rounded bg-brand-soft px-1.5 font-semibold text-ink">{chunkLabel(expression?.text ?? '(Chunk)', parts, [item.chunk?.surface])}</span>
-        {item.chunk?.surface && parts && parts.length > 1 && <span className="en text-xs text-subtle">({item.chunk.surface})</span>}
+        <span className="en rounded bg-brand-soft px-1.5 font-semibold text-ink underline decoration-dashed decoration-brand underline-offset-4">{chunkLabel(expression?.text ?? '(Chunk)', parts, [item.chunk?.surface])}</span>
         {expression?.meaningKo && <span className="text-sm text-muted">{expression.meaningKo}</span>}
+        {extra && <Badge tone="info">AI 추가</Badge>}
         <span className="ml-auto">
           <SelectToggle on={!!item.selected} label="암기할 Chunk" testId="select-chunk" onChange={(v) => void contentStore.setChunkSelected(item.id, v)} />
         </span>
       </div>
+      {item.chunk?.nuance && <p className="mt-1 text-sm"><span className="text-xs font-semibold text-subtle">뉘앙스 · </span>{item.chunk.nuance}</p>}
+      {sentence && (
+        <p className="mt-1 text-sm text-muted" data-testid="chunk-context">
+          <span className="text-xs font-semibold text-subtle">문맥 {number ?? ''}번 · </span>
+          <span className="en">{sentence.english}</span>
+        </p>
+      )}
       <ChunkDetails item={item} />
     </li>
   );

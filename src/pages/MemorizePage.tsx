@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { contentStore } from '@/repositories';
 import { useLiveData } from '@/hooks/useLiveData';
 import { useToast } from '@/hooks/useToast';
-import { blankIndexes, blankPlanOf, DEFAULT_BLANK_LEVELS, tokensOf } from '@/services/prep/blanks';
+import { blankIndexes, blankPlanOf, DEFAULT_BLANK_LEVELS, normalizedRanks, tokensOf } from '@/services/prep/blanks';
 import type { DialogueProgress, MemorizeStep, Rating } from '@/types/models';
 import { STEP_NAMES } from '@/utils/labels';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -134,9 +134,9 @@ export function MemorizePage() {
           )}
         </div>
         <p className="text-xs text-subtle">
-          {step === 1 && '노란 표시가 핵심 Chunk예요. 소리 내어 몇 번 읽어 보세요.'}
+          {step === 1 && '노란 표시 = 강사가 가르친 핵심 Chunk, 점선 표시 = AI가 찾은 추가 덩어리 표현이에요. 소리 내어 몇 번 읽어 보세요.'}
           {step === 2 && '핵심 Chunk가 빈칸이에요. 빈칸을 누르면 정답이 보여요.'}
-          {step === 3 && '핵심 Chunk와 주요 단어가 빈칸이에요. 빈칸 양을 조절할 수 있어요.'}
+          {step === 3 && '핵심 Chunk에 더해 추가 덩어리 표현과 주요 단어가 빈칸이에요. 빈칸 양을 조절할 수 있어요.'}
           {step === 4 && '문장 대부분이 빈칸이에요. 한국어를 보고 영어로 말해 보세요.'}
           {step === 5 && '영어를 보지 않고 한국어만 보고 대화 전체를 말해 보세요. 줄을 누르면 영어가 보여요.'}
         </p>
@@ -146,7 +146,7 @@ export function MemorizePage() {
         <ol className="flex flex-col gap-3" data-testid="memorize-lines">
           {dialogue.lines.map((line) => {
             const en = line.segments.map((s) => s.text).join(' ');
-            const ranks = plan.lines[line.id] ?? [];
+            const ranks = normalizedRanks(plan, line.id);
             const blanks = blankIndexes(ranks, line.id, step, level);
             const lineOpen = revealAll || revealed.has(`${line.id}:all`);
             const isA = line.speaker === 'A';
@@ -164,6 +164,7 @@ export function MemorizePage() {
                       {tokensOf(en).map((t, i) => {
                         if (!t.word) return <span key={i}>{t.text}</span>;
                         const isChunk = ranks[t.index] === 1;
+                        const isExtra = ranks[t.index] === 2;
                         const key = `${line.id}:${t.index}`;
                         const hidden = step !== 5 && blanks.has(t.index) && !revealAll && !revealed.has(key);
                         if (hidden)
@@ -173,7 +174,7 @@ export function MemorizePage() {
                               type="button"
                               onClick={() => setRevealed(new Set([...revealed, key]))}
                               data-testid="blank"
-                              className={`mx-px inline-block rounded border-b-2 px-0.5 text-left align-baseline ${isChunk ? 'border-key-ink bg-key/60' : 'border-line-strong bg-canvas'}`}
+                              className={`mx-px inline-block rounded border-b-2 px-0.5 text-left align-baseline ${isChunk ? 'border-key-ink bg-key/60' : isExtra ? 'border-dashed border-brand bg-brand-soft' : 'border-line-strong bg-canvas'}`}
                               style={{ minWidth: `${Math.max(2, t.text.length) * 0.62}em` }}
                               aria-label="빈칸 — 눌러서 정답 보기"
                             >
@@ -181,7 +182,7 @@ export function MemorizePage() {
                             </button>
                           );
                         return (
-                          <span key={i} className={step === 1 && isChunk ? 'rounded bg-key px-0.5' : blanks.has(t.index) ? 'font-semibold text-brand' : ''}>
+                          <span key={i} className={step === 1 && isChunk ? 'rounded bg-key px-0.5' : step === 1 && isExtra ? 'rounded bg-brand-soft px-0.5 underline decoration-dashed decoration-brand underline-offset-4' : blanks.has(t.index) ? 'font-semibold text-brand' : ''}>
                             {t.text}
                           </span>
                         );

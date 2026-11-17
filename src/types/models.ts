@@ -261,9 +261,13 @@ export interface DialogueLine {
   sourceSentenceId?: string;
 }
 
-/** 빈칸 암기 자료 — 줄마다 단어별 빈칸 순위 (1=핵심 Chunk, 2=주요 단어, 3=나머지). 단어 순서는 wordsOf(영어 문장)과 같다 */
+/**
+ * 빈칸 암기 자료 — 줄마다 단어별 빈칸 순위. 단어 순서는 wordsOf(영어 문장)과 같다
+ * - version 1: 1=핵심 Chunk, 2=주요 단어, 3=나머지
+ * - version 2: 1=핵심 Chunk, 2=추가 덩어리 표현, 3=주요 단어, 4=나머지
+ */
 export interface BlankPlan {
-  version: 1;
+  version: 1 | 2;
   lines: Record<string, number[]>;
 }
 
@@ -305,6 +309,8 @@ export interface Dialogue extends BaseRecord {
 
 export interface DialogueChunkUsage {
   learningItemId: string;
+  /** core = 강사가 가르친 핵심 Chunk, extra = AI가 찾은 추가 덩어리 표현 (없으면 core) */
+  kind?: 'core' | 'extra';
   expressionId: string;
   /** 학습한 형태 */
   text: string;
@@ -471,6 +477,8 @@ export interface ChunkDetail {
   parts?: string[];
   /** 원문에 나온 실제 형태 (예: "could seriously use") */
   surface?: string;
+  /** 핵심 Chunk — 강사가 강의에서 설명한 부분 (자막 인용) */
+  taught?: string;
 }
 /** Day 영상에서 왔는지(day), 그 밖의 영상인지(other) */
 export type LearningItemSourceType = 'day' | 'other';
@@ -508,6 +516,8 @@ export interface LearningItem extends BaseRecord {
   contentRequestId?: string;
   /** kind='core' — 이 공통 Chunk가 나오는 원문 문장과 그 문장 속 실제 형태 */
   occurrences?: { sentenceId: string; surface: string }[];
+  /** kind='chunk' — 'extra' = 강사가 가르치지 않았지만 AI가 문맥에서 찾은 추가 덩어리 표현 (새 기준으로 만든 항목에만) */
+  chunkRole?: 'extra';
 }
 
 export type DayAssignmentStatus = 'suggested' | 'confirmed';

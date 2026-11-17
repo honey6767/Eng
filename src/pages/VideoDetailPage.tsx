@@ -373,7 +373,7 @@ function DayDialogueInline({ dialogue, sentences }: { dialogue: Dialogue; senten
         <p className="font-bold">{dialogue.title}</p>
         <p className="mt-0.5 text-sm text-muted">{dialogue.situation}</p>
       </div>
-      <DialogueView lines={dialogue.lines} sentences={sentences} showKorean={showKorean} highlightKeys />
+      <DialogueView lines={dialogue.lines} sentences={sentences} showKorean={showKorean} highlightKeys extraIds={new Set((dialogue.chunkUsages ?? []).filter((u) => u.kind === 'extra').map((u) => u.learningItemId))} />
       {ai.length > 0 && (
         <div className="rounded-xl bg-canvas p-3 text-sm" data-testid="source-map">
           <p className="mb-1 text-xs font-semibold text-subtle">원문 문장 연결</p>
@@ -391,10 +391,13 @@ function DayDialogueInline({ dialogue, sentences }: { dialogue: Dialogue; senten
       )}
       {(dialogue.chunkUsages?.length ?? 0) > 0 && (
         <ul className="space-y-2" data-testid="day-chunk-usages">
-          {dialogue.chunkUsages!.map((u) => (
+          {[...dialogue.chunkUsages!].sort((x, y) => (x.kind === 'extra' ? 1 : 0) - (y.kind === 'extra' ? 1 : 0)).map((u) => (
             <li key={u.learningItemId} className="rounded-xl border border-line p-3 text-sm">
-              <p>
-                <mark className="en rounded bg-key px-1 font-bold text-ink">{u.text}</mark> <span className="text-xs text-subtle">대화 속 형태: {u.usedAs}</span>
+              <p className="flex flex-wrap items-center gap-1.5">
+                <mark className={`en rounded px-1 font-bold text-ink ${u.kind === 'extra' ? 'bg-brand-soft underline decoration-dashed decoration-brand underline-offset-4' : 'bg-key'}`}>{u.text}</mark>
+                {u.kind === 'extra' && <Badge tone="info">추가 덩어리 표현 · AI</Badge>}
+                {u.kind === 'core' && <Badge tone="key">핵심 Chunk</Badge>}
+                <span className="text-xs text-subtle">대화 속 형태: {u.usedAs}</span>
               </p>
               {u.meaningInContext && <p className="mt-1"><span className="text-xs font-semibold text-subtle">이 대화의 의미 · </span>{u.meaningInContext}</p>}
               {u.nuance && <p><span className="text-xs font-semibold text-subtle">뉘앙스 · </span>{u.nuance}</p>}

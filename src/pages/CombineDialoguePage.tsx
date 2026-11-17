@@ -138,6 +138,7 @@ export function CombineDialoguePage() {
                           <input type="checkbox" className="mt-1" checked={checked.includes(c.item.id)} onChange={() => toggleChunk(c.item.id)} data-testid="combine-chunk" />
                           <span className="min-w-0 flex-1">
                             <span className="en font-semibold text-ink">{c.expression.text}</span>
+                            {c.role === 'core' ? <Badge tone="key" className="ml-2">핵심</Badge> : <Badge tone="info" className="ml-2">추가 · AI</Badge>}
                             {c.expression.meaningKo && <span className="ml-2 text-sm text-muted">{c.expression.meaningKo}</span>}
                             {c.learned && <Badge tone="ok" className="ml-2">학습함</Badge>}
                             {c.selected && <Badge tone="brand" className="ml-1">고름</Badge>}

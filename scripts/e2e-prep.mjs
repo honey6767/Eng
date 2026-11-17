@@ -75,7 +75,7 @@ const dumpDb = (page) =>
       }),
   );
 
-const DAY11 = ['Welcome to Day 11.', '1. I could seriously use a cup of coffee right now.', '2. We could use some help.', '3. You look tired. You could use some rest.', '4. I could really use a nap.', 'See you!'];
+const DAY11 = ['Welcome to Day 11.', "Today's expression is could use. It sounds softer than need.", '1. I could seriously use a cup of coffee right now.', '2. We could use some help.', '3. You look tired. You could use some rest.', '4. I could really use a nap.', 'See you!'];
 
 const seed = (page, day11) =>
   page.evaluate(
@@ -100,7 +100,7 @@ const seed = (page, day11) =>
           ts.add(tr('bad', ['1. I could use a break.']));
           // 운영 Day 11처럼 원문 문장은 이미 있음 (대화문은 없음)
           const ks = tx.objectStore('keySentences');
-          day11.slice(1, 5).forEach((line, i) => ks.add({ id: `ks-old-${i + 1}`, createdAt: now, updatedAt: now, videoId: 'd11', order: i + 1, english: line.replace(/^\d+\.\s*/, ''), korean: `기존 번역 ${i + 1}`, expressionIds: [], situation: '', timestampSec: (i + 1) * 10, status: 'learning', correctCount: 1, wrongCount: 0, origin: 'ai_extracted', aiNumber: i + 1, selected: i === 0 }));
+          day11.filter((l) => /^\d+\./.test(l)).forEach((line, i) => ks.add({ id: `ks-old-${i + 1}`, createdAt: now, updatedAt: now, videoId: 'd11', order: i + 1, english: line.replace(/^\d+\.\s*/, ''), korean: `기존 번역 ${i + 1}`, expressionIds: [], situation: '', timestampSec: (i + 1) * 10, status: 'learning', correctCount: 1, wrongCount: 0, origin: 'ai_extracted', aiNumber: i + 1, selected: i === 0 }));
           // 기존 사용자 데이터
           tx.objectStore('expressions').add({ id: 'ex-user-1', createdAt: now, updatedAt: now, normalizedKey: 'could use', text: 'could use', meaningKo: '내가 쓴 뜻', sourceRefs: [], isFavorite: true, isMarkedDifficult: true });
           tx.objectStore('reviewStates').add({ id: 'expression:ex-user-1', createdAt: now, updatedAt: now, itemType: 'expression', itemId: 'ex-user-1', stage: 2, nextReviewAt: now, lastReviewedAt: now, weakness: 1, history: [] });
@@ -194,10 +194,17 @@ async function main() {
     await page.goto(`${BASE}/videos/d11`);
     await page.getByTestId('core-chunks').waitFor();
     const core = await page.getByTestId('core-chunks').innerText();
-    check('Day 11 공통 핵심 Chunk: could … use, could seriously use·could really use 연결', /could … use/.test(core) && /could seriously use/.test(core) && /could really use/.test(core), core.split('\n').slice(0, 4).join(' / '));
+    check('Day 11 공통 핵심 Chunk: could … use, could seriously use·could really use 연결', /could … use/.test(core) && /could seriously use/.test(core) && /could really use/.test(core), core.replace(/\n/g, ' / ').slice(0, 600));
     const sents = await page.getByTestId('content-sentence').allInnerTexts();
     check('원문 문장 4개 그대로 (기존 번역 유지)', sents.length === 4 && sents[0].includes('기존 번역 1'));
     check('문장 속 Chunk 강조 (부사는 강조 안 함)', (await page.locator('[data-testid="content-sentence"] mark', { hasText: /^seriously$/ }).count()) === 0 && (await page.locator('[data-testid="content-sentence"] mark', { hasText: /^could$/ }).count()) >= 2);
+    const taught = (await page.getByTestId('core-taught').count()) ? await page.getByTestId('core-taught').first().innerText() : '';
+    check('핵심 Chunk = 강사가 가르친 표현: 강의 설명 인용 표시', /강의 설명/.test(taught), taught.slice(0, 60));
+    check('활용형(could seriously use 등)은 핵심 Chunk 아래 활용 사례로 묶임', /활용 사례/.test(await page.getByTestId('core-occurrences').first().innerText()));
+    const extraCard = (await page.getByTestId('extra-chunks').count()) ? await page.getByTestId('extra-chunks').innerText() : '';
+    const extraTexts = await page.locator('[data-testid="extra-chunks"] [data-testid="content-chunk"] > div > span.en').allInnerTexts();
+    check('추가 덩어리 표현은 별도 카드·AI 추가 표시, 핵심 Chunk 활용형 없음', /추가 덩어리 표현/.test(extraCard) && /AI 추가/.test(extraCard) && extraTexts.length > 0 && !extraTexts.some((t) => /\bcould\b/i.test(t)), extraTexts.join(', '));
+    check('추가 덩어리 표현에 의미·실제 문맥 문장', (await page.locator('[data-testid="extra-chunks"] [data-testid="chunk-context"]').count()) > 0);
     await page.screenshot({ path: `${SHOTS}/prep-02-day11-sentences.png`, fullPage: true });
 
     // ── 대화문 탭 ──

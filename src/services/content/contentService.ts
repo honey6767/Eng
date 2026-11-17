@@ -158,6 +158,8 @@ export interface ContentContext {
   expressionIdByKey: Map<string, string>;
   now: string;
   newId: () => string;
+  /** 새로 만드는 문장별 Chunk를 '추가 덩어리 표현'으로 표시 (학습 자료 생성) */
+  chunkRole?: 'extra';
 }
 
 export interface ContentPlan {
@@ -246,6 +248,7 @@ export function planContent(ctx: ContentContext): ContentPlan {
         extractionDraftId: null, legacyKeySentenceId: null, sentenceId,
         chunk: { meaningInSentence: c.meaningInSentence, nuance: c.nuance, usage: c.usage, comparison: c.comparison, examples: c.examples, ...(c.parts ? { parts: c.parts } : {}), ...(c.surface ? { surface: c.surface } : {}) },
         selected: false, contentRequestId: requestId,
+        ...(ctx.chunkRole ? { chunkRole: ctx.chunkRole } : {}),
       });
     }
   });

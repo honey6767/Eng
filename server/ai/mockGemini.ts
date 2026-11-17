@@ -56,12 +56,19 @@ function findForm(sentence: string, parts: string[]): string | null {
 }
 
 /** 가짜 공통 Chunk + Day 대화문: 문장들에 가장 많이 나오는 아는 표현(사이 부사 허용)을 공통 Chunk로, 원문 문장을 그대로 쓴 줄 + 연결 문장 */
-function mockDayPack(sentences: { number: number; text: string }[], dayLabel: string) {
+function mockDayPack(sentences: { number: number; text: string }[], dayLabel: string, transcript = '') {
   const counts = MOCK_CHUNKS.map((c) => ({ c, parts: c.split(' '), hits: sentences.filter((s) => findForm(s.text, c.split(' '))) }));
   const best = counts.filter((x) => x.hits.length > 0).sort((a, b) => b.hits.length - a.hits.length)[0];
   const core = best
-    ? [{ text: best.c, parts: best.parts, meaningKo: `${best.c}의 뜻`, nuance: '부드럽게 바람을 말하는 느낌', usage: '지칠 때·도움이 필요할 때', comparison: 'need보다 덜 직접적', examples: [{ en: `I ${best.c} a hand.`, ko: '도움이 좀 필요해.' }, { en: `You ${best.c} some sleep.`, ko: '너 좀 자야겠다.' }], sentenceNumbers: best.hits.map((s) => s.number) }]
+    ? [{ text: best.c, parts: best.parts, meaningKo: `${best.c}의 뜻`, nuance: '부드럽게 바람을 말하는 느낌', usage: '지칠 때·도움이 필요할 때', comparison: 'need보다 덜 직접적', examples: [{ en: `I ${best.c} a hand.`, ko: '도움이 좀 필요해.' }, { en: `You ${best.c} some sleep.`, ko: '너 좀 자야겠다.' }], sentenceNumbers: best.hits.map((s) => s.number), taughtEvidence: transcript.split('\n').find((l) => /expression is|오늘 배울 표현/i.test(l))?.replace(/^\d+:\d{2}\s*/, '') ?? '' }]
     : [];
+  // 추가 덩어리 표현: 핵심 Chunk가 아닌 아는 표현 (활용형 제외)
+  const extraChunks = sentences.flatMap((s) =>
+    MOCK_CHUNKS.filter((c) => c !== best?.c && s.text.toLowerCase().includes(c) && !(best && findForm(c, best.parts))).map((c) => ({
+      sentenceNumber: s.number, text: c, parts: [c], meaningKo: `${c}의 뜻`, meaningInSentence: `이 문장에서 ${c}`, nuance: '자연스러운 구어', usage: '일상 대화', comparison: '비슷한 표현보다 가벼움',
+      examples: [{ en: `Let's ${c}.`, ko: `${c} 하자.` }],
+    })),
+  );
   const lines: { speaker: 'A' | 'B'; en: string; ko: string; sourceSentenceNumber: number; chunkTexts: string[] }[] = [];
   sentences.forEach((s, i) => {
     lines.push({ speaker: i % 2 === 0 ? 'A' : 'B', en: s.text, ko: `(번역) ${s.text}`, sourceSentenceNumber: s.number, chunkTexts: core.length && findForm(s.text, core[0].parts) ? [core[0].text] : [] });
@@ -70,11 +77,12 @@ function mockDayPack(sentences: { number: number; text: string }[], dayLabel: st
   const usedAs = core.length ? [...new Set(sentences.map((s) => findForm(s.text, core[0].parts)).filter((x): x is string => !!x))] : [];
   return {
     coreChunks: core,
+    extraChunks,
     dialogue: {
       title: `${dayLabel} 카페에서`,
       situation: '퇴근 후 지친 두 동료가 카페에서 이야기합니다.',
       lines,
-      chunkNotes: core.map((c) => ({ text: c.text, usedAs, meaningInContext: `여기서는 ${c.meaningKo}`, nuance: '편한 사이의 말투', whyUsed: '피곤함을 부드럽게 말하려고', example: { en: `I ${c.text} a break.`, ko: '좀 쉬고 싶다.' } })),
+      chunkNotes: core.map((c) => ({ text: c.text, kind: 'core', usedAs, meaningInContext: `여기서는 ${c.meaningKo}`, nuance: '편한 사이의 말투', whyUsed: '피곤함을 부드럽게 말하려고', example: { en: `I ${c.text} a break.`, ko: '좀 쉬고 싶다.' } })),
     },
     notes: '',
   };
@@ -82,12 +90,16 @@ function mockDayPack(sentences: { number: number; text: string }[], dayLabel: st
 
 export function mockPackResult(r: AiPackRequest) {
   const c = mockContentResult({ ...r, task: 'content' });
-  const sentences = c.sentences.map((s) => ({ ...s, chunks: s.chunks.map((k) => ({ ...k, parts: k.text.split(' ') })) }));
-  return { sentences, ...mockDayPack(sentences, r.dayNumber ? `Day ${r.dayNumber}` : '영상'), notes: '' };
+  const day = mockDayPack(c.sentences, r.dayNumber ? `Day ${r.dayNumber}` : '영상', r.transcript);
+  // 문장별 chunks = 추가 덩어리 표현 (핵심 Chunk·활용형 제외) — 실제 Gemini처럼 가끔 활용형을 섞어 앱의 걸러내기도 확인
+  const sentences = c.sentences.map((s) => ({ ...s, chunks: s.chunks.map((k) => ({ ...k, parts: [k.text] })) }));
+  const { extraChunks: _e, ...rest } = day;
+  void _e;
+  return { sentences, ...rest, notes: '' };
 }
 
 export function mockDayPackResult(r: AiDayPackRequest) {
-  return mockDayPack(r.sentences, r.dayNumber ? `Day ${r.dayNumber}` : '영상');
+  return mockDayPack(r.sentences, r.dayNumber ? `Day ${r.dayNumber}` : '영상', r.transcript ?? '');
 }
 
 /** 가짜 통합 대화문: Chunk마다 한 줄씩, 마지막 하나는 쓰지 않음(unusedRefs 확인용) */

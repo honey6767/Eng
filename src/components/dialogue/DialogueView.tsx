@@ -11,12 +11,15 @@ export function DialogueView({
   showKorean = true,
   showEnglish = true,
   highlightKeys = true,
+  extraIds,
 }: {
   lines: DialogueLine[];
   sentences: KeySentence[];
   showKorean?: boolean;
   showEnglish?: boolean;
   highlightKeys?: boolean;
+  /** 추가 덩어리 표현(AI가 찾은 표현)의 학습 항목 id — 핵심 Chunk와 다르게 표시 */
+  extraIds?: Set<string>;
 }) {
   const orderById = new Map(sentences.map((s) => [s.id, s.aiNumber ?? s.order]));
 
@@ -55,8 +58,8 @@ export function DialogueView({
                         <span key={i}>
                           {sep}
                           <mark
-                            className="rounded bg-key px-0.5 text-ink [box-decoration-break:clone]"
-                            title={seg.learningItemId ? '배운 Chunk' : n ? `핵심 문장 ${n}` : '핵심 문장'}
+                            className={`rounded px-0.5 text-ink [box-decoration-break:clone] ${seg.learningItemId && extraIds?.has(seg.learningItemId) ? 'bg-brand-soft underline decoration-dashed decoration-brand underline-offset-4' : 'bg-key'}`}
+                            title={seg.learningItemId ? (extraIds?.has(seg.learningItemId) ? '추가 덩어리 표현' : '핵심 Chunk') : n ? `핵심 문장 ${n}` : '핵심 문장'}
                           >
                             {seg.text}
                           </mark>

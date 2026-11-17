@@ -2,6 +2,7 @@ import { parseDayNumber } from '@/db/upgradeV2toV3';
 import { AI_DIALOGUE_PROMPT_VERSION, DIALOGUE_LIMITS, type AiDialogueRequest } from '@/types/aiApi';
 import type { Dialogue, DialogueChunkUsage, DialogueLine, DialogueSegment, Expression, LearningItem, Video } from '@/types/models';
 import type { CombineContext } from '@/repositories/contentStore';
+import { isVariantOfCore } from '@/services/prep/chunkRoles';
 
 /**
  * 여러 Day의 Chunk를 결합한 통합 대화문
@@ -14,6 +15,8 @@ import type { CombineContext } from '@/repositories/contentStore';
 
 export interface ChunkCandidate {
   item: LearningItem;
+  /** core = 강사가 가르친 핵심 Chunk(자막 추출의 핵심 표현 포함), extra = AI가 찾은 추가 덩어리 표현 */
+  role: 'core' | 'extra';
   expression: Expression;
   /** 원본 문장 */
   sentence: string | null;
@@ -45,7 +48,12 @@ export function buildCandidateGroups(ctx: CombineContext): CandidateGroup[] {
   // Chunk를 먼저, 같은 묶음 안에서 같은 표현은 하나만
   // 공통 핵심 Chunk → 문장별 Chunk → 핵심 표현 순으로, 같은 묶음 안에서 같은 표현은 하나만
   const rank = (k: string) => (k === 'core' ? 0 : k === 'chunk' ? 1 : 2);
-  const items = [...ctx.items].filter((i) => i.kind === 'core' || i.kind === 'chunk' || i.kind === 'key').sort((a, b) => rank(a.kind) - rank(b.kind));
+  const cores = ctx.items.filter((i) => i.kind === 'core');
+  const items = [...ctx.items]
+    .filter((i) => i.kind === 'core' || i.kind === 'chunk' || i.kind === 'key')
+    // 예전 기준의 활용형(could seriously use 등)은 핵심 Chunk에 포함되므로 따로 후보로 두지 않음
+    .filter((i) => !isVariantOfCore(i, cores, exprById))
+    .sort((a, b) => rank(a.kind) - rank(b.kind));
   for (const item of items) {
     const expression = exprById.get(item.expressionId);
     const video = item.videoId ? videoById.get(item.videoId) : undefined;
@@ -62,7 +70,7 @@ export function buildCandidateGroups(ctx: CombineContext): CandidateGroup[] {
     if (at && (!g.lastStudiedAt || at > g.lastStudiedAt)) g.lastStudiedAt = at;
     if (g.chunks.some((c) => c.expression.id === expression.id)) continue;
     const sentence = item.sentenceId ? (sentenceById.get(item.sentenceId)?.english ?? item.sourceText) : item.sourceText;
-    g.chunks.push({ item, expression, sentence: sentence ?? null, learned: learned.has(expression.id), selected: !!item.selected });
+    g.chunks.push({ item, role: item.kind === 'chunk' ? 'extra' : 'core', expression, sentence: sentence ?? null, learned: learned.has(expression.id), selected: !!item.selected });
   }
   return [...groups.values()].sort((a, b) => (a.dayNumber ?? 1e6) - (b.dayNumber ?? 1e6) || a.label.localeCompare(b.label));
 }
@@ -176,7 +184,7 @@ export function buildDialogueRecord(text: string, req: AiDialogueRequest, groups
     usedAsById.set(ref, form);
     const ex = (n?.example ?? {}) as Record<string, unknown>;
     usages.push({
-      learningItemId: ref, expressionId: found.c.expression.id, text: found.c.expression.text, usedAs: form, dayNumber: found.g.dayNumber, videoId: found.c.item.videoId,
+      learningItemId: ref, kind: found.c.role, expressionId: found.c.expression.id, text: found.c.expression.text, usedAs: form, dayNumber: found.g.dayNumber, videoId: found.c.item.videoId,
       meaningInContext: txt(n?.meaningInContext), nuance: txt(n?.nuance), whyUsed: txt(n?.whyUsed), example: { en: txt(ex.en, 300), ko: txt(ex.ko, 300) },
     });
   }

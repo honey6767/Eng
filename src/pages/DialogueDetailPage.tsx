@@ -99,10 +99,14 @@ export function DialogueDetailPage() {
           </div>
 
           <Card className="p-4 sm:p-5">
-            <DialogueView lines={dialogue.lines} sentences={sentences} showKorean={showKorean} highlightKeys={highlight} />
+            <DialogueView lines={dialogue.lines} sentences={sentences} showKorean={showKorean} highlightKeys={highlight} extraIds={new Set((dialogue.chunkUsages ?? []).filter((u) => u.kind === 'extra').map((u) => u.learningItemId))} />
             <p className="mt-4 flex items-center gap-2 border-t border-line pt-3 text-xs text-muted">
               <mark className="shrink-0 rounded bg-key px-1 whitespace-nowrap text-ink">노란 표시</mark>
-              {dialogue.kind === 'combined' ? ' 이전 Day에서 배운 Chunk · 나머지는 자연스러운 대화를 위한 말' : ' 영상의 핵심 문장(원문 그대로) · 나머지는 자연스러운 대화를 위한 연결 문장'}
+              {dialogue.kind === 'combined'
+                ? ' 이전 Day에서 배운 Chunk · 나머지는 자연스러운 대화를 위한 말'
+                : dialogue.generatedBy === 'ai'
+                  ? ' 강사가 가르친 핵심 Chunk · 점선은 AI가 찾은 추가 덩어리 표현'
+                  : ' 영상의 핵심 문장(원문 그대로) · 나머지는 자연스러운 대화를 위한 연결 문장'}
             </p>
           </Card>
 
@@ -120,9 +124,13 @@ export function DialogueDetailPage() {
                   <li key={u.learningItemId}>
                     <Card className="p-3.5 text-sm">
                       <div className="flex flex-wrap items-center gap-2">
-                        <mark className="en rounded bg-key px-1 font-semibold text-ink">{u.usedAs}</mark>
+                        <mark className={`en rounded px-1 font-semibold text-ink ${u.kind === 'extra' ? 'bg-brand-soft underline decoration-dashed decoration-brand underline-offset-4' : 'bg-key'}`}>{u.usedAs}</mark>
                         {u.usedAs.toLowerCase() !== u.text.toLowerCase() && <span className="text-xs text-subtle">(배운 형태: {u.text})</span>}
-                        <Badge tone={u.dayNumber ? 'info' : 'neutral'}>{u.dayNumber ? `Day ${u.dayNumber}에서 배움` : '일반 영상에서 배움'}</Badge>
+                        {u.kind === 'extra' && <Badge tone="info">추가 덩어리 표현 · AI</Badge>}
+                        {u.kind === 'core' && <Badge tone="key">핵심 Chunk</Badge>}
+                        <Badge tone={u.dayNumber ? 'info' : 'neutral'}>
+                          {(u.dayNumber ? `Day ${u.dayNumber}` : '일반 영상') + (u.kind === 'extra' ? ' 문장에서 찾음' : '에서 배움')}
+                        </Badge>
                       </div>
                       <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
                         {u.meaningInContext && (
