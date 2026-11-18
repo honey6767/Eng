@@ -196,30 +196,19 @@ for (const [label, makeStore] of [['메모리 장부', () => memoryLedgerStore()
 }
 
 for (const [label, makeStore] of [['메모리 장부', () => memoryLedgerStore()], ['SQLite 장부(Durable Object와 같은 코드)', nodeSqliteStore]] as const) {
-  describe(`AI 질문 하루 한도 — ${label}`, () => {
-    const askBody = (turn: number, sessionId = 's1') => ({ task: 'ask', sessionId, turn, context: { source: 'Day 11', dayNumber: 11, role: 'extra', base: 'look tired' }, history: [], question: `질문 ${turn}`, promptVersion: 'q1' });
-
-    it('질문은 따로 센다 (기본 10, 설정 가능) — 한도를 넘으면 Gemini 호출 없이 daily_cap, 전체 요청 상한에도 포함, 표 구조는 그대로', async () => {
+  describe(`AI 질문 기능 제외 — ${label}`, () => {
+    it('질문 요청(task: ask)은 받지 않는다 — Gemini 호출도, 사용량 집계도, 장부 기록도 없음', async () => {
       const store = makeStore();
       const g = createMockGemini();
-      const askCaps: AiCaps = { dailyVideoSec: 3600, dailyRequests: 5, maxVideoSec: 1800, dailyAsk: 2 };
-      const run = (key: string, b: unknown) => handleAiExtract({ idempotencyKey: key, body: b }, { store, gemini: g, caps: askCaps, now: () => T });
-      expect((await run(KEY(901), askBody(1))).body.state).toBe('pending');
-      expect((await run(KEY(902), askBody(2))).body.state).toBe('pending');
-      expect(store.countCounted('ask', pacificDate(T))).toBe(2);
-      const third = await run(KEY(903), askBody(3));
-      expect(third.body).toMatchObject({ state: 'failed', code: 'daily_cap' });
-      expect(g.createCalls.filter((c) => c.startsWith('ask:'))).toHaveLength(2);
-      // 질문도 전체 요청 수에 들어간다 (5 중 2) → 자료 생성은 3개까지
-      expect(store.getUsage(pacificDate(T)).requests).toBe(2);
-      expect((await run(KEY(904), body('eNODHkrNuDA', 60))).body.state).toBe('pending');
-      // 다른 영상 요청은 질문 수에 들어가지 않음
-      expect(store.countCounted('ask', pacificDate(T))).toBe(2);
-      expect(parseCapsDefaultAsk()).toBe(10);
+      const caps: AiCaps = { dailyVideoSec: 3600, dailyRequests: 5, maxVideoSec: 1800 };
+      const askBody = { task: 'ask', sessionId: 's1', turn: 1, context: { source: 'Day 11', dayNumber: 11, role: 'extra', base: 'look tired' }, history: [], question: '질문', promptVersion: 'q1' };
+      const res = await handleAiExtract({ idempotencyKey: KEY(901), body: askBody }, { store, gemini: g, caps, now: () => T });
+      expect(res.status).toBe(400);
+      expect(g.createCalls).toHaveLength(0);
+      expect(store.getUsage(pacificDate(T)).requests).toBe(0);
+      expect(store.countCounted('ask', pacificDate(T))).toBe(0);
+      expect(await workKeyForBody(askBody)).toBeNull();
+      expect(parseCaps({})).toEqual({ dailyVideoSec: 6 * 3600, dailyRequests: 20, maxVideoSec: 30 * 60 });
     });
   });
-}
-
-function parseCapsDefaultAsk() {
-  return parseCaps({}).dailyAsk;
 }

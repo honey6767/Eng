@@ -1,4 +1,4 @@
-import type { AiAskRequest, AiContentRequest, AiDayPackRequest, AiDialogueRequest, AiPackRequest } from '../../src/types/aiApi.ts';
+import type { AiContentRequest, AiDayPackRequest, AiDialogueRequest, AiPackRequest } from '../../src/types/aiApi.ts';
 import type { GeminiClient, GeminiGetResult } from './gemini.ts';
 
 const MOCK_CHUNKS = ['could use', 'a little break', 'right now', 'sounds like', 'a good idea', 'figure out', 'get back to', 'running late', 'catch up', 'no big deal', 'make it'];
@@ -148,22 +148,6 @@ export function mockUsefulPhrases(lines: string[], exclude: string[]) {
   return out;
 }
 
-/** 가짜 AI 질문 답변: 받은 문맥(Chunk·이전 대화)을 답에 드러내 테스트에서 확인할 수 있게 */
-export function mockAskResult(r: AiAskRequest) {
-  const c = r.context;
-  const prev = r.history.length ? ` (이전 질문 ${r.history.length}개에 이어서: "${r.history[r.history.length - 1].question}")` : '';
-  return {
-    answer: `'${c.base}'에 대한 질문 "${r.question}"에 답해요${prev}. 구분: ${c.role === 'core' ? '핵심 Chunk' : '추가 덩어리 표현'}.`,
-    grammar: { verdict: '가능', explain: `${c.base} 형태는 문법적으로 맞아요.` },
-    natural: { verdict: '상황에 따라 다름', explain: '친구 사이 대화에서는 자연스럽게 써요.' },
-    nuance: `${c.base}는 ${c.meaningKo || '이 문맥'}의 느낌이에요.`,
-    examples: [{ en: `I think you ${c.base.split(' ')[0]} it.`, ko: '(예문 뜻)' }, { en: `Do you ${c.base}?`, ko: '(예문 뜻 2)' }],
-    fromLecture: c.taught ? `강의에서는 "${c.taught}"라고 소개했어요.` : '',
-    uncertain: '지역에 따라 다르게 들릴 수 있어요.',
-    summary: `${c.base} 질문(${r.turn}번째)에 대한 답 요약.`,
-  };
-}
-
 /** 가짜 통합 대화문: Chunk마다 한 줄씩, 마지막 하나는 쓰지 않음(unusedRefs 확인용) */
 export function mockDialogueResult(r: AiDialogueRequest) {
   const used = r.chunks.slice(0, Math.max(2, r.chunks.length - 1));
@@ -206,14 +190,6 @@ export function createMockGemini(): GeminiClient & { createCalls: string[]; getC
         const id = `mock-interaction-${++seq}-phrases`;
         const fail = input.lines.some((l) => l.en.includes('[실패]'));
         jobs.set(id, fail ? { videoId: 'mockFail', durationSec: 0, polls: 0 } : { videoId: 'phrases', durationSec: 0, polls: 0, text: JSON.stringify({ usefulPhrases: mockUsefulPhrases(input.lines.map((l) => l.en), input.exclude) }) });
-        return { kind: 'created', interactionId: id, status: 'in_progress' };
-      }
-      if (input.task === 'ask') {
-        // 가짜 질문 답변: 질문에 '[실패]'가 있으면 처리 후 실패, '[한도]'면 무료 한도 거절 (실패 처리 확인용)
-        createCalls.push(`ask:${input.sessionId}:${input.turn}`);
-        if (input.question.includes('[한도]')) return { kind: 'rejected', httpStatus: 429, reason: 'quota', message: 'Gemini 무료 사용 한도에 도달했어요.' };
-        const id = `mock-interaction-${++seq}-ask`;
-        jobs.set(id, input.question.includes('[실패]') ? { videoId: 'mockFail', durationSec: 0, polls: 0 } : { videoId: 'ask', durationSec: 0, polls: 0, text: JSON.stringify(mockAskResult(input)) });
         return { kind: 'created', interactionId: id, status: 'in_progress' };
       }
       if (input.task === 'content' || input.task === 'dialogue' || input.task === 'pack' || input.task === 'daypack') {

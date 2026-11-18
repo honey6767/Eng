@@ -1,12 +1,12 @@
 /**
- * Chunk 교체 패턴 + Chunk별 AI 질문·기록 E2E (Playwright, 새 임시 프로필, 가짜 Gemini — 실제 Google 호출 없음)
+ * Chunk 교체 패턴 E2E + AI 질문 기능 제외 확인 (Playwright, 새 임시 프로필, 가짜 Gemini — 실제 Google 호출 없음)
  * 사용법: npm run build && node scripts/e2e-qa.mjs
  *
  * 운영 Day 11과 같은 형태의 예전 자료(핵심 Chunk 기록 없음, 추가 표현 4개)로 확인한다:
  * - 추가 덩어리 표현: 기본 Chunk·원문 표현·교체 패턴·활용 예시(한국어 뜻·뜻 차이) — 화면에서만 보완
- * - Chunk별 질문: 문맥 전달, 후속 질문 이어받기(같은 Chunk만), 다른 Chunk와 섞이지 않음, 실패 시 자동 재시도 없음, 다시 시도
- * - 자동 저장·새로고침 뒤 유지, 질문 기록 탭(필터·검색·전체 보기·이어서 질문·답변 복사)
- * - 학습 DB(버전 30)와 기존 자료는 그대로, 질문 기록은 별도 DB
+ * - AI 질문 기능은 최종 배포에서 제외: Chunk 카드의 질문창·질문 기록 메뉴·화면 없음, 질문 요청 없음
+ * - 예전에 저장된 질문 기록(별도 DB)은 지우지 않고 그대로
+ * - 학습 DB(버전 30)와 기존 자료는 그대로
  */
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
@@ -145,18 +145,7 @@ async function waitFor(fn, tries = 120, ms = 1000) {
   return false;
 }
 
-const asks = (sends) => sends.filter((s) => s.task === 'ask');
 const card = (page, text) => page.locator('[data-testid="content-chunk"], [data-testid="core-chunk"]').filter({ has: page.locator(`[data-testid="chunk-base"]:text-is("${text}"), .en:text-is("${text}")`) }).first();
-
-async function askOn(page, scope, question) {
-  if (await scope.getByTestId('qa-open').count()) await scope.getByTestId('qa-open').click();
-  const box = scope.getByTestId('qa-box');
-  await box.getByTestId('qa-input').fill(question);
-  const before = await box.getByTestId('qa-turn').count();
-  await box.getByTestId('qa-send').click();
-  await waitFor(async () => (await box.getByTestId('qa-turn').count()) > before && (await box.locator('[data-testid="qa-turn"]').last().getAttribute('data-status')) !== 'pending', 60, 500);
-  return box;
-}
 
 async function main() {
   const server = await startServer();
@@ -188,95 +177,47 @@ async function main() {
     check('화면을 열기만 해서는 AI 요청 없음', sends.length === 0, JSON.stringify(sends.map((s) => s.task)));
     await page.screenshot({ path: `${SHOTS}/qa-01-patterns.png`, fullPage: true });
 
-    // ── B. Chunk별 AI 질문 ──
-    const whichCard = extra('which car to buy');
-    let box = await askOn(page, whichCard, '이 단어 대신 다른 단어를 넣어도 돼?');
-    let a1 = asks(sends);
-    check('질문 1번 = 요청 1개 (요청 식별자 1개)', a1.length >= 1 && new Set(a1.map((s) => s.key)).size === 1, `${a1.length}회`);
-    const b1 = a1[0].body;
-    check('Chunk 문맥 전달: 출처·Day·구분·기본 Chunk·원문 문장·뜻·교체 패턴·활용 예시', b1.context.base === 'which car to buy' && b1.context.role === 'extra' && b1.context.dayNumber === 11 && /Day 11/.test(b1.context.source) && /which car to buy/.test(b1.context.sentences?.[0] ?? '') && /which \+ 명사 \+ to buy/.test(b1.context.pattern ?? '') && b1.context.examples?.length === 3 && !!b1.context.meaningKo, JSON.stringify(b1.context).slice(0, 200));
-    const ans1 = (await box.getByTestId('qa-answer').first().innerText()).replace(/\s+/g, ' ');
-    check('답변: 문법 / 회화 자연스러움 / 뉘앙스 / 예문 구분, AI 설명 표시', ['1. 문법', '2. 회화 자연스러움', '3. 의미·뉘앙스', '4. 예문', 'AI 설명'].every((k) => ans1.includes(k)), ans1.slice(0, 120));
-    box = await askOn(page, whichCard, '원어민은 어떤 상황에서 써?');
-    const b2 = asks(sends).at(-1).body;
-    check('후속 질문: 같은 세션·이전 질문 이어받음 (요약만)', b2.sessionId === b1.sessionId && b2.turn === 2 && b2.history.length === 1 && b2.history[0].question === '이 단어 대신 다른 단어를 넣어도 돼?' && /요약/.test(b2.history[0].answer));
-    check('후속 답변이 이전 대화를 이어받음', /이전 질문 1개에 이어서/.test(await box.locator('[data-testid="qa-turn"]').last().innerText()));
-
-    const tiredCard = extra('look tired');
-    await askOn(page, tiredCard, 'look sleepy도 자연스러운 표현이야?');
-    const b3 = asks(sends).at(-1).body;
-    check('다른 Chunk 대화는 섞이지 않음 (새 세션, 이전 대화 없음, 원문 표현 전달)', b3.sessionId !== b1.sessionId && b3.history.length === 0 && b3.context.base === 'look tired' && b3.context.original === 'look super tired');
-
-    const coreCard = page.getByTestId('core-chunk').first();
-    const coreBox = await askOn(page, coreCard, 'need랑 어떤 차이가 있어?');
-    const b4 = asks(sends).at(-1).body;
-    check('핵심 Chunk 질문: 구분 core · 강의 설명 전달', b4.context.role === 'core' && /Today's expression is could use/.test(b4.context.taught ?? ''));
-    check('강의 내용과 AI 설명 구분 표시', (await coreBox.getByTestId('qa-lecture').count()) === 1 && /강의에서 배운 내용/.test(await coreBox.getByTestId('qa-lecture').innerText()));
-
-    // 실패: 자동 재시도 없음 → 다시 시도
-    const nFail0 = asks(sends).length;
-    const failBox = await askOn(page, tiredCard, '[실패] 이 질문은 실패해야 해요');
-    const failed = failBox.locator('[data-testid="qa-turn"][data-status="failed"]');
-    check('실패 상태와 오류 코드 표시', (await failed.count()) === 1 && /gemini_failed/.test(await failed.innerText()));
-    const failKeys = new Set(asks(sends).slice(nFail0).map((s) => s.key));
-    await page.waitForTimeout(5000);
-    check('실패 후 자동 재시도 없음 (기다려도 새 요청 없음)', asks(sends).slice(nFail0).every((s) => failKeys.has(s.key)), `${asks(sends).length - nFail0}회`);
-    const nRetry0 = asks(sends).length;
-    await failed.getByTestId('qa-retry').click();
-    await waitFor(async () => asks(sends).length > nRetry0 && (await failBox.locator('[data-testid="qa-turn"]').last().getAttribute('data-status')) !== 'pending', 60, 500);
-    const retried = asks(sends).slice(nRetry0);
-    check('다시 시도를 눌러야만 새 요청 (첫 요청에만 다시 생성 표시)', retried.length > 0 && retried[0].retry && !failKeys.has(retried[0].key) && retried.slice(1).every((s) => !s.retry));
-
-    // 중복 요청 방지: 보내는 동안 버튼 잠김
-    await tiredCard.getByTestId('qa-input').fill('두 번 눌러도 한 번만');
-    const nDup0 = asks(sends).length;
-    await tiredCard.getByTestId('qa-send').click();
-    await tiredCard.getByTestId('qa-send').click({ force: true, timeout: 1000 }).catch(() => {});
-    await waitFor(async () => (await tiredCard.locator('[data-testid="qa-turn"]').last().getAttribute('data-status')) === 'answered', 60, 500);
-    const dup = asks(sends).slice(nDup0);
-    check('두 번 눌러도 질문 1개·요청 식별자 1개', new Set(dup.map((s) => s.key)).size === 1 && (await tiredCard.locator('[data-testid="qa-question"]', { hasText: '두 번 눌러도 한 번만' }).count()) === 1);
-
-    // 새로고침: 자동 요청 없음, 기록 유지
-    const nReload = asks(sends).length;
+    // ── B. AI 질문 기능 제외 ──
+    check('Chunk 카드에 AI 질문창 없음', (await page.locator('[data-testid="qa-open"], [data-testid="qa-box"], [data-testid="qa-input"]').count()) === 0);
+    // 예전에 저장된 질문 기록(별도 DB)을 흉내 내어 넣고, 앱이 지우지 않는지 확인
+    const legacyQa = await page.evaluate(() => new Promise((resolve) => {
+      // 앱(Dexie 버전 1 = IndexedDB 버전 10)이 만드는 것과 같은 표·색인 구성 — 예전 빌드를 쓰던 기기의 DB와 같은 모양
+      const r = indexedDB.open('my-english-study-ai-notes', 10);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        const mk = (name, keyPath, idx) => { if (!db.objectStoreNames.contains(name)) { const st = db.createObjectStore(name, { keyPath }); for (const i of idx) st.createIndex(i, i); } };
+        mk('sessions', 'id', ['chunkKey', 'videoId', 'dayNumber', 'updatedAt']);
+        mk('turns', 'id', ['sessionId', 'chunkKey', 'videoId', 'dayNumber', 'createdAt', 'status']);
+        mk('tasks', 'key', []);
+        mk('phraseSets', 'dialogueId', []);
+        mk('phraseAttempts', 'id', ['dialogueId', 'at']);
+      };
+      r.onerror = () => resolve(`open-error: ${r.error}`);
+      r.onsuccess = () => {
+        const db = r.result;
+        if (!db.objectStoreNames.contains('sessions') || !db.objectStoreNames.contains('turns')) { db.close(); resolve('no-stores'); return; }
+        const tx = db.transaction(['sessions', 'turns'], 'readwrite');
+        const T = '2026-11-10T00:00:00.000Z';
+        tx.objectStore('sessions').put({ id: 'legacy-s1', chunkKey: 'li-x', chunkLabel: 'look tired', role: 'extra', videoId: 'd11', videoTitle: 'Day 11', dayNumber: 11, context: { source: 'Day 11', dayNumber: 11, role: 'extra', base: 'look tired' }, createdAt: T, updatedAt: T, turnCount: 1 });
+        tx.objectStore('turns').put({ id: 'legacy-t1', sessionId: 'legacy-s1', turn: 1, parentTurnId: null, question: '예전 질문', status: 'answered', answer: null, error: null, requestId: 'r-old', chunkKey: 'li-x', chunkLabel: 'look tired', videoId: 'd11', dayNumber: 11, history: [], createdAt: T, answeredAt: T });
+        tx.oncomplete = () => { db.close(); resolve('ok'); };
+      };
+    }));
+    check('별도 DB에 예전 질문 기록 표가 그대로 있음 (sessions · turns)', legacyQa === 'ok', String(legacyQa));
+    await page.goto(`${BASE}/more`);
+    await page.waitForTimeout(800);
+    check('더보기에 AI 질문 기록 메뉴 없음', (await page.getByRole('link', { name: /AI 질문 기록/ }).count()) === 0);
+    check('사이드 메뉴에 AI 질문 기록 없음', (await page.locator('nav a', { hasText: 'AI 질문 기록' }).count()) === 0);
+    await page.goto(`${BASE}/ai-questions`);
+    await page.waitForTimeout(800);
+    check('질문 기록 화면 없음 (주소로 들어가도 열리지 않음)', (await page.getByTestId('ai-questions-page').count()) === 0);
+    await page.goto(`${BASE}/videos/d11`);
+    await page.getByTestId('core-chunks').waitFor();
     await page.reload();
     await page.getByTestId('core-chunks').waitFor();
     await page.waitForTimeout(3000);
-    check('새로고침해도 AI 질문 요청 없음', asks(sends).length === nReload);
-    await extra('which car to buy').getByTestId('qa-open').click();
-    check('새로고침 뒤에도 질문·답변 기록 유지', (await extra('which car to buy').getByTestId('qa-turn').count()) === 2 && /질문 기록 2개|질문 기록/.test(await extra('which car to buy').innerText()));
-
-    // ── C. 질문 기록 탭 ──
-    await page.goto(`${BASE}/more`);
-    check('더보기에 AI 질문 기록 메뉴', await waitFor(async () => (await page.getByRole('link', { name: /AI 질문 기록/ }).count()) > 0, 20, 250));
-    await page.getByRole('link', { name: /AI 질문 기록/ }).first().click();
-    await page.getByTestId('ai-questions-page').waitFor();
-    await page.getByTestId('qa-session').first().waitFor();
-    const sessions = await page.getByTestId('qa-session').allInnerTexts();
-    check('대화(Chunk)별로 최신 질문 순', sessions.length === 3 && /look tired/.test(sessions[0]), sessions.map((s) => s.split('\n')[0]).join(' | '));
-    check('Day·Chunk·구분 표시', /Day 11/.test(sessions[0]) && sessions.some((s) => /핵심 Chunk/.test(s)) && sessions.some((s) => /✨ 유용한 회화 표현/.test(s)));
-    await page.getByTestId('qa-filter-chunk').selectOption({ label: 'which car to buy' });
-    check('Chunk 필터', (await page.getByTestId('qa-session').count()) === 1);
-    await page.getByTestId('qa-filter-chunk').selectOption('');
-    await page.getByTestId('qa-filter-day').selectOption('11');
-    check('Day 필터', (await page.getByTestId('qa-session').count()) === 3);
-    await page.getByTestId('qa-search').fill('sleepy');
-    check('검색', (await page.getByTestId('qa-session').count()) === 1 && /look tired/.test(await page.getByTestId('qa-session').innerText()));
-    await page.getByTestId('qa-search').fill('');
-    await page.getByTestId('qa-filter-chunk').selectOption({ label: 'which car to buy' });
-    await page.getByTestId('qa-session-toggle').first().click();
-    const histBox = page.getByTestId('qa-session').first();
-    await waitFor(async () => (await histBox.getByTestId('qa-answer').count()) === 2, 20, 250);
-    check('질문과 답변 전체 확인', (await histBox.getByTestId('qa-turn').count()) === 2 && (await histBox.getByTestId('qa-answer').count()) === 2);
-    await histBox.getByTestId('qa-copy').first().click();
-    const clip = await page.evaluate(() => navigator.clipboard.readText()).catch(() => '');
-    check('답변 복사', /^Q\. 이 단어 대신/.test(clip) && /1\. 문법/.test(clip), clip.slice(0, 60));
-    const nCont = asks(sends).length;
-    await histBox.getByTestId('qa-input').fill('기록 화면에서 이어서 질문');
-    await histBox.getByTestId('qa-send').click();
-    await waitFor(async () => (await histBox.getByTestId('qa-turn').count()) === 3 && (await histBox.locator('[data-testid="qa-turn"]').last().getAttribute('data-status')) === 'answered', 60, 500);
-    const b5 = asks(sends).at(-1)?.body;
-    check('기록 탭에서 기존 대화에 이어서 질문', asks(sends).length > nCont && b5.sessionId === b1.sessionId && b5.turn === 3 && b5.history.length === 2);
-    await page.screenshot({ path: `${SHOTS}/qa-02-history.png`, fullPage: true });
+    check('새로고침해도 AI 요청 없음', sends.length === 0, JSON.stringify(sends.map((s) => s.task)));
+    check('새로고침 뒤에도 교체 패턴 표시 유지', (await page.locator('[data-testid="chunk-pattern"][data-source="app"]').count()) === 4);
 
     // ── D. 데이터 보존 ──
     const after = await dumpDb(page);
@@ -285,13 +226,15 @@ async function main() {
       // studyQueue(학습 순서)는 기존 기능이 시드한 영상을 순서에 넣은 것 — 질문 기능과 무관. 나머지 appMeta는 그대로여야 한다
       const meta = (d) => Object.fromEntries(d.tables.appMeta.filter((m) => m.key !== 'studyQueue').map((m) => [m.key, m.value]));
       const aiTasks = after.tables.appMeta.find((m) => m.key === 'aiTasks')?.value ?? {};
-      check('학습 DB 그대로: appMeta (자료 생성 요청 기록·실패 기록 포함, 질문 요청은 여기 저장 안 함)', same(meta(before), meta(after)) && !Object.keys(aiTasks).some((k) => k.startsWith('ask:')));
+      check('학습 DB 그대로: appMeta (자료 생성 요청 기록·실패 기록 포함)', same(meta(before), meta(after)) && !Object.keys(aiTasks).some((k) => k.startsWith('ask:')));
     }
     check('학습 DB 버전 30 그대로', before.version === 30 && after.version === 30, String(after.version));
     const qa = await page.evaluate(() => new Promise((resolve) => {
       const r = indexedDB.open('my-english-study-ai-notes');
+      r.onerror = () => resolve({ sessions: [], turns: [] });
       r.onsuccess = () => {
         const db = r.result;
+        if (!db.objectStoreNames.contains('sessions') || !db.objectStoreNames.contains('turns')) { db.close(); resolve({ sessions: [], turns: [] }); return; }
         const tx = db.transaction(['turns', 'sessions'], 'readonly');
         const out = {};
         tx.objectStore('turns').getAll().onsuccess = (e) => (out.turns = e.target.result);
@@ -299,19 +242,16 @@ async function main() {
         tx.oncomplete = () => { db.close(); resolve(out); };
       };
     }));
-    check('질문 기록은 별도 DB에 저장 (질문·답변·시간·Day·Chunk·세션·후속 관계)', qa.sessions.length === 3 && qa.turns.length === 7 && qa.turns.every((t) => t.question && t.createdAt && t.sessionId && t.chunkKey && t.dayNumber === 11) && qa.turns.some((t) => t.parentTurnId));
-    check('Day 11 실패 요청은 자동 재시도 안 함 (자료 생성 요청 0)', sends.filter((s) => s.task !== 'ask').length === 0);
+    check('예전 질문 기록은 지워지지 않고 그대로 (새로고침·화면 이동 뒤)', qa.sessions.length === 1 && qa.turns.length === 1 && qa.turns[0].question === '예전 질문' && qa.sessions[0].id === 'legacy-s1');
+    check('Day 11 실패 요청은 자동 재시도 안 함 (AI 요청 0)', sends.length === 0);
     await ctx.close();
 
     // ── 휴대폰 화면 ──
     const phone = await openSeeded(browser, { key: true, device: 'iPhone 13' }, [], errors);
     await phone.page.goto(`${BASE}/videos/d11`);
     await phone.page.getByTestId('core-chunks').waitFor();
-    await phone.page.locator('[data-testid="extra-chunks"] [data-testid="qa-open"]').first().click();
-    check('휴대폰: Chunk 화면·질문창 가로 넘침 없음', await phone.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
-    await phone.page.goto(`${BASE}/ai-questions`);
-    await phone.page.getByTestId('ai-questions-page').waitFor();
-    check('휴대폰: 질문 기록 화면 가로 넘침 없음', await phone.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+    await phone.page.getByTestId('chunk-pattern').first().waitFor();
+    check('휴대폰: Chunk·교체 패턴 화면 가로 넘침 없음', await phone.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
     await phone.ctx.close();
 
     check('브라우저 오류 없음', errors.length === 0, errors.slice(0, 3).join(' | '));

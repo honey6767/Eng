@@ -175,6 +175,6 @@ describe('기존 대화문 ✨ 분석 (버튼을 눌렀을 때만)', () => {
     const dlg = { ...dayDialogue(), phrases: [] };
     expect(await analyzeDialogue(d, dlg)).toMatchObject({ ok: true, already: true });
     expect(s.gemini.createCalls.length).toBe(0);
-    expect(readUsage(s.ledger, s.caps, Date.parse(T))).toMatchObject({ ok: true, requests: 0, dailyRequests: 20, ask: { used: 0, cap: 10 }, phrases: { used: 0 } });
+    expect(readUsage(s.ledger, s.caps, Date.parse(T))).toMatchObject({ ok: true, requests: 0, dailyRequests: 20, phrases: { used: 0 } });
   });
 });

@@ -30,7 +30,6 @@ export interface AiLedgerEnv {
   GEMINI_MODEL?: string;
   AI_DAILY_VIDEO_SEC_CAP?: string;
   AI_DAILY_REQUEST_CAP?: string;
-  AI_DAILY_ASK_CAP?: string;
   AI_MAX_VIDEO_SEC?: string;
 }
 

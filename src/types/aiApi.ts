@@ -99,54 +99,6 @@ export interface AiDayPackRequest {
 }
 
 /**
- * Chunk별 AI 질문 — 사용자가 직접 보낼 때만. 질문(턴)마다 요청 식별자 1개.
- * 문맥은 그 Chunk의 정보와 같은 대화 세션의 최근 몇 턴 요약만 보낸다 (과거 대화 전체를 보내지 않음).
- */
-export const AI_ASK_PROMPT_VERSION = 'q1';
-
-export interface AiAskContext {
-  /** 학습 출처 (예: Day 11 · 영상 제목) */
-  source: string;
-  dayNumber: number | null;
-  /** core = 강사가 가르친 핵심 Chunk · extra = AI가 찾은 추가 덩어리 표현 · chunk = 예전 기준 자료(구분 없음) */
-  role: 'core' | 'extra' | 'chunk';
-  /** 기본 Chunk */
-  base: string;
-  /** 원문 표현 (기본형과 다를 때) */
-  original?: string;
-  /** 원문 문장 (최대 2개) */
-  sentences?: string[];
-  meaningKo?: string;
-  nuance?: string;
-  /** 강사가 강의에서 설명한 부분 (핵심 Chunk, 저장된 자막 인용) */
-  taught?: string;
-  /** 교체 패턴과 활용 예시 */
-  pattern?: string;
-  examples?: string[];
-}
-
-export interface AiAskTurn {
-  question: string;
-  /** 이전 답변의 요약 (전체 답변은 기기에만 보관) */
-  answer: string;
-}
-
-export interface AiAskRequest {
-  task: 'ask';
-  /** 대화 세션 (Chunk마다 구분) */
-  sessionId: string;
-  /** 세션 안 몇 번째 질문인지 (같은 질문을 다시 물어도 턴이 다르면 다른 요청) */
-  turn: number;
-  context: AiAskContext;
-  /** 같은 세션의 최근 턴 (최대 3개) */
-  history: AiAskTurn[];
-  question: string;
-  promptVersion: string;
-}
-
-export const ASK_LIMITS = { questionChars: 500, minQuestionChars: 2, historyTurns: 3, historyAnswerChars: 600, fieldChars: 400, maxSentences: 2, maxExamples: 3, maxTurns: 200 } as const;
-
-/**
  * 기존 대화문의 ✨ 유용한 회화 표현 분석 — 사용자가 고른 대화문 1개당 1회 (자동 호출 없음).
  * 대화문 줄과 제외할 핵심 Chunk만 보낸다. 같은 대화문은 서버에 보관된 결과를 다시 쓴다.
  */
@@ -171,11 +123,10 @@ export interface AiUsageResponse {
   date: string;
   requests: number;
   dailyRequests: number;
-  ask: { used: number; cap: number };
   phrases: { used: number };
 }
 
-export type AiTaskRequest = AiExtractRequest | AiContentRequest | AiDialogueRequest | AiPackRequest | AiDayPackRequest | AiAskRequest | AiPhrasesRequest;
+export type AiTaskRequest = AiExtractRequest | AiContentRequest | AiDialogueRequest | AiPackRequest | AiDayPackRequest | AiPhrasesRequest;
 
 export const DAYPACK_LIMITS = { minSentences: 1, maxSentences: 20, sentenceChars: 500, chunkChars: 120, maxChunksPerSentence: 8 } as const;
 

@@ -111,7 +111,7 @@ async function suite(label, device, isPortrait) {
     const links = (await page.getByRole('navigation', { name: '주 메뉴' }).getByRole('link').allTextContents()).map((t) => t.trim());
     check(
       '가로: 사이드바 = 학습 메뉴 4 + 콘텐츠 준비·기록·설정',
-      JSON.stringify(links) === JSON.stringify(['홈', '외우기', '복습', '컬렉션', '영상 · 핵심 표현', '표현 노트', '자료 생성', 'Day 정리', '즐겨찾기', 'AI 질문 기록', '설정']),
+      JSON.stringify(links) === JSON.stringify(['홈', '외우기', '복습', '컬렉션', '영상 · 핵심 표현', '표현 노트', '자료 생성', 'Day 정리', '즐겨찾기', '설정']),
       links.join(','),
     );
     check('가로: 하단 탭 숨김', !(await page.getByRole('navigation', { name: '하단 메뉴' }).isVisible()));

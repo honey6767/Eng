@@ -192,7 +192,7 @@ export function BackupPanel() {
           <Badge tone="ok">실제 백업</Badge>
         </div>
         <p className="text-sm text-muted">
-          모든 학습 데이터(영상·표현·대화문·즐겨찾기·복습 상태·학습 기록)와 AI 질문·✨ 기록을 JSON 파일 하나로 받아요. 이 파일이 실제 백업이에요. iPad라면 파일 앱의 ‘다운로드’에
+          모든 학습 데이터(영상·표현·대화문·즐겨찾기·복습 상태·학습 기록)와 ✨ 분석 기록(예전 AI 질문 기록 포함)을 JSON 파일 하나로 받아요. 이 파일이 실제 백업이에요. iPad라면 파일 앱의 ‘다운로드’에
           저장되니, iCloud Drive 등 기기 밖 다른 곳에도 옮겨 두세요.
         </p>
         <div className="flex flex-wrap items-center gap-2">
@@ -331,10 +331,10 @@ export function BackupPanel() {
             {pending && (
               <p className="text-sm text-muted" data-testid="restore-ainotes">
                 {pending.notes.errors
-                  ? `AI 질문·✨ 기록: 문제가 있어 이 부분만 건너뛰어요 (${pending.notes.errors[0]}). 학습 데이터는 그대로 복원돼요.`
+                  ? `✨·AI 부가 기록: 문제가 있어 이 부분만 건너뛰어요 (${pending.notes.errors[0]}). 학습 데이터는 그대로 복원돼요.`
                   : pending.notes.plan
-                    ? `AI 질문·✨ 기록: 새로 추가 ${pending.notes.plan.add}개 · 이미 있음 ${pending.notes.plan.same}개 (추가만 해요)`
-                    : 'AI 질문·✨ 기록: 이 백업 파일에는 없어요.'}
+                    ? `✨·AI 부가 기록: 새로 추가 ${pending.notes.plan.add}개 · 이미 있음 ${pending.notes.plan.same}개 (추가만 해요)`
+                    : '✨·AI 부가 기록: 이 백업 파일에는 없어요.'}
               </p>
             )}
             {result && notesResult && (

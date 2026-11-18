@@ -82,7 +82,7 @@ export function UsefulPanel({ dialogue, useful, onOpen }: { dialogue: Dialogue; 
           <p className="font-semibold text-ink">이 대화문을 분석하면 Gemini 요청 1회가 필요해요.</p>
           {confirm.usage ? (
             <p className="mt-1 text-xs text-muted" data-testid="useful-usage">
-              오늘 사용 {confirm.usage.requests}/{confirm.usage.dailyRequests}회 (질문 {confirm.usage.ask.used}/{confirm.usage.ask.cap}회 · 표현 분석 {confirm.usage.phrases.used}회) · 남은 요청{' '}
+              오늘 사용 {confirm.usage.requests}/{confirm.usage.dailyRequests}회 (표현 분석 {confirm.usage.phrases.used}회) · 남은 요청{' '}
               <b className="text-ink">{Math.max(0, confirm.usage.dailyRequests - confirm.usage.requests)}회</b>
             </p>
           ) : (

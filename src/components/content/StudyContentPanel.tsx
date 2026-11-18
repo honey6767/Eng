@@ -5,7 +5,6 @@ import type { DayAssignment, Dialogue, Expression, KeySentence, LearningItem, Vi
 import { chunkLabel, matchAllParts, matchParts } from '@/utils/chunkMatch';
 import { classifyChunks, corePatterns, extraViewOf, type ExtraView } from '@/services/prep/chunkRoles';
 import { fitPattern } from '@/utils/chunkPattern';
-import { ChunkQa } from '@/components/qa/ChunkQa';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { LinkButton } from '@/components/ui/Button';
@@ -90,8 +89,6 @@ export function StudyContentPanel({
   const selectedS = shown.filter((s) => s.selected).length;
   const selectedC = [...cores, ...listChunks, ...[...variantsByCore.values()].flat()].filter((c) => c.selected).length;
   const label = series.seriesKind === 'day' ? `Day ${series.dayNumber}` : '이 영상';
-  // AI 질문 문맥 — 출처 (질문할 때만 쓰임)
-  const qaBase = { videoId: video.id, videoTitle: video.title, source: `${series.seriesKind === 'day' ? `Day ${series.dayNumber}` : '일반 영상'} · ${video.title}`, dayNumber: series.seriesKind === 'day' ? (series.dayNumber ?? null) : null };
 
   return (
     <div className="space-y-4" data-testid="study-content">
@@ -161,15 +158,6 @@ export function StudyContentPanel({
                     </div>
                   )}
                   {core && <ChunkDetails item={core} />}
-                  <ChunkQa
-                    chunk={{
-                      chunkKey: p.id, chunkLabel: p.text, videoId: qaBase.videoId, videoTitle: qaBase.videoTitle,
-                      context: {
-                        source: qaBase.source, dayNumber: qaBase.dayNumber, role: 'core', base: p.text, meaningKo: p.meaningKo || undefined, nuance: nuance || undefined, taught: p.taught ?? undefined,
-                        sentences: occ.slice(0, 2).map((o) => byId.get(o.sentenceId)?.english ?? o.surface),
-                      },
-                    }}
-                  />
                 </li>
               );
             })}
@@ -190,7 +178,7 @@ export function StudyContentPanel({
             {listChunks
               .filter((c) => !onlySelected || c.selected)
               .map((c) => (
-                <ChunkRow key={c.id} item={c} expression={exprById.get(c.expressionId)} sentence={c.sentenceId ? byId.get(c.sentenceId) : undefined} number={c.sentenceId ? numberOf.get(c.sentenceId) : undefined} extra={hasCore} qa={qaBase} />
+                <ChunkRow key={c.id} item={c} expression={exprById.get(c.expressionId)} sentence={c.sentenceId ? byId.get(c.sentenceId) : undefined} number={c.sentenceId ? numberOf.get(c.sentenceId) : undefined} extra={hasCore} />
               ))}
           </ul>
         </Card>
@@ -329,7 +317,7 @@ function ChunkDetails({ item }: { item: LearningItem }) {
   );
 }
 
-function ChunkRow({ item, expression, sentence, number, extra, qa }: { item: LearningItem; expression: Expression | undefined; sentence?: KeySentence; number?: number; extra: boolean; qa: { videoId: string; videoTitle: string; source: string; dayNumber: number | null } }) {
+function ChunkRow({ item, expression, sentence, number, extra }: { item: LearningItem; expression: Expression | undefined; sentence?: KeySentence; number?: number; extra: boolean }) {
   const v = extraViewOf(item, expression);
   return (
     <li className="rounded-xl bg-canvas p-3" data-testid="content-chunk">
@@ -366,17 +354,6 @@ function ChunkRow({ item, expression, sentence, number, extra, qa }: { item: Lea
         </p>
       )}
       <ChunkDetails item={item} />
-      <ChunkQa
-        chunk={{
-          chunkKey: item.id, chunkLabel: v.base, videoId: qa.videoId, videoTitle: qa.videoTitle,
-          context: {
-            source: qa.source, dayNumber: qa.dayNumber, role: extra ? 'extra' : 'chunk', base: v.base, original: v.surface ?? undefined,
-            sentences: sentence ? [sentence.english] : undefined, meaningKo: expression?.meaningKo || undefined, nuance: item.chunk?.nuance || undefined,
-            pattern: v.pattern ? `${v.pattern.pattern}${v.pattern.slotNote ? ` (${v.pattern.slotNote})` : ''}` : undefined,
-            examples: v.pattern?.examples.map((x) => `${x.en} — ${x.ko}`),
-          },
-        }}
-      />
     </li>
   );
 }
