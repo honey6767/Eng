@@ -122,7 +122,8 @@ export interface Video extends BaseRecord {
 // 자막
 // ─────────────────────────────────────────────
 
-export type TranscriptSource = 'youtube' | 'manual_paste';
+/** ai_transcription: B1 — Gemini가 전사하고 앱이 자동 적용한 자막 (새로 추가한 기록에만) */
+export type TranscriptSource = 'youtube' | 'manual_paste' | 'ai_transcription';
 /** 붙여넣은 자막의 형식 */
 export type TranscriptFormat = 'srt' | 'vtt' | 'timestamped' | 'plain';
 export type TranscriptStatus = 'not_attempted' | 'success' | 'failed';
@@ -144,6 +145,10 @@ export interface Transcript extends BaseRecord {
   errorMessage?: string;
   /** v2 */
   format?: TranscriptFormat | null;
+  /** B1 — AI 자막일 때만: 사람이 확인하지 않음(ai_unverified) / 품질 경고가 있어 확인 권장(needs_review) */
+  verification?: 'ai_unverified' | 'needs_review' | null;
+  /** B1 — 이 자막을 만든 AI 초안 */
+  extractionDraftId?: string | null;
 }
 
 // ─────────────────────────────────────────────
@@ -187,6 +192,19 @@ export interface ExpressionNote extends BaseRecord {
 
 export type LearningStatus = 'not_started' | 'learning' | 'reviewing' | 'memorized';
 
+/**
+ * 3단계 — 핵심 문장 안에서 핵심 표현이 차지하는 위치 (english 기준 글자 위치, end는 미포함).
+ * 5단계 빈칸 위치로 사용한다. 'slipped my mind'처럼 형태가 바뀐 표현도 정확히 가리키기 위함.
+ */
+export interface ExpressionSpan {
+  expressionId: string;
+  start: number;
+  end: number;
+}
+
+/** 3단계 — 핵심 문장을 어디서 가져왔는지 */
+export type KeySentenceOrigin = 'transcript' | 'manual' | 'ai_extracted';
+
 export interface KeySentence extends BaseRecord {
   videoId: string;
   /** 1~5 */
@@ -200,6 +218,16 @@ export interface KeySentence extends BaseRecord {
   status: LearningStatus;
   correctCount: number;
   wrongCount: number;
+  /** 3단계(선택) — 핵심 표현 위치. 없으면 표현 텍스트로 자동 탐색 */
+  expressionSpans?: ExpressionSpan[];
+  /** 3단계(선택) — 선정 경로 */
+  origin?: KeySentenceOrigin;
+  /** AI 추출 문장 — 영상에 나온 번호 그대로 (order는 영상 안 정렬·중복 방지용) */
+  aiNumber?: number;
+  /** 사용자가 '암기할 문장'으로 고름 */
+  selected?: boolean;
+  /** 이 문장을 만든 AI 요청 식별자 */
+  contentRequestId?: string;
 }
 
 // ─────────────────────────────────────────────
@@ -219,6 +247,8 @@ export interface DialogueSegment {
   keySentenceId?: string;
   /** 원문 문장을 수정했다면 수정 전 원문과 이유를 기록 */
   modification?: { originalText: string; reason: string };
+  /** 통합 대화문 — 이 부분이 어떤 학습 Chunk(학습 항목)인지 */
+  learningItemId?: string;
 }
 
 export interface DialogueLine {
@@ -227,6 +257,18 @@ export interface DialogueLine {
   speaker: Speaker;
   segments: DialogueSegment[];
   korean: string;
+  /** Day 통합 대화문 — 이 줄이 원문 문장을 그대로(또는 거의 그대로) 쓴 경우 그 핵심 문장 id */
+  sourceSentenceId?: string;
+}
+
+/**
+ * 빈칸 암기 자료 — 줄마다 단어별 빈칸 순위. 단어 순서는 wordsOf(영어 문장)과 같다
+ * - version 1: 1=핵심 Chunk, 2=주요 단어, 3=나머지
+ * - version 2: 1=핵심 Chunk, 2=추가 덩어리 표현, 3=주요 단어, 4=나머지
+ */
+export interface BlankPlan {
+  version: 1 | 2;
+  lines: Record<string, number[]>;
 }
 
 /**
@@ -253,6 +295,56 @@ export interface Dialogue extends BaseRecord {
   /** 분리/구성 이유 등 메모 */
   compositionNote?: string;
   isFavorite: boolean;
+  /** 통합 대화문 — 사용한 Chunk와 그 출처·의미·뉘앙스 */
+  chunkUsages?: DialogueChunkUsage[];
+  /** 통합 대화문 — 사용한 Chunk의 출처 Day (일반 영상은 제외) */
+  sourceDays?: number[];
+  /** ✨ 유용한 회화 표현 (새로 만든 대화문만, 대화문 자체에서 찾은 것) */
+  phrases?: UsefulPhrase[];
+  /** 생성에 쓰려고 골랐지만 대화문에 쓰지 않은 Chunk */
+  unusedLearningItemIds?: string[];
+  /** 이 대화문을 만든 AI 요청 식별자 */
+  aiRequestId?: string;
+  /** 빈칸 암기 자료 (AI 없이 기기에서 계산) */
+  blankPlan?: BlankPlan;
+}
+
+/**
+ * ✨ 유용한 회화 표현 — 대화문 자체에서 찾은 것 (원문 문장에서 찾은 추가 표현은 기존 학습 항목·chunkUsages 그대로)
+ * 핵심 Chunk와 따로 관리하고, 핵심 Chunk 개수에 넣지 않는다.
+ */
+export interface UsefulPhrase {
+  id: string;
+  /** 출처: 대화문 자체 */
+  source: 'dialogue';
+  /** 기본형 (구동사는 take someone up on something) */
+  base: string;
+  category: 'phrasal' | 'idiom' | 'reaction' | 'pattern' | 'chunk';
+  meaningKo: string;
+  nuance: string;
+  usage: string;
+  pattern?: string;
+  slotNote?: string;
+  swapExamples?: { en: string; ko: string; note?: string }[];
+  /** 대화문 안 위치 (줄 영어 문장에서의 글자 위치) */
+  occurrences: { lineId: string; usedAs: string; start: number; end: number }[];
+}
+
+export interface DialogueChunkUsage {
+  learningItemId: string;
+  /** core = 강사가 가르친 핵심 Chunk, extra = AI가 찾은 추가 덩어리 표현 (없으면 core) */
+  kind?: 'core' | 'extra';
+  expressionId: string;
+  /** 학습한 형태 */
+  text: string;
+  /** 대화 속 실제 형태 */
+  usedAs: string;
+  dayNumber: number | null;
+  videoId: string | null;
+  meaningInContext: string;
+  nuance: string;
+  whyUsed: string;
+  example: { en: string; ko: string };
 }
 
 /** 영상별 대화문 구성 결과 — 대화문에 넣지 못한 문장은 별도 연습 대상 */
@@ -283,6 +375,8 @@ export interface Expression extends BaseRecord {
   isFavorite: boolean;
   /** 사용자가 직접 어렵다고 표시 */
   isMarkedDifficult: boolean;
+  /** B1 — AI 추출로 새로 만든 표현에만 */
+  origin?: 'ai_extracted';
 }
 
 // ─────────────────────────────────────────────
@@ -342,6 +436,8 @@ export interface DialogueProgress {
   memorizedAt: ISODateString | null;
   /** 3단계 적응형 빈칸: 세그먼트별 숙련도 (키: lineId:segmentIndex) */
   blankMastery: Record<string, number>;
+  /** 빈칸 양 (0~100, 단계별) — 사용자가 조절 */
+  blankLevels?: Partial<Record<MemorizeStep, number>>;
   updatedAt: ISODateString;
   isSample?: boolean;
 }
@@ -380,4 +476,185 @@ export interface StudyLog {
 export interface AppMeta {
   key: string;
   value: unknown;
+}
+
+// ─────────────────────────────────────────────
+// B1 — DB v3 새 테이블 (기존 12개 테이블은 그대로, 여기에 기록만 추가)
+// ─────────────────────────────────────────────
+
+/** 학습 대상의 종류: 핵심 표현 · 영상 속 Chunk · 대화문 Chunk */
+/** core = 영상(Day)의 공통 핵심 Chunk (여러 원문 문장에 반복되는 표현) */
+export type LearningItemKind = 'key' | 'intro_chunk' | 'dialogue_chunk' | 'chunk' | 'core';
+
+/** 문장 속 Chunk 설명 (AI 학습 콘텐츠) */
+export interface ChunkDetail {
+  /** 이 문장에서의 뜻 */
+  meaningInSentence: string;
+  nuance: string;
+  /** 어떤 상황에서 쓰는지 */
+  usage: string;
+  /** 비슷한 표현과의 차이 */
+  comparison: string;
+  examples: { en: string; ko: string }[];
+  /** 떨어진 표현의 구성 단어 (예: ["could", "use"] — "could seriously use"에도 맞음) */
+  parts?: string[];
+  /** 원문에 나온 실제 형태 (예: "could seriously use") */
+  surface?: string;
+  /** 핵심 Chunk — 강사가 강의에서 설명한 부분 (자막 인용) */
+  taught?: string;
+  /**
+   * 추가 덩어리 표현 — 바꿔 쓸 수 있는 틀 (예: "look + 형용사", 없으면 빈 문자열).
+   * 이 값이 있으면 AI가 기본형 규칙으로 정리한 기록 (표현 text = 학습용 기본 Chunk, surface = 원문 형태)
+   */
+  pattern?: string;
+  /** 추가 덩어리 표현 — 바꿔 넣은 활용 예 (p3 형식, 뜻 없음) */
+  swaps?: string[];
+  /** 추가 덩어리 표현 — 교체 자리 설명 (예: 명사 자리: 사려는 물건) */
+  slotNote?: string;
+  /** 추가 덩어리 표현 — 검사를 통과한 활용 예시 (한국어 뜻, 뜻 차이) */
+  swapExamples?: { en: string; ko: string; note?: string }[];
+}
+/** Day 영상에서 왔는지(day), 그 밖의 영상인지(other) */
+export type LearningItemSourceType = 'day' | 'other';
+export type LearningItemOrigin = 'migrated' | 'user' | 'ai_extracted';
+export type LearningItemStatus = 'confirmed' | 'needs_review';
+
+/** 출처별 학습 대상 — 같은 표현이라도 출처(영상·종류·대화문)마다 하나씩 */
+export interface LearningItem extends BaseRecord {
+  expressionId: string;
+  videoId: string | null;
+  sourceType: LearningItemSourceType;
+  /** Day 번호 (sourceType=other면 null) */
+  dayNumber: number | null;
+  kind: LearningItemKind;
+  /** 대화문 Chunk일 때 */
+  dialogueId: string | null;
+  /** 영상 원문 문장 그대로 */
+  sourceText: string | null;
+  timestampSec: number | null;
+  /** 화면 자막에서만 찾음 */
+  onScreen: boolean;
+  origin: LearningItemOrigin;
+  status: LearningItemStatus;
+  /** AI 초안에서 왔을 때 */
+  extractionDraftId: string | null;
+  /** v2 핵심 문장에서 옮겨 왔을 때 (기존 핵심 문장은 그대로 둔다) */
+  legacyKeySentenceId: string | null;
+  /** kind='chunk' — 이 Chunk가 들어 있는 원문 문장 (핵심 문장 id) */
+  sentenceId?: string | null;
+  /** kind='chunk' — 뜻·뉘앙스·상황·비교·예문 */
+  chunk?: ChunkDetail;
+  /** 사용자가 '암기할 Chunk'로 고름 */
+  selected?: boolean;
+  /** 이 항목을 만든 AI 요청 식별자 (문장·Chunk 생성) */
+  contentRequestId?: string;
+  /** kind='core' — 이 공통 Chunk가 나오는 원문 문장과 그 문장 속 실제 형태 */
+  occurrences?: { sentenceId: string; surface: string }[];
+  /** kind='chunk' — 'extra' = 강사가 가르치지 않았지만 AI가 문맥에서 찾은 추가 덩어리 표현 (새 기준으로 만든 항목에만) */
+  chunkRole?: 'extra';
+}
+
+export type DayAssignmentStatus = 'suggested' | 'confirmed';
+export type DayAssignmentSource = 'title' | 'ai' | 'user';
+
+/** 영상의 Day 번호 제안·확정 — 영상 레코드는 바꾸지 않고 여기에만 기록 (영상당 1개) */
+export interface DayAssignment extends BaseRecord {
+  videoId: string;
+  dayNumber: number;
+  status: DayAssignmentStatus;
+  source: DayAssignmentSource;
+}
+
+export type StudySessionStatus = 'in_progress' | 'completed' | 'abandoned';
+
+/** 5단계 학습 세션 (B1은 테이블만, 횟수 계산은 C단계) */
+export interface StudySession extends BaseRecord {
+  dialogueId: string;
+  /** 학습한 날짜 (YYYY-MM-DD, 기기 시간대) */
+  date: string;
+  status: StudySessionStatus;
+  learningItemIds: string[];
+  startedAt: ISODateString;
+  completedAt: ISODateString | null;
+}
+
+export type DialogueDraftStatus = 'pending_review' | 'approved' | 'rejected' | 'superseded';
+
+/** 통합 대화문 초안 (승인 전) */
+export interface DialogueDraft extends BaseRecord {
+  status: DialogueDraftStatus;
+  expressionIds: string[];
+  /** 초안 내용 (B1-d에서 형식 확정) */
+  content: unknown;
+}
+
+export type ExtractionJobStatus = 'queued' | 'running' | 'succeeded' | 'failed_retryable' | 'failed_permanent' | 'skipped';
+
+/** 영상별 자동 추출 작업 상태 (영상당 1개) */
+export interface ExtractionJob extends BaseRecord {
+  videoId: string;
+  status: ExtractionJobStatus;
+  attempts: number;
+  /** 다시 시도해도 되는 시각 */
+  attemptAfter: ISODateString | null;
+  lastError: { code: string; message: string } | null;
+  /** 진행 중인 요청 식별자 */
+  currentRequestId: string | null;
+  /** 사용자가 다시 시도를 누름 → 다음 새 요청의 첫 전송에 retryFailed를 붙인다 */
+  retryRequested?: boolean;
+  /** 사용자가 결과를 버리고 다시 추출한 횟수 + 1 (2부터 요청에 붙여 새 작업으로) */
+  variant?: number;
+  /** 항상 빈 배열 — 구간 분할은 구현하지 않음 */
+  segments: unknown[];
+  /** 한 탭만 실행하기 위한 점유 표시 */
+  leaseOwner: string | null;
+  leaseUntil: ISODateString | null;
+  model: string | null;
+  apiStyle: 'interactions';
+  promptVersion: string | null;
+  videoDurationSec: number | null;
+  draftId: string | null;
+}
+
+export type ExtractionDraftStatus = 'pending_review' | 'approved' | 'partially_approved' | 'rejected' | 'superseded';
+
+/** Gemini 결과 초안 (검토·수정·승인 대기) — result는 한 번 저장하면 바꾸지 않는다 */
+export interface ExtractionDraft extends BaseRecord {
+  videoId: string;
+  jobId: string;
+  /** 이 초안을 만든 요청 식별자 (요청당 초안 1개) */
+  requestId: string;
+  status: ExtractionDraftStatus;
+  result: unknown;
+  /** Gemini가 돌려준 원본 JSON 텍스트 (검사 전 그대로 보존) */
+  rawText?: string;
+  model?: string | null;
+  usage?: { inputTokens: number | null; outputTokens: number | null; videoTokens: number | null } | null;
+  /** 검사에서 거부한 전사 구간 (영상 길이를 넘는 시각 등) */
+  rejectedSegments?: unknown[];
+  edited: unknown | null;
+  validation: unknown[];
+  approvedRefs: string[];
+}
+
+export type AiRequestStatus = 'reserved' | 'sent' | 'succeeded' | 'failed_definite' | 'failed_unknown';
+
+/** AI 요청 장부 — id는 요청 식별자(UUID v4) */
+export interface AiRequest extends BaseRecord {
+  jobId: string;
+  videoId: string;
+  status: AiRequestStatus;
+  bodyHash: string | null;
+  /** Gemini interaction id (백그라운드 실행) */
+  interactionId: string | null;
+  estVideoSec: number | null;
+  estTokens: number | null;
+  inputTokens: number | null;
+  sentAt: ISODateString | null;
+  finishedAt: ISODateString | null;
+  /** 사용량을 센 날짜 (태평양 시간 기준 YYYY-MM-DD) */
+  pacificDate: string | null;
+  httpStatus: number | null;
+  errorCode: string | null;
+  responseHash: string | null;
 }

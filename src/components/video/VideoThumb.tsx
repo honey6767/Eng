@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Icon } from '@/components/ui/Icon';
 
-const palettes = ['#2f5d50', '#3b5f9a', '#8a5a2b', '#5b4a8a', '#2d6f73'];
+const palettes = ['#6d5fd8', '#4f7fd6', '#d9784a', '#3fa57a', '#b56aa6'];
 
 function hash(s: string) {
   let h = 0;

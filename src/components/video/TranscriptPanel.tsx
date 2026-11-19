@@ -11,6 +11,8 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Icon } from '@/components/ui/Icon';
 import { formatDateKo, formatTimestamp } from '@/utils/date';
+import { VideoPrepStatus } from '@/components/prep/PrepStatus';
+import { prepController } from '@/services/prep';
 
 const FORMAT_LABEL: Record<TranscriptFormat, string> = {
   srt: 'SRT',
@@ -39,6 +41,7 @@ export function TranscriptPanel({
 
   return (
     <div className="space-y-4">
+      {!video.isSample && <VideoPrepStatus videoId={video.id} />}
       <AutoFetchSection video={video} proxy={proxy} onUsageChanged={onUsageChanged} />
       {hasContent && !editing ? (
         <TranscriptView video={video} transcript={transcript!} onSeek={onSeek} onReplace={() => setEditing(true)} />
@@ -80,12 +83,13 @@ function AutoFetchSection({ video, proxy, onUsageChanged }: { video: Video; prox
   return (
     <Card className="p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-bold">자막 자동 가져오기</h3>
+        <h3 className="font-bold">YouTube 공식 자막 확인</h3>
         <span data-testid="caption-check-result">{resultBadge()}</span>
       </div>
       <p className="mt-1.5 text-sm text-muted">
         YouTube 공식 API는 <b className="text-ink">영상 소유자(또는 편집 권한자)</b>만 자막 내용을 내려받을 수 있습니다. 이 앱은 자막 트랙이
-        있는지만 확인하고, 내용을 가져오지 못하면 성공으로 표시하지 않습니다. 비공식 우회 방식은 사용하지 않습니다.
+        있는지만 확인하고, 내용을 가져오지 못하면 성공으로 표시하지 않습니다. 비공식 우회 방식은 사용하지 않습니다. 여기서 ‘권한 없음’이 나와도
+        위의 학습 자료 자동 생성에는 영향이 없습니다.
       </p>
       {check && (
         <div className="mt-3 rounded-xl bg-canvas px-3 py-2.5 text-sm">
@@ -114,7 +118,7 @@ function AutoFetchSection({ video, proxy, onUsageChanged }: { video: Video; prox
             }
           }}
         >
-          {busy ? '확인 중…' : '자막 자동 가져오기 시도'}
+          {busy ? '확인 중…' : '공식 자막 트랙 확인'}
         </Button>
         <span className="text-xs text-subtle">
           {!video.youtubeVideoId
@@ -151,7 +155,9 @@ function TranscriptView({
         <h3 className="font-bold">자막</h3>
         <Badge tone="ok">자막 있음</Badge>
         <span className="text-xs text-muted" data-testid="transcript-meta">
-          {transcript.source === 'manual_paste' ? '직접 입력' : 'YouTube'}
+          {transcript.source === 'manual_paste' ? '직접 입력' : transcript.source === 'ai_transcription' ? 'AI 자막' : 'YouTube'}
+          {transcript.verification === 'needs_review' && ' · 확인 권장'}
+          {transcript.verification === 'ai_unverified' && ' · 사람이 확인하지 않음'}
           {transcript.format && ` · ${FORMAT_LABEL[transcript.format]}`} · {transcript.segments.length}개 구간
         </span>
         <div className="ml-auto flex gap-1.5">
@@ -256,6 +262,8 @@ function TranscriptEditor({
       });
       toast('자막을 저장했어요');
       setText('');
+      // 학습 자료 카드 상태만 다시 읽는다 (Gemini 요청 없음 — 자료 만들기는 사용자가 버튼을 눌러야 시작)
+      void prepController.refresh();
       onDone();
     } finally {
       setSaving(false);

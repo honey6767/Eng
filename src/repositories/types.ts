@@ -96,14 +96,43 @@ export interface TranscriptRepository {
   deleteByVideo(videoId: string): Promise<void>;
 }
 
+/** 3단계 — 주요 표현 노트에서 사용자가 바꿀 수 있는 필드 */
+export type ExpressionNotePatch = Partial<
+  Pick<
+    ExpressionNote,
+    'expressionId' | 'expression' | 'meaningKo' | 'usageContext' | 'nuance' | 'examples' | 'similar' | 'sourceTimestampSec' | 'origin' | 'verification' | 'order'
+  >
+>;
+
 export interface ExpressionNoteRepository {
   listByVideo(videoId: string): Promise<ExpressionNote[]>;
+  /** 3단계 */
+  get(id: string): Promise<ExpressionNote | undefined>;
+  add(note: ExpressionNote): Promise<void>;
+  update(id: string, patch: ExpressionNotePatch): Promise<void>;
+  /** 사용자가 확인 창에서 직접 삭제한 노트만 지운다 (학습 기록과 무관한 설명 데이터) */
+  remove(id: string): Promise<void>;
 }
+
+/**
+ * 3단계 — 핵심 문장에서 바꿀 수 있는 필드.
+ * 영어 원문(english)·영상(videoId)은 저장 후 바꿀 수 없으므로 타입에서 제외한다.
+ */
+export type KeySentencePatch = Partial<
+  Pick<KeySentence, 'korean' | 'situation' | 'expressionIds' | 'expressionSpans' | 'timestampSec' | 'status' | 'correctCount' | 'wrongCount'>
+>;
 
 export interface KeySentenceRepository {
   list(): Promise<KeySentence[]>;
   listByVideo(videoId: string): Promise<KeySentence[]>;
   getMany(ids: string[]): Promise<KeySentence[]>;
+  /** 3단계 */
+  get(id: string): Promise<KeySentence | undefined>;
+  add(sentence: KeySentence): Promise<void>;
+  /** english·videoId·order는 무시한다 (원문 보호) */
+  update(id: string, patch: KeySentencePatch): Promise<void>;
+  /** 선정 취소 — 서비스에서 학습 이력·대화문 사용 여부를 확인한 뒤에만 호출 */
+  remove(id: string): Promise<void>;
 }
 
 export interface DialogueRepository {
@@ -128,6 +157,8 @@ export interface ExpressionRepository {
   upsert(input: { text: string; meaningKo: string; sourceRef?: SourceRef; isSample?: boolean }): Promise<Expression>;
   setFavorite(id: string, isFavorite: boolean): Promise<void>;
   setMarkedDifficult(id: string, marked: boolean): Promise<void>;
+  /** 3단계 — 표현 레코드는 지우지 않고 특정 출처 참조만 뺀다 (즐겨찾기·어려움 표시·학습 이력 보존) */
+  removeSourceRef(id: string, ref: SourceRef): Promise<void>;
 }
 
 export interface ReviewStateRepository {
@@ -147,6 +178,8 @@ export interface StudyLogRepository {
   listSince(dateKey: string): Promise<StudyLog[]>;
   countReviews(): Promise<number>;
   count(): Promise<number>;
+  /** 학습 한 번 기록 (추가만) */
+  add(log: StudyLog): Promise<void>;
 }
 
 export interface MetaRepository {

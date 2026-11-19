@@ -57,9 +57,10 @@ export function getIntegrations(proxy: ProxyStatus | null = null): IntegrationIn
     {
       id: 'ai',
       name: 'AI 대화문 생성 · 표현 정리',
-      state: 'not_implemented',
-      plannedStage: '4·7단계',
-      description: 'AI API 연동 전에는 AI 생성 기능을 사용할 수 없습니다.',
+      state: 'limited',
+      plannedStage: '3·4·7단계',
+      description:
+        '앱이 유료 AI API를 직접 부르지 않습니다. 핵심 표현 설명·번역은 요청문을 복사해 평소 쓰는 AI 채팅에 붙여넣고 답변을 다시 붙여넣는 방식(추가 비용 없음)으로 받을 수 있어요. 대화문 생성은 4단계에서 같은 방식으로 추가됩니다.',
     },
     {
       id: 'supabase',

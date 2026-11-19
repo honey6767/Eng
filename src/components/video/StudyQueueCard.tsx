@@ -19,6 +19,7 @@ import { Icon } from '@/components/ui/Icon';
 import { formatDuration } from '@/utils/date';
 import { VIDEO_STATUS } from '@/utils/labels';
 import { VideoThumb } from './VideoThumb';
+import { prepController } from '@/services/prep';
 
 /** 오늘의 신규 영상 (무작위 학습 순서) */
 export function StudyQueueCard({ compact = false }: { compact?: boolean }) {
@@ -112,6 +113,8 @@ export function StudyQueueCard({ compact = false }: { compact?: boolean }) {
                   onClick={() =>
                     act(async () => {
                       await startVideo(repos, v);
+                      // 이 영상의 학습 자료가 없으면 대기열 앞에 넣는다 (기다리지 않음)
+                      void prepController.enqueue([v.id], { manual: true });
                       navigate(`/videos/${v.id}`);
                     })
                   }
@@ -135,6 +138,7 @@ export function StudyQueueCard({ compact = false }: { compact?: boolean }) {
               onClick={() =>
                 act(async () => {
                   await startVideo(repos, v);
+                  void prepController.enqueue([v.id], { manual: true });
                   navigate(`/videos/${v.id}`);
                 })
               }

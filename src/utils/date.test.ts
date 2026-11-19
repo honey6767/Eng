@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDuration, formatTimestamp } from './date';
+import { formatDuration, formatTimestamp, parseTimestamp } from './date';
 
 describe('formatDuration / formatTimestamp', () => {
   it('영상 길이를 읽기 쉽게 표시', () => {
@@ -14,5 +14,15 @@ describe('formatDuration / formatTimestamp', () => {
     expect(formatTimestamp(42)).toBe('0:42');
     expect(formatTimestamp(725.6)).toBe('12:05');
     expect(formatTimestamp(3723)).toBe('1:02:03');
+  });
+});
+
+describe('parseTimestamp (3단계 핵심 문장 시간 입력)', () => {
+  it('분:초, 시:분:초, 초를 초로 바꾼다', () => {
+    expect(parseTimestamp('1:05')).toBe(65);
+    expect(parseTimestamp('01:02:03')).toBe(3723);
+    expect(parseTimestamp('75')).toBe(75);
+    expect(parseTimestamp('  ')).toBeNull();
+    expect(parseTimestamp('1분')).toBeNaN();
   });
 });

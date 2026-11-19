@@ -98,3 +98,11 @@ export function formatDateKo(iso: string | null): string {
   const d = new Date(iso);
   return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
 }
+
+/** "1:05", "01:02:03", "75" → 초. 비어 있으면 null, 형식이 틀리면 NaN */
+export function parseTimestamp(text: string): number | null {
+  const t = text.trim();
+  if (!t) return null;
+  if (!/^\d{1,3}(:\d{1,2}){0,2}$/.test(t)) return NaN;
+  return t.split(':').reduce((acc, part) => acc * 60 + Number(part), 0);
+}

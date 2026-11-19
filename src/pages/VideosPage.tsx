@@ -6,6 +6,7 @@ import { useToast } from '@/hooks/useToast';
 import { useYouTubeStatus } from '@/hooks/useYouTubeStatus';
 import { youtubeClient } from '@/services/integrations/youtubeClient';
 import { importPlaylist } from '@/services/videoImportService';
+import { enqueueNewVideos } from '@/services/prep';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card, SectionTitle } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -15,6 +16,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { VideoThumb } from '@/components/video/VideoThumb';
 import { AddVideoForm } from '@/components/video/AddVideoForm';
 import { StudyQueueCard } from '@/components/video/StudyQueueCard';
+import { PrepBadge, PrepStatusCard } from '@/components/prep/PrepStatus';
 import { formatDateKo, formatDuration } from '@/utils/date';
 import { TRANSCRIPT_STATUS, VIDEO_STATUS } from '@/utils/labels';
 import type { Playlist, VideoStatus } from '@/types/models';
@@ -68,6 +70,7 @@ export function VideosPage() {
 
       <AddVideoForm status={status} onImported={refresh} />
       <StudyQueueCard />
+      <PrepStatusCard />
 
       {data.playlists.length > 0 && (
         <section>
@@ -157,6 +160,7 @@ export function VideosPage() {
                             {manual && !video.isSample && <Badge tone="info">개별 등록</Badge>}
                           </div>
                           <p className="mt-1.5 line-clamp-2 leading-snug font-semibold">{video.title}</p>
+                          {!video.isSample && <span className="mt-1 inline-block"><PrepBadge videoId={video.id} /></span>}
                           <p className="mt-auto pt-2 text-xs text-muted">
                             {formatDuration(video.durationSec)}
                             {video.isSample ? ` · 핵심 문장 ${sentenceCount}/5` : video.channelTitle ? ` · ${video.channelTitle}` : ''}
@@ -217,7 +221,9 @@ function PlaylistRow({ playlist, videoCount, canSync, onSynced }: { playlist: Pl
           onClick={async () => {
             setBusy(true);
             try {
+              const before = new Set((await repos.videos.list()).map((v) => v.id));
               const r = await importPlaylist(repos, youtubeClient, playlist.youtubePlaylistId!);
+              void enqueueNewVideos(before, (await repos.videos.list()).map((v) => v.id));
               toast(`다시 불러왔어요 · 새 영상 ${r.added}개`);
             } catch (e) {
               toast(e instanceof Error ? e.message : '불러오기 실패', 'error');

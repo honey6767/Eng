@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { StepDots } from '@/components/ui/ProgressBar';
 import { FavoriteButton } from '@/components/ui/FavoriteButton';
-import { PlannedNotice } from '@/components/ui/PlannedNotice';
+import { LinkButton } from '@/components/ui/Button';
 import { Loading } from '@/components/ui/Loading';
 import { EmptyState } from '@/components/ui/EmptyState';
 import type { DialogueKind } from '@/types/models';
@@ -32,13 +32,13 @@ export function DialoguesPage() {
 
   return (
     <div>
-      <PageHeader title="대화문" description="대화문 전체를 하나의 학습 단위로 외웁니다." />
+      <PageHeader title="외우기" description="대화문 하나를 통째로 외워요. 한 단계씩만 해도 충분해요." />
 
       <div className="mb-4 flex gap-1.5" role="tablist" aria-label="대화문 종류">
         {(
           [
-            ['original', '영상 원본 대화문'],
-            ['combined', '취약 표현 조합 대화문'],
+            ['original', 'Day 대화문'],
+            ['combined', '여러 Day 조합'],
           ] as const
         ).map(([k, label]) => (
           <button
@@ -56,11 +56,15 @@ export function DialoguesPage() {
       </div>
 
       {kind === 'combined' && (
-        <div className="mb-4">
-          <PlannedNotice title="누적 취약 표현으로 새 대화문 생성" stage="7단계">
-            AI API가 아직 연결되지 않았습니다. 연동 전에는 조합 대화문을 생성할 수 없습니다.
-          </PlannedNotice>
-        </div>
+        <Card className="mb-4 flex flex-wrap items-center justify-between gap-3 p-4" data-testid="combine-cta">
+          <div className="min-w-0">
+            <p className="font-bold">여러 Day의 Chunk로 통합 대화문 만들기</p>
+            <p className="text-sm text-muted">최근 학습한 Day 2~3개의 Chunk를 한 상황의 자연스러운 대화로 엮어요.</p>
+          </div>
+          <LinkButton to="/dialogues/combine" size="sm">
+            만들기
+          </LinkButton>
+        </Card>
       )}
 
       {rows.length === 0 ? (
@@ -68,13 +72,13 @@ export function DialoguesPage() {
           <EmptyState icon="chat" title="대화문이 없어요" />
         </Card>
       ) : (
-        <ul className="grid gap-3 md:grid-cols-2">
+        <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {rows.map((d) => {
             const p = progressById.get(d.id);
             const video = d.videoId ? videoById.get(d.videoId) : undefined;
             const keyCount = d.lines.flatMap((l) => l.segments).filter((s) => s.kind === 'key').length;
             return (
-              <li key={d.id}>
+              <li key={d.id} className="min-w-0">
                 <Link to={`/dialogues/${d.id}`} className="block h-full">
                   <Card className="flex h-full flex-col p-4 transition-colors hover:border-line-strong">
                     <div className="flex items-start gap-2">
@@ -102,9 +106,12 @@ export function DialoguesPage() {
                     </div>
                     <p className="mt-1 line-clamp-2 text-sm text-muted">{d.situation}</p>
                     <div className="mt-auto flex items-center justify-between gap-3 pt-3">
-                      <StepDots completed={p?.highestCompletedStep ?? 0} current={p?.currentStep} />
-                      <span className="truncate text-xs text-subtle">
-                        {d.lines.length}줄 · 핵심 {keyCount}
+                      <span className="shrink-0">
+                        <StepDots completed={p?.highestCompletedStep ?? 0} current={p?.currentStep} />
+                      </span>
+                      <span className="min-w-0 truncate text-xs text-subtle">
+                        {d.lines.length}줄 · {d.kind === 'combined' ? 'Chunk' : '핵심'} {keyCount}
+                        {d.sourceDays?.length ? ` · Day ${d.sourceDays.join(', ')}` : ''}
                         {video && ` · ${video.title.replace('[샘플] ', '')}`}
                       </span>
                     </div>

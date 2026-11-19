@@ -1,11 +1,16 @@
 import type { StudyDatabase, TableName } from '@/db/database';
 import { TABLE_NAMES } from '@/db/database';
-import type { Expression, MetadataSource, Playlist, Transcript, Video, VideoSource } from '@/types/models';
+import type { Expression, MetadataSource, Playlist, SourceRef, Transcript, Video, VideoSource } from '@/types/models';
 import { createId } from '@/utils/id';
 import { nowISO } from '@/utils/date';
 import { normalizeExpressionKey } from '@/utils/text';
 import { reviewStateId } from '@/services/scheduler';
-import type { Repositories, TableCount, VideoUpsertResult } from './types';
+import type { KeySentencePatch, Repositories, TableCount, VideoUpsertResult } from './types';
+
+/** undefined 값은 빼고 반영 (부분 수정 시 기존 값 보존) */
+function pickDefined<T extends object>(patch: T): Partial<T> {
+  return Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
 
 /** 정보 출처 신뢰도 — 더 좋은 출처의 정보로만 덮어쓴다 */
 const SOURCE_RANK: Record<MetadataSource, number> = { youtube_api: 3, oembed: 2, rss: 2, manual: 1, sample: 0 };
@@ -23,12 +28,21 @@ export const TABLE_LABELS: Record<TableName, string> = {
   dialogueProgress: '5단계 진행도',
   studyLogs: '학습 기록',
   appMeta: '앱 설정',
+  learningItems: '학습 대상',
+  dayAssignments: 'Day 제안·확정',
+  studySessions: '학습 세션',
+  dialogueDrafts: '대화문 초안',
+  extractionJobs: '자동 추출 작업',
+  extractionDrafts: '자동 추출 초안',
+  aiRequests: 'AI 요청 기록',
 };
 
 const byOrder = <T extends { order: number }>(a: T, b: T) => a.order - b.order;
 
 /** IndexedDB(Dexie) 기반 저장소 구현 */
 export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
+  /** 이 DB에 실제로 있는 테이블만 (구버전 스키마로 연 DB에서도 안전하게) */
+  const presentTables = () => TABLE_NAMES.filter((n) => db.tables.some((t) => t.name === n));
   return {
     playlists: {
       list: async () => (await db.playlists.toArray()).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
@@ -156,7 +170,11 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
     },
 
     transcripts: {
-      getByVideo: (videoId) => db.transcripts.where('videoId').equals(videoId).first(),
+      // 같은 영상에 기록이 여럿이면(예: 실패 기록 + AI 자막) 내용이 있는 자막을 먼저 보여 준다
+      getByVideo: async (videoId) => {
+        const all = await db.transcripts.where('videoId').equals(videoId).toArray();
+        return all.find((t) => t.status === 'success' && t.segments.length > 0) ?? all[0];
+      },
       save: (videoId, input) =>
         db.transaction('rw', db.transcripts, db.videos, async () => {
           const now = nowISO();
@@ -183,6 +201,16 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
     expressionNotes: {
       listByVideo: async (videoId) =>
         (await db.expressionNotes.where('videoId').equals(videoId).toArray()).sort(byOrder),
+      get: (id) => db.expressionNotes.get(id),
+      add: async (note) => {
+        await db.expressionNotes.add(note);
+      },
+      update: async (id, patch) => {
+        await db.expressionNotes.update(id, { ...pickDefined(patch), updatedAt: nowISO() });
+      },
+      remove: async (id) => {
+        await db.expressionNotes.delete(id);
+      },
     },
 
     keySentences: {
@@ -193,6 +221,29 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
           .between([videoId, -Infinity], [videoId, Infinity])
           .toArray(),
       getMany: async (ids) => (await db.keySentences.bulkGet(ids)).filter((x) => x != null),
+      get: (id) => db.keySentences.get(id),
+      add: async (sentence) => {
+        await db.keySentences.add(sentence);
+      },
+      update: async (id, patch) => {
+        // 원문 보호: 허용된 필드만 반영 (english·videoId·order 등은 무시)
+        const allowed: (keyof KeySentencePatch)[] = [
+          'korean',
+          'situation',
+          'expressionIds',
+          'expressionSpans',
+          'timestampSec',
+          'status',
+          'correctCount',
+          'wrongCount',
+        ];
+        const safe: Record<string, unknown> = {};
+        for (const k of allowed) if (patch[k] !== undefined) safe[k] = patch[k];
+        await db.keySentences.update(id, { ...safe, updatedAt: nowISO() });
+      },
+      remove: async (id) => {
+        await db.keySentences.delete(id);
+      },
     },
 
     dialogues: {
@@ -266,6 +317,17 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
       setMarkedDifficult: async (id, marked) => {
         await db.expressions.update(id, { isMarkedDifficult: marked, updatedAt: nowISO() });
       },
+      removeSourceRef: (id, ref) =>
+        db.transaction('rw', db.expressions, async () => {
+          const e = await db.expressions.get(id);
+          if (!e) return;
+          const same = (r: SourceRef) =>
+            r.videoId === ref.videoId &&
+            (r.sentenceId ?? null) === (ref.sentenceId ?? null) &&
+            (r.dialogueId ?? null) === (ref.dialogueId ?? null);
+          const sourceRefs = e.sourceRefs.filter((r) => !same(r));
+          if (sourceRefs.length !== e.sourceRefs.length) await db.expressions.update(id, { sourceRefs, updatedAt: nowISO() });
+        }),
     },
 
     reviewStates: {
@@ -287,6 +349,9 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
       listSince: (dateKey) => db.studyLogs.where('date').aboveOrEqual(dateKey).toArray(),
       countReviews: () => db.studyLogs.filter((l) => l.isReview).count(),
       count: () => db.studyLogs.count(),
+      add: async (log) => {
+        await db.studyLogs.add(log);
+      },
     },
 
     meta: {
@@ -299,7 +364,7 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
     maintenance: {
       countAll: async () => {
         const result: TableCount[] = [];
-        for (const name of TABLE_NAMES) {
+        for (const name of presentTables()) {
           const table = db.table(name);
           const total = await table.count();
           const sample = name === 'appMeta' ? 0 : await table.filter((r: { isSample?: boolean }) => r.isSample === true).count();
@@ -308,7 +373,7 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
         return result;
       },
       hasSampleData: async () => {
-        for (const name of TABLE_NAMES) {
+        for (const name of presentTables()) {
           if (name === 'appMeta') continue;
           const n = await db.table(name).filter((r: { isSample?: boolean }) => r.isSample === true).count();
           if (n > 0) return true;
@@ -317,7 +382,7 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
       },
       deleteSampleData: async () => {
         let deleted = 0;
-        const tables = TABLE_NAMES.filter((n) => n !== 'appMeta').map((n) => db.table(n));
+        const tables = presentTables().filter((n) => n !== 'appMeta').map((n) => db.table(n));
         await db.transaction('rw', tables, async () => {
           for (const table of tables) {
             deleted += await table.filter((r: { isSample?: boolean }) => r.isSample === true).delete();
@@ -340,7 +405,7 @@ export function createIndexedDbRepositories(db: StudyDatabase): Repositories {
         });
       },
       clearAll: async () => {
-        const tables = TABLE_NAMES.map((n) => db.table(n));
+        const tables = presentTables().map((n) => db.table(n));
         await db.transaction('rw', tables, async () => {
           for (const table of tables) await table.clear();
         });

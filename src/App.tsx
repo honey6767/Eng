@@ -9,15 +9,38 @@ import { VideosPage } from '@/pages/VideosPage';
 import { VideoDetailPage } from '@/pages/VideoDetailPage';
 import { DialoguesPage } from '@/pages/DialoguesPage';
 import { DialogueDetailPage } from '@/pages/DialogueDetailPage';
+import { CombineDialoguePage } from '@/pages/CombineDialoguePage';
+import { MemorizePage } from '@/pages/MemorizePage';
 import { ReviewPage } from '@/pages/ReviewPage';
 import { ExpressionsPage } from '@/pages/ExpressionsPage';
 import { FavoritesPage } from '@/pages/FavoritesPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { MorePage } from '@/pages/MorePage';
+import { CollectionPage } from '@/pages/CollectionPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
+import { ExtractionPage } from '@/pages/ExtractionPage';
+import { DraftReviewPage } from '@/pages/DraftReviewPage';
+import { DaysPage } from '@/pages/DaysPage';
+import { AccessGate } from '@/components/access/AccessGate';
+import { useEffect } from 'react';
+import { prepController } from '@/services/prep';
 
 export default function App() {
   const { ready, error } = useAppInit();
+
+  // 학습 자료 자동 생성: 앱을 열 때·네트워크가 돌아올 때·다시 화면에 보일 때 대기열을 이어 간다 (같은 요청 식별자로 이어서 확인)
+  useEffect(() => {
+    if (!ready) return;
+    void prepController.resume();
+    const again = () => void prepController.resume();
+    const onVisible = () => document.visibilityState === 'visible' && again();
+    window.addEventListener('online', again);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('online', again);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [ready]);
 
   if (error) {
     return (
@@ -35,21 +58,29 @@ export default function App() {
   return (
     <ToastProvider>
       <ConfirmProvider>
+        <AccessGate>
         <Routes>
           <Route element={<AppShell />}>
             <Route index element={<DashboardPage />} />
             <Route path="videos" element={<VideosPage />} />
             <Route path="videos/:id" element={<VideoDetailPage />} />
             <Route path="dialogues" element={<DialoguesPage />} />
+            <Route path="dialogues/combine" element={<CombineDialoguePage />} />
+            <Route path="dialogues/:id/memorize" element={<MemorizePage />} />
             <Route path="dialogues/:id" element={<DialogueDetailPage />} />
             <Route path="review" element={<ReviewPage />} />
             <Route path="expressions" element={<ExpressionsPage />} />
             <Route path="favorites" element={<FavoritesPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="collection" element={<CollectionPage />} />
             <Route path="more" element={<MorePage />} />
+            <Route path="extraction" element={<ExtractionPage />} />
+            <Route path="extraction/draft/:id" element={<DraftReviewPage />} />
+            <Route path="days" element={<DaysPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>
+        </AccessGate>
       </ConfirmProvider>
     </ToastProvider>
   );

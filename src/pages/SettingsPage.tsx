@@ -13,8 +13,9 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { Card, SectionTitle } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import { PlannedNotice } from '@/components/ui/PlannedNotice';
 import { Loading } from '@/components/ui/Loading';
+import { BackupPanel } from '@/components/settings/BackupPanel';
+import { AccessCodePanel } from '@/components/access/AccessCodePanel';
 import { formatDateKo } from '@/utils/date';
 
 const STATE_BADGE = {
@@ -202,9 +203,14 @@ function SettingsBody({
         </Card>
       </section>
 
-      <section>
-        <SectionTitle>백업</SectionTitle>
-        <PlannedNotice title="데이터 내보내기 · 가져오기 (JSON 백업)" stage="8단계" />
+      <section id="access">
+        <SectionTitle>접근 코드</SectionTitle>
+        <AccessCodePanel />
+      </section>
+
+      <section id="backup">
+        <SectionTitle>백업 · 복원</SectionTitle>
+        <BackupPanel />
       </section>
 
       <section>

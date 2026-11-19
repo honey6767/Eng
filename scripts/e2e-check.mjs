@@ -63,7 +63,8 @@ async function textIs(locator, expected, timeout = 5000) {
 }
 
 async function noHorizontalOverflow(page) {
-  return page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+  // 가로 스크롤뿐 아니라, 내용이 넓어 모바일 브라우저가 화면을 축소(innerWidth > 기기 폭)하는 경우도 잡는다
+  return page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1 && window.innerWidth <= screen.width + 1);
 }
 
 const stat = (page, label) => page.getByTestId(`stat-${label}`);
@@ -81,6 +82,15 @@ async function runSuite(label, contextOptions) {
     isMobile
       ? page.getByRole('navigation', { name: '하단 메뉴' }).getByRole('link', { name, exact: true })
       : page.getByRole('navigation', { name: '주 메뉴' }).getByRole('link', { name, exact: true });
+  // 영상 관리는 '콘텐츠 준비'로 이동: 넓은 화면은 사이드바, 좁은 화면은 더보기 안
+  const goVideos = async () => {
+    if (isMobile) {
+      await nav('더보기').click();
+      await page.getByRole('link', { name: /영상 · 핵심 표현/ }).click();
+    } else {
+      await nav('영상 · 핵심 표현').click();
+    }
+  };
   const overflowPages = [];
   const checkOverflow = async (name) => {
     if (!(await noHorizontalOverflow(page))) overflowPages.push(name);
@@ -89,19 +99,19 @@ async function runSuite(label, contextOptions) {
   // 1. 대시보드 + 최초 샘플 데이터
   await page.goto(BASE);
   await page.getByRole('heading', { name: '오늘의 학습' }).waitFor();
-  await page.getByText('학습 영상', { exact: true }).waitFor();
-  check('대시보드 로드', true);
+  await page.getByTestId('today-dialogue').waitFor();
+  check('홈 로드', true);
   check('샘플 데이터 안내 배너 표시', await visible(page.getByText('샘플 데이터')));
-  check('학습 영상 수 = 3', await textIs(stat(page, '학습 영상'), 3));
-  check('누적 핵심 표현 = 10', await textIs(stat(page, '누적 핵심 표현'), 10));
-  check('오늘 복습 항목 4개 표시', await countIs(page.getByLabel('우선순위 순 복습 목록').locator('li'), 4));
-  const plannedDisabled = await page.getByRole('button', { name: /복습 시작/ }).isDisabled();
-  check('미구현 버튼(복습 시작)은 비활성 + 예정 표시', plannedDisabled);
+  check('오늘의 대화문 = 이어서 학습할 대화문(저녁 메뉴 정하기)', await visible(page.getByTestId('today-dialogue').getByText('저녁 메뉴 정하기')));
+  check('모은 핵심 표현 = 10', await textIs(stat(page, '모은 핵심 표현'), 10));
+  check('외운 대화문 = 1', await textIs(stat(page, '외운 대화문'), 1));
+  check('오늘의 복습: 대화문 단위 안내', await visible(page.getByTestId('today-review').getByText('오늘의 복습')));
+  check('오늘의 대화문: 5단계 암기 화면으로 바로 가는 버튼', ((await page.getByTestId('today-memorize').getAttribute('href')) ?? '').endsWith('/memorize'));
   await checkOverflow('대시보드');
   await page.screenshot({ path: `${SHOTS}/${label}-01-dashboard.png`, fullPage: true });
 
   // 2. 영상 목록 → 상세 탭
-  await nav('영상').click();
+  await goVideos();
   await page.getByRole('heading', { name: '영상', exact: true }).waitFor();
   check('영상 목록 3개', await countIs(page.locator('main ul > li'), 3));
   await checkOverflow('영상 목록');
@@ -118,7 +128,7 @@ async function runSuite(label, contextOptions) {
   check('자막(타임스탬프) 표시', await visible(page.getByText('0:42', { exact: true })));
 
   // 자막 실패 영상
-  await nav('영상').click();
+  await goVideos();
   await page.getByTestId('video-list').getByText('[샘플] 약속 잡을 때 쓰는 표현 5가지').click();
   check('표현 노트 없음 → "설명 내용 확인 필요"', await visible(page.getByText('설명 내용 확인 필요')));
   await page.getByRole('tab', { name: /자막/ }).click();
@@ -127,7 +137,7 @@ async function runSuite(label, contextOptions) {
   check('대화문 2개로 분리된 영상', await countIs(page.getByRole('main').getByText(/^대화문 [12]$/), 2));
 
   // 3. 대화문 상세: 한국어 토글 + 즐겨찾기 저장 → 새로고침 후 유지
-  await nav('대화문').click();
+  await nav('외우기').click();
   await page.getByText('늦게 온 친구와 이사 이야기').click();
   await page.getByRole('heading', { name: 'STEP 1 · 전체 대화문' }).waitFor();
   check('대화문 핵심 문장 하이라이트 5개', await countIs(page.locator('main mark[title^="핵심 문장"]'), 5));
@@ -148,7 +158,7 @@ async function runSuite(label, contextOptions) {
     await nav('더보기').click();
     await page.getByRole('link', { name: '표현 노트' }).click();
   } else {
-    await nav('표현').click();
+    await nav('표현 노트').click();
   }
   await page.getByRole('heading', { name: '표현 노트' }).waitFor();
   const card = page.locator('main li').filter({ hasText: 'need a hand' });
@@ -163,8 +173,8 @@ async function runSuite(label, contextOptions) {
   await reloadedBox.waitFor();
   check('어려움 표시 → 새로고침 후 유지', await reloadedBox.isChecked());
   await nav('홈').click();
-  await page.getByText('학습 영상', { exact: true }).waitFor();
-  check('대시보드 취약 표현 4 → 5 반영', await visible(page.getByText('취약 표현 5개')));
+  await page.getByTestId('today-dialogue').waitFor();
+  check('홈 취약 표현 4 → 5 반영', await visible(page.getByText('다시 만나면 좋은 표현 5개', { exact: false })));
 
   // 5. 즐겨찾기 화면
   if (isMobile) {
@@ -199,13 +209,13 @@ async function runSuite(label, contextOptions) {
   await page.getByRole('button', { name: '샘플 데이터 다시 넣기' }).waitFor();
   check('샘플 삭제 후 레코드 0', await textIs(page.getByTestId('total-records'), 0));
   await page.goto(BASE);
-  await page.getByText('학습 영상', { exact: true }).waitFor();
-  check('샘플 삭제 후 대시보드 빈 상태', (await textIs(stat(page, '학습 영상'), 0)) && (await visible(page.getByText('학습할 대화문이 없어요'))));
+  await page.getByTestId('today-dialogue').waitFor();
+  check('샘플 삭제 후 홈 빈 상태', (await textIs(stat(page, '모은 핵심 표현'), 0)) && (await visible(page.getByText('학습할 대화문이 없어요'))));
   await checkOverflow('대시보드(빈 상태)');
   await page.screenshot({ path: `${SHOTS}/${label}-10-dashboard-empty.png`, fullPage: true });
   await page.reload();
-  await page.getByText('학습 영상', { exact: true }).waitFor();
-  check('샘플 삭제 후 새로고침해도 자동 재생성 안 됨', await textIs(stat(page, '학습 영상'), 0));
+  await page.getByTestId('today-dialogue').waitFor();
+  check('샘플 삭제 후 새로고침해도 자동 재생성 안 됨', await textIs(stat(page, '모은 핵심 표현'), 0));
 
   await page.goto(`${BASE}/settings`);
   await page.getByRole('button', { name: '샘플 데이터 다시 넣기' }).click();

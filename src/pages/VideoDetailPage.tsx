@@ -1,32 +1,37 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useState } from 'react';
-import { repos } from '@/repositories';
+import { contentStore, extractionStore, repos } from '@/repositories';
+import { StudyContentPanel } from '@/components/content/StudyContentPanel';
+import { VideoPrepStatus } from '@/components/prep/PrepStatus';
 import { useLiveData } from '@/hooks/useLiveData';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { PlannedNotice } from '@/components/ui/PlannedNotice';
 import { Loading } from '@/components/ui/Loading';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { Icon } from '@/components/ui/Icon';
 import { VideoThumb } from '@/components/video/VideoThumb';
 import { VideoStatusControl } from '@/components/video/VideoStatusControl';
 import { YouTubePlayer, type SeekRequest } from '@/components/video/YouTubePlayer';
 import { TranscriptPanel } from '@/components/video/TranscriptPanel';
-import { Button } from '@/components/ui/Button';
+import { KeySentenceManager } from '@/components/sentences/KeySentenceManager';
+import { ExpressionNotesPanel } from '@/components/sentences/ExpressionNotesPanel';
+import { Button, LinkButton } from '@/components/ui/Button';
+import { DialogueView } from '@/components/dialogue/DialogueView';
+import { UsefulPanel, useUseful } from '@/components/dialogue/UsefulPanel';
 import { useToast } from '@/hooks/useToast';
 import { useYouTubeStatus } from '@/hooks/useYouTubeStatus';
 import { startVideo } from '@/services/studyQueue';
-import { formatDateKo, formatDuration, formatTimestamp } from '@/utils/date';
-import { LEARNING_STATUS, ORIGIN, TRANSCRIPT_STATUS } from '@/utils/labels';
-import type { Dialogue, DialogueComposition, ExpressionNote, KeySentence, Playlist } from '@/types/models';
+import { formatDateKo, formatDuration } from '@/utils/date';
+import { TRANSCRIPT_STATUS } from '@/utils/labels';
+import type { Dialogue, DialogueComposition, Expression, KeySentence, LearningItem, Playlist } from '@/types/models';
 import { NotFoundPage } from './NotFoundPage';
+import { prepController } from '@/services/prep';
 
 const TABS = [
-  { key: 'preview', label: '주요 표현' },
-  { key: 'sentences', label: '핵심 문장' },
+  { key: 'sentences', label: '원문·Chunk' },
   { key: 'dialogues', label: '대화문' },
   { key: 'transcript', label: '자막' },
+  { key: 'preview', label: '주요 표현' },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
 
@@ -41,26 +46,37 @@ export function VideoDetailPage() {
   const data = useLiveData(async () => {
     const video = await repos.videos.get(id);
     if (!video) return null;
-    const [transcript, notes, sentences, dialogues, composition, playlists] = await Promise.all([
+    const [transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems, contentCtx] = await Promise.all([
       repos.transcripts.getByVideo(id),
       repos.expressionNotes.listByVideo(id),
       repos.keySentences.listByVideo(id),
       repos.dialogues.listByVideo(id),
       repos.compositions.getByVideo(id),
       repos.playlists.list(),
+      repos.expressions.list(),
+      extractionStore.listLearningItems(id),
+      contentStore.readVideo(id),
     ]);
-    return { video, transcript, notes, sentences, dialogues, composition, playlists };
+    return { video, transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems, day: contentCtx?.day };
   }, [id]);
 
   if (data === undefined) return <Loading />;
   if (data === null) return <NotFoundPage message="영상을 찾을 수 없어요." />;
 
-  const { video, transcript, notes, sentences, dialogues, composition, playlists } = data;
+  const { video, transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems, day } = data;
+  // AI가 뽑은 핵심 표현 (B1-d로 자동 적용된 것) — 기존 표현 노트와 따로 보여 준다
+  const aiItems = learningItems.filter((li) => li.origin === 'ai_extracted' && (li.kind === 'key' || li.kind === 'chunk'));
+  // 직접 고른 핵심 문장(5개 선정 화면)과 AI 원문 문장은 따로 보여 준다
+  const manualSentences = sentences.filter((s) => s.origin !== 'ai_extracted');
+  const seekTo = (sec: number) => {
+    setSeek({ sec, nonce: Date.now() });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   const playlistById = new Map<string, Playlist>(playlists.map((p) => [p.id, p]));
   // 실제 영상은 2단계 기능인 자막 탭을 기본으로 연다
-  const tab: TabKey = tabParam ?? (video.isSample ? 'preview' : 'transcript');
+  const tab: TabKey = tabParam ?? (video.isSample ? 'preview' : 'sentences');
   const counts: Record<TabKey, number | null> = {
-    preview: new Set(notes.map((n) => n.expression)).size,
+    preview: new Set(notes.map((n) => n.expression)).size + aiItems.length,
     sentences: sentences.length,
     dialogues: dialogues.length,
     transcript: null,
@@ -94,6 +110,7 @@ export function VideoDetailPage() {
               size="sm"
               onClick={async () => {
                 await startVideo(repos, video);
+                void prepController.enqueue([video.id], { manual: true });
                 toast('이 영상으로 학습을 시작했어요');
               }}
             >
@@ -168,9 +185,61 @@ export function VideoDetailPage() {
         </div>
       </div>
 
-      {tab === 'preview' && <PreviewNotes notes={notes} />}
-      {tab === 'sentences' && <SentenceList sentences={sentences} dialogues={dialogues} />}
-      {tab === 'dialogues' && <DialogueList dialogues={dialogues} composition={composition} sentences={sentences} />}
+      {tab === 'preview' && (
+        <div className="space-y-4">
+          {aiItems.length > 0 && (
+            <AiExpressionList
+              items={aiItems}
+              expressions={expressions}
+              onSeek={(sec) => {
+                setSeek({ sec, nonce: Date.now() });
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+            />
+          )}
+          <ExpressionNotesPanel video={video} notes={notes} sentences={sentences} expressions={expressions} />
+        </div>
+      )}
+      {tab === 'sentences' && !video.isSample && (
+        <div className="mb-4 space-y-4">
+          <VideoPrepStatus videoId={video.id} />
+          <StudyContentPanel video={video} day={day} sentences={sentences} items={learningItems} expressions={expressions} dialogues={dialogues} onSeek={video.youtubeVideoId ? seekTo : undefined} />
+        </div>
+      )}
+      {tab === 'sentences' && !video.isSample && (
+        <details className="mt-2" data-testid="manual-sentences">
+          <summary className="cursor-pointer text-sm font-semibold text-muted">직접 고른 핵심 문장 (예전 방식) {manualSentences.length}개</summary>
+          <div className="mt-3">
+            <KeySentenceManager
+              video={video}
+              transcript={transcript}
+              sentences={manualSentences}
+              dialogues={dialogues}
+              expressions={expressions}
+              onSeek={seekTo}
+            />
+          </div>
+        </details>
+      )}
+      {tab === 'sentences' && video.isSample && (
+        <KeySentenceManager
+          video={video}
+          transcript={transcript}
+          sentences={manualSentences}
+          dialogues={dialogues}
+          expressions={expressions}
+          onSeek={(sec) => {
+            setSeek({ sec, nonce: Date.now() });
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
+      )}
+      {tab === 'dialogues' && (
+        <div className="space-y-4">
+          {!video.isSample && !dialogues.some((d) => d.generatedBy === 'ai' && d.kind === 'original') && <VideoPrepStatus videoId={video.id} />}
+          <DialogueList dialogues={dialogues} composition={composition} sentences={sentences} />
+        </div>
+      )}
       {tab === 'transcript' && (
         <TranscriptPanel
           video={video}
@@ -187,162 +256,37 @@ export function VideoDetailPage() {
   );
 }
 
-function PreviewNotes({ notes }: { notes: ExpressionNote[] }) {
-  if (notes.length === 0) {
-    return (
-      <div className="space-y-3">
-        <Card className="p-5">
-          <div className="flex items-center gap-2">
-            <Badge tone="warn">
-              <Icon name="alert" className="size-3.5" />
-              설명 내용 확인 필요
-            </Badge>
-          </div>
-          <p className="mt-2 text-sm text-muted">
-            영상 앞부분의 주요 표현 설명을 아직 확보하지 못했습니다. 영상에서 설명하지 않은 내용을 임의로 만들어 표시하지
-            않습니다.
-          </p>
-        </Card>
-        <PlannedNotice title="주요 표현 노트 직접 입력 · 자막 기반 정리" stage="3단계" />
-      </div>
-    );
-  }
-
-  // 같은 표현의 '영상 설명'과 'AI 보충'을 묶어서 표시
-  const groups = new Map<string, ExpressionNote[]>();
-  for (const n of notes) groups.set(n.expression, [...(groups.get(n.expression) ?? []), n]);
-
+function AiExpressionList({ items, expressions, onSeek }: { items: LearningItem[]; expressions: Expression[]; onSeek: (sec: number) => void }) {
+  const byId = new Map(expressions.map((e) => [e.id, e]));
+  const sorted = [...items].sort((a, b) => (a.timestampSec ?? 1e9) - (b.timestampSec ?? 1e9));
   return (
-    <div className="space-y-3">
-      <p className="text-sm text-muted">
-        영상을 보기 전에 앞부분에서 설명하는 주요 표현을 먼저 복습하세요. <Badge tone="brand">영상 설명</Badge>은 영상에서
-        확인한 내용, <Badge tone="info">AI 보충</Badge>은 추가 설명입니다.
-      </p>
-      {[...groups.entries()].map(([expression, items]) => (
-        <Card key={expression} className="p-5">
-          <h3 className="en text-lg font-bold">{expression}</h3>
-          <p className="text-[15px] text-muted">{items[0].meaningKo}</p>
-          <div className="mt-3 space-y-3">
-            {items.map((n) => (
-              <div
-                key={n.id}
-                className={`rounded-xl p-3.5 text-sm ${n.origin === 'video' ? 'bg-brand-soft/60' : 'border border-dashed border-info/30 bg-info-soft/40'}`}
-              >
-                <div className="mb-2 flex flex-wrap items-center gap-1.5">
-                  <Badge tone={ORIGIN[n.origin].tone}>{ORIGIN[n.origin].label}</Badge>
-                  {n.verification === 'needs_check' && <Badge tone="warn">확인 필요</Badge>}
-                  {n.sourceTimestampSec != null && (
-                    <span className="inline-flex items-center gap-1 text-xs text-muted">
-                      <Icon name="clock" className="size-3.5" />
-                      {formatTimestamp(n.sourceTimestampSec)}
-                    </span>
-                  )}
-                </div>
-                <dl className="space-y-1.5">
-                  {n.usageContext && (
-                    <div>
-                      <dt className="inline font-semibold">사용 상황 </dt>
-                      <dd className="inline text-muted">{n.usageContext}</dd>
-                    </div>
-                  )}
-                  {n.nuance && (
-                    <div>
-                      <dt className="inline font-semibold">뉘앙스 </dt>
-                      <dd className="inline text-muted">{n.nuance}</dd>
-                    </div>
-                  )}
-                </dl>
-                {n.examples.length > 0 && (
-                  <ul className="mt-2 space-y-1">
-                    {n.examples.map((ex, i) => (
-                      <li key={i} className="border-l-2 border-line-strong pl-2.5">
-                        <p className="en text-ink">{ex.en}</p>
-                        <p className="text-xs text-muted">{ex.ko}</p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {n.similar.length > 0 && (
-                  <div className="mt-2">
-                    <p className="font-semibold">비슷한 표현</p>
-                    <ul className="mt-0.5 space-y-0.5 text-muted">
-                      {n.similar.map((s, i) => (
-                        <li key={i}>
-                          <span className="en font-medium text-ink">{s.expression}</span> — {s.difference}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+    <Card className="p-4" data-testid="ai-expressions">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h3 className="font-bold">AI가 찾은 핵심 표현 {sorted.length}개</h3>
+        <Badge tone="brand">AI 추출</Badge>
+      </div>
+      <ul className="divide-y divide-line">
+        {sorted.map((li) => {
+          const e = byId.get(li.expressionId);
+          return (
+            <li key={li.id} className="py-2.5">
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span className="font-semibold text-ink">{e?.text ?? '(표현)'}</span>
+                {e?.meaningKo && <span className="text-sm text-muted">{e.meaningKo}</span>}
+                {li.status === 'needs_review' && <Badge tone="warn">확인 권장</Badge>}
+                {li.onScreen && <Badge>화면 글자</Badge>}
+                {li.timestampSec != null && (
+                  <button type="button" className="text-xs text-brand underline underline-offset-2" onClick={() => onSeek(li.timestampSec!)}>
+                    {formatDuration(li.timestampSec)}
+                  </button>
                 )}
               </div>
-            ))}
-          </div>
-        </Card>
-      ))}
-    </div>
-  );
-}
-
-function SentenceList({ sentences, dialogues }: { sentences: KeySentence[]; dialogues: Dialogue[] }) {
-  if (sentences.length === 0) {
-    return (
-      <div className="space-y-3">
-        <Card>
-          <EmptyState icon="book" title="핵심 문장이 아직 없어요">
-            영상에서 선정한 핵심 문장 5개를 입력하면 여기에 표시됩니다.
-          </EmptyState>
-        </Card>
-        <PlannedNotice title="핵심 문장 5개 입력 · 수정" stage="3단계" />
-      </div>
-    );
-  }
-  const usedIn = (sid: string) =>
-    dialogues.find((d) => d.lines.some((l) => l.segments.some((s) => s.keySentenceId === sid)));
-
-  return (
-    <div className="space-y-3">
-      <p className="text-sm text-muted">영상에서 제공한 영어 문장을 원문 그대로 보존합니다.</p>
-      <ol className="space-y-3">
-        {sentences.map((s) => {
-          const d = usedIn(s.id);
-          const st = LEARNING_STATUS[s.status];
-          return (
-            <li key={s.id}>
-              <Card className="p-4">
-                <div className="flex gap-3">
-                  <span className="grid size-7 shrink-0 place-items-center rounded-full bg-key text-sm font-bold text-key-ink">
-                    {s.order}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="en text-[17px] leading-snug font-semibold">{s.english}</p>
-                    <p className="mt-0.5 text-[15px] text-muted">{s.korean}</p>
-                    <p className="mt-2 text-sm text-muted">
-                      <span className="font-semibold text-ink">상황</span> {s.situation}
-                    </p>
-                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-                      <Badge tone={st.tone}>{st.label}</Badge>
-                      <span>
-                        정답 {s.correctCount} · 오답 {s.wrongCount}
-                      </span>
-                      {s.timestampSec != null && (
-                        <span className="inline-flex items-center gap-1">
-                          · <Icon name="clock" className="size-3.5" /> {formatTimestamp(s.timestampSec)}
-                        </span>
-                      )}
-                      {d && (
-                        <Link to={`/dialogues/${d.id}`} className="font-semibold text-brand">
-                          · 대화문 {d.orderInVideo}에서 사용
-                        </Link>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </Card>
+              {li.sourceText && <p className="mt-1 text-sm text-subtle">“{li.sourceText}”</p>}
             </li>
           );
         })}
-      </ol>
-    </div>
+      </ul>
+    </Card>
   );
 }
 
@@ -360,10 +304,9 @@ function DialogueList({
       <div className="space-y-3">
         <Card>
           <EmptyState icon="chat" title="대화문이 아직 없어요">
-            핵심 문장 5개를 자연스러운 대화문(기본 1개, 최대 3개)으로 재구성하면 여기에 표시됩니다.
+            원문 문장과 공통 핵심 Chunk로 만든 통합 대화문이 학습 자료 자동 생성에서 만들어지면 여기에 표시돼요.
           </EmptyState>
         </Card>
-        <PlannedNotice title="핵심 문장 → 대화문 재구성" stage="4단계" />
       </div>
     );
   }
@@ -373,7 +316,10 @@ function DialogueList({
       <p className="text-sm text-muted">
         핵심 문장 {sentences.length}개를 대화문 {dialogues.length}개로 구성했습니다.
       </p>
-      {dialogues.map((d) => {
+      {dialogues.filter((d) => d.generatedBy === 'ai').map((d) => (
+        <DayDialogueInline key={d.id} dialogue={d} sentences={sentences} />
+      ))}
+      {dialogues.filter((d) => d.generatedBy !== 'ai').map((d) => {
         const keyCount = d.lines.flatMap((l) => l.segments).filter((s) => s.kind === 'key').length;
         return (
           <Link key={d.id} to={`/dialogues/${d.id}`} className="block">
@@ -402,5 +348,80 @@ function DialogueList({
         </Card>
       )}
     </div>
+  );
+}
+
+/** Day 통합 대화문 — 영상 화면에서 바로 읽고 암기로 이어 간다 */
+function DayDialogueInline({ dialogue, sentences }: { dialogue: Dialogue; sentences: KeySentence[] }) {
+  const [showKorean, setShowKorean] = useState(true);
+  const useful = useUseful(dialogue);
+  const [openRef, setOpenRef] = useState<string | null>(null);
+  const used = new Set(dialogue.lines.map((l) => l.sourceSentenceId).filter(Boolean));
+  const ai = sentences.filter((s) => s.origin === 'ai_extracted' || used.has(s.id)).sort((a, b) => (a.aiNumber ?? a.order) - (b.aiNumber ?? b.order));
+  return (
+    <Card className="space-y-3 p-4" data-testid="day-dialogue">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge tone="brand">통합 대화문</Badge>
+        {dialogue.sourceDays?.map((d) => (
+          <Badge key={d} tone="info">
+            Day {d}
+          </Badge>
+        ))}
+        <span className="ml-auto" />
+        <button type="button" className="text-sm font-semibold text-brand" onClick={() => setShowKorean((v) => !v)}>
+          한국어 {showKorean ? '숨기기' : '보기'}
+        </button>
+      </div>
+      <div>
+        <p className="font-bold">{dialogue.title}</p>
+        <p className="mt-0.5 text-sm text-muted">{dialogue.situation}</p>
+      </div>
+      <DialogueView lines={dialogue.lines} sentences={sentences} showKorean={showKorean} highlightKeys useful={useful.model} openRef={openRef} onOpen={setOpenRef} />
+      <UsefulPanel dialogue={dialogue} useful={useful} onOpen={(k) => {
+        setOpenRef(k);
+        document.getElementById(`dl-${k.split(':').pop()}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }} />
+      {ai.length > 0 && (
+        <div className="rounded-xl bg-canvas p-3 text-sm" data-testid="source-map">
+          <p className="mb-1 text-xs font-semibold text-subtle">원문 문장 연결</p>
+          <ul className="space-y-0.5">
+            {ai.map((s) => {
+              const lineNos = dialogue.lines.filter((l) => l.sourceSentenceId === s.id).map((l) => l.order);
+              return (
+                <li key={s.id} className={lineNos.length ? '' : 'text-subtle'}>
+                  <b>{s.aiNumber ?? s.order}</b> <span className="en">{s.english}</span> → {lineNos.length ? `대화 ${lineNos.join(', ')}번째 줄` : '대화에 쓰지 않음'}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+      {(dialogue.chunkUsages?.length ?? 0) > 0 && (
+        <ul className="space-y-2" data-testid="day-chunk-usages">
+          {[...dialogue.chunkUsages!].sort((x, y) => (x.kind === 'extra' ? 1 : 0) - (y.kind === 'extra' ? 1 : 0)).map((u) => (
+            <li key={u.learningItemId} className="rounded-xl border border-line p-3 text-sm">
+              <p className="flex flex-wrap items-center gap-1.5">
+                <mark className={`en rounded px-1 font-bold text-ink ${u.kind === 'extra' ? 'bg-brand-soft underline decoration-dashed decoration-brand underline-offset-4' : 'bg-key'}`}>{u.text}</mark>
+                {u.kind === 'extra' && <Badge tone="info">✨ 유용한 회화 표현</Badge>}
+                {u.kind === 'core' && <Badge tone="key">★ 핵심 Chunk</Badge>}
+                <span className="text-xs text-subtle">대화 속 형태: {u.usedAs}</span>
+              </p>
+              {u.meaningInContext && <p className="mt-1"><span className="text-xs font-semibold text-subtle">이 대화의 의미 · </span>{u.meaningInContext}</p>}
+              {u.nuance && <p><span className="text-xs font-semibold text-subtle">뉘앙스 · </span>{u.nuance}</p>}
+              {u.whyUsed && <p><span className="text-xs font-semibold text-subtle">쓴 이유 · </span>{u.whyUsed}</p>}
+              {u.example.en && <p className="mt-1"><span className="text-xs font-semibold text-subtle">응용 · </span><span className="en">{u.example.en}</span> <span className="text-muted">— {u.example.ko}</span></p>}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <LinkButton to={`/dialogues/${dialogue.id}/memorize`} data-testid="start-memorize">
+          5단계 암기 시작
+        </LinkButton>
+        <LinkButton to={`/dialogues/${dialogue.id}`} variant="secondary">
+          대화문 상세
+        </LinkButton>
+      </div>
+    </Card>
   );
 }

@@ -28,11 +28,11 @@ export const ORIGIN: Record<ContentOrigin, { label: string; tone: BadgeTone }> =
 };
 
 export const STEP_NAMES: Record<1 | 2 | 3 | 4 | 5, string> = {
-  1: '전체 공개',
-  2: '핵심 표현 빈칸',
-  3: '빈칸 확장',
-  4: '한국어 보고 영어 완성',
-  5: '대화문 전체 암송',
+  1: '전체 대화문 보기',
+  2: '핵심 Chunk 빈칸',
+  3: '주요 단어 빈칸',
+  4: '대부분 빈칸',
+  5: '보지 않고 말하기',
 };
 
 export function weaknessTone(w: number): BadgeTone {
