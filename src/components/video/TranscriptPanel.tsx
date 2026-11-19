@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/Button';
 import { Icon } from '@/components/ui/Icon';
 import { formatDateKo, formatTimestamp } from '@/utils/date';
 import { VideoPrepStatus } from '@/components/prep/PrepStatus';
+import { prepController } from '@/services/prep';
 
 const FORMAT_LABEL: Record<TranscriptFormat, string> = {
   srt: 'SRT',
@@ -261,6 +262,8 @@ function TranscriptEditor({
       });
       toast('자막을 저장했어요');
       setText('');
+      // 학습 자료 카드 상태만 다시 읽는다 (Gemini 요청 없음 — 자료 만들기는 사용자가 버튼을 눌러야 시작)
+      void prepController.refresh();
       onDone();
     } finally {
       setSaving(false);

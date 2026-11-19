@@ -161,6 +161,47 @@ describe('학습 자료 자동 생성 대기열', () => {
     expect(packSends.filter((s) => s.retryFailed).length).toBe(1);
   });
 
+  it('자막 단계 실패 뒤 자막을 직접 넣으면: 실패로 막히지 않고 버튼 대기(Gemini 자동 요청 없음) → 버튼을 눌러야 다음 단계 요청', async () => {
+    const { db } = createTestRepos();
+    await seedVideo(db, 'nf', 'mockFail002', '그냥 영상');
+    const { client, gemini } = server();
+    const pc = device(db, client);
+    await pc.startAll();
+    await pc.start();
+    let row = pc.getSnapshot().rows.find((r) => r.video.id === 'nf')!;
+    expect(row).toMatchObject({ status: 'failed', stage: 'transcript' });
+    expect(row.failure?.error.message).toMatch(/^\[Gemini 상태 failed · 오류 INTERNAL\/13 · 생성 후 \d+초/);
+    const before = gemini.createCalls.length;
+    // 사용자가 자막 탭에서 직접 입력
+    await db.transcripts.add({ id: 'tr-nf', createdAt: T, updatedAt: T, videoId: 'nf', source: 'manual_paste', status: 'success', rawText: 'x', segments: [{ startSec: 0, endSec: 9, text: 'I could really use a long vacation this year.' }], format: 'timestamped' });
+    await pc.refresh();
+    row = pc.getSnapshot().rows.find((r) => r.video.id === 'nf')!;
+    expect(row).toMatchObject({ status: 'not_queued', stage: 'pack', failure: null });
+    expect(pc.getSnapshot().summary).toMatchObject({ failed: 0, notQueued: 1 });
+    // '전체 시작' 상태에서 앱을 다시 열어도, '실패만 다시 시도'를 눌러도 자동으로 요청하지 않음
+    await pc.resume();
+    await pc.retryFailed();
+    await pc.start();
+    expect(gemini.createCalls.length).toBe(before);
+    expect((await db.appMeta.get('prepState'))?.value).toMatchObject({ videos: { nf: { stage: 'transcript' } } }); // 기록은 지우지 않음
+    // '이 영상 자료 만들기'를 누르면 그때 다음 단계(문장·Chunk) 요청 1번
+    await pc.enqueue(['nf']);
+    await pc.start();
+    expect(gemini.createCalls.slice(before)).toEqual(['pack:mockFail002']);
+    row = pc.getSnapshot().rows.find((r) => r.video.id === 'nf')!;
+    expect(row).toMatchObject({ status: 'failed', stage: 'pack' }); // 가짜 Gemini가 이 영상은 실패시킴 — 새 단계의 실패는 그대로 실패로 표시
+  });
+
+  it('자막 단계가 아닌 실패(문장·Chunk 등)는 그대로 실패로 남는다', async () => {
+    const { db } = createTestRepos();
+    await seedVideo(db, 'bad', 'mockFail003', '[Day 1] bad', { transcript: ['1. I could use a break.'] });
+    const { client } = server();
+    const pc = device(db, client);
+    await pc.startAll();
+    await pc.start();
+    expect(pc.getSnapshot().rows.find((r) => r.video.id === 'bad')).toMatchObject({ status: 'failed', stage: 'pack', failure: { stage: 'pack' } });
+  });
+
   it('여러 기기: 다른 기기가 같은 영상을 처리해도 Gemini 생성은 1번 (서버 보관 결과 재사용), 학습 기록은 기기별', async () => {
     const A = createTestRepos().db;
     const B = createTestRepos().db;

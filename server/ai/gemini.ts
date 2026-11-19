@@ -33,11 +33,20 @@ export type GeminiCreateResult =
 export type GeminiGetResult =
   | { kind: 'running'; status: string }
   | { kind: 'completed'; text: string; model: string | null; usage: GeminiUsage | null }
-  | { kind: 'failed'; status: string; message: string }
+  | { kind: 'failed'; status: string; message: string; detail?: GeminiFailureDetail }
   /** 보관 기간이 지나 없음 (404) */
   | { kind: 'gone' }
   /** 이번 조회만 실패 (네트워크·5xx·429) — 나중에 다시 조회 */
   | { kind: 'retry_later'; httpStatus: number | null };
+
+/** 완료되지 않고 끝난 작업의 상세 (원인 확인용 — 키·지시문 내용은 담지 않음) */
+export interface GeminiFailureDetail {
+  /** Gemini 작업 상태 (failed · cancelled · incomplete · budget_exceeded …) */
+  status: string;
+  /** 오류 목록 (코드·메시지, 최대 3개) */
+  errors: { code: string; message: string }[];
+  usage: (GeminiUsage & { thoughtTokens: number | null }) | null;
+}
 
 export interface GeminiClient {
   create(input: AiTaskRequest): Promise<GeminiCreateResult>;
@@ -146,6 +155,18 @@ export function extractUsage(interaction: Json): GeminiUsage | null {
   return { inputTokens: num(u.total_input_tokens), outputTokens: num(u.total_output_tokens), videoTokens: num(video?.tokens) };
 }
 
+/** 실패 응답의 오류 목록 — code는 숫자·문자열 어느 쪽이든 문자열로 (status 이름이 따로 오면 함께) */
+export function extractFailureDetail(interaction: Json, status: string): GeminiFailureDetail {
+  const errs = Array.isArray(interaction.errors) ? (interaction.errors as Json[]) : interaction.error && typeof interaction.error === 'object' ? [interaction.error as Json] : [];
+  const errors = errs.slice(0, 3).map((e) => {
+    const parts = [e?.status, e?.code, e?.reason].filter((x) => (typeof x === 'string' && x) || typeof x === 'number').map(String);
+    return { code: [...new Set(parts)].join('/').slice(0, 60), message: typeof e?.message === 'string' ? e.message.slice(0, 300) : '' };
+  });
+  const usage = extractUsage(interaction);
+  const thought = (interaction.usage as Json | undefined)?.total_thought_tokens;
+  return { status, errors, usage: usage ? { ...usage, thoughtTokens: typeof thought === 'number' ? thought : null } : null };
+}
+
 function errorMessage(json: Json | null): string {
   const e = json?.error as Json | undefined;
   if (typeof e?.message === 'string' && e.message) return e.message.slice(0, 300);
@@ -207,7 +228,7 @@ export function createGeminiClient(opts: { apiKey: string | null; model?: string
       }
       const errs = Array.isArray(json.errors) ? (json.errors as Json[]) : [];
       const msg = typeof errs[0]?.message === 'string' ? String(errs[0].message).slice(0, 300) : '';
-      return { kind: 'failed', status, message: msg || `Gemini 작업이 '${status}' 상태로 끝났어요.` };
+      return { kind: 'failed', status, message: msg || `Gemini 작업이 '${status}' 상태로 끝났어요.`, detail: extractFailureDetail(json, status) };
     },
   };
 }

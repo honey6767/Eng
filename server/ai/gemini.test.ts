@@ -52,6 +52,12 @@ describe('Gemini Interactions 클라이언트', () => {
     expect(await get(async () => ok({ status: 'in_progress' }))).toEqual({ kind: 'running', status: 'in_progress' });
     expect(await get(async () => ok(completed))).toEqual({ kind: 'completed', text: '{"a":1}', model: 'gemini-3.6-flash', usage: { inputTokens: 27127, outputTokens: 1546, videoTokens: 26845 } });
     expect(await get(async () => ok({ status: 'failed', errors: [{ message: 'bad' }] }))).toMatchObject({ kind: 'failed', message: 'bad' });
+    // 원인 확인용 상세: 상태 이름 · 오류 코드(숫자·문자 모두) · 토큰
+    expect(await get(async () => ok({ status: 'failed', errors: [{ code: 13, status: 'INTERNAL', message: 'There was a problem processing your request.' }], usage: { total_input_tokens: 900, total_output_tokens: 0, total_thought_tokens: 12 } }))).toMatchObject({
+      kind: 'failed', message: 'There was a problem processing your request.',
+      detail: { status: 'failed', errors: [{ code: 'INTERNAL/13', message: 'There was a problem processing your request.' }], usage: { inputTokens: 900, outputTokens: 0, thoughtTokens: 12 } },
+    });
+    expect(await get(async () => ok({ status: 'incomplete' }))).toMatchObject({ kind: 'failed', message: "Gemini 작업이 'incomplete' 상태로 끝났어요.", detail: { status: 'incomplete', errors: [], usage: null } });
     expect(await get(async () => ok({}, 404))).toEqual({ kind: 'gone' });
     expect(await get(async () => ok({}, 500))).toMatchObject({ kind: 'retry_later' });
     expect(extractOutputText({ steps: [] })).toBe('');

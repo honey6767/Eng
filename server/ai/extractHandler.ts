@@ -1,7 +1,7 @@
 import type { AiExtractRequest, AiExtractResponse, AiFailureCode, AiUsageResponse } from '../../src/types/aiApi.ts';
 import { isValidVideoId } from '../../src/utils/youtubeUrl.ts';
 import { bodyHashSource, taskOf, validateTaskRequest } from './tasks.ts';
-import type { GeminiClient } from './gemini.ts';
+import type { GeminiClient, GeminiFailureDetail } from './gemini.ts';
 import { CREATE_LEASE_MS, nextPacificMidnight, pacificDate, type LedgerRow, type LedgerStore } from './ledger.ts';
 
 /**
@@ -244,9 +244,28 @@ async function poll(row: LedgerRow, deps: ExtractDeps): Promise<ExtractResult> {
     // 다른 기기·나중 요청이 같은 작업을 다시 생성하지 않도록 결과를 보관
     deps.store.putResult({ workKey: workKeyOf(cur.bodyHash), resultText: r.text, model: r.model, usageJson: next.usageJson, createdAt: t });
   } else if (r.kind === 'gone') next = { ...cur, state: 'failed', consumed: true, failureCode: 'expired', failureMessage: 'Gemini 결과 보관 기간(무료 1일)이 지나 조회할 수 없어요.', updatedAt: t };
-  else next = { ...cur, state: 'failed', consumed: true, failureCode: 'gemini_failed', failureMessage: r.message, updatedAt: t };
+  else {
+    // 원인 확인용 상세를 기존 실패 메시지 칸에 함께 남긴다 (표 구조 그대로) — 생성 후 경과는 running이 된 시각(updatedAt) 기준
+    const failureMessage = describeGeminiFailure(r.message, r.detail, row.interactionId, Math.max(0, Math.round((t - cur.updatedAt) / 1000)));
+    next = { ...cur, state: 'failed', consumed: true, failureCode: 'gemini_failed', failureMessage, usageJson: r.detail?.usage ? JSON.stringify(r.detail.usage) : cur.usageJson, updatedAt: t };
+    // 실시간 로그(wrangler tail)에서만 보이는 한 줄 — 키·지시문·결과 내용은 넣지 않는다
+    console.warn(JSON.stringify({ event: 'gemini_failed', task: row.videoId === 'dialogue' || row.videoId === 'phrases' ? row.videoId : 'video', status: r.detail?.status ?? r.status, errors: r.detail?.errors?.map((e) => e.code) ?? [], elapsedSec: Math.round((t - cur.updatedAt) / 1000) }));
+  }
   deps.store.put(next);
   return respond(next);
+}
+
+/** "[Gemini 상태 failed · 오류 INTERNAL/13 · 생성 후 12초 · 토큰 입력 900 · 출력 0 · 작업 …abc123] 원래 메시지 (추가 오류: …)" — 최대 1,000자 */
+export function describeGeminiFailure(message: string, detail: GeminiFailureDetail | undefined, interactionId: string | null, elapsedSec: number): string {
+  const tags = [`Gemini 상태 ${detail?.status || '알 수 없음'}`];
+  const codes = (detail?.errors ?? []).map((e) => e.code).filter(Boolean);
+  if (codes.length) tags.push(`오류 ${codes.join(', ')}`);
+  tags.push(`생성 후 ${elapsedSec}초`);
+  const u = detail?.usage;
+  if (u && (u.inputTokens !== null || u.outputTokens !== null)) tags.push(`토큰 입력 ${u.inputTokens ?? '-'} · 출력 ${u.outputTokens ?? '-'}${u.thoughtTokens !== null ? ` · 생각 ${u.thoughtTokens}` : ''}`);
+  if (interactionId) tags.push(`작업 …${interactionId.slice(-6)}`);
+  const extra = (detail?.errors ?? []).slice(1).map((e) => e.message).filter(Boolean);
+  return `[${tags.join(' · ')}] ${message}${extra.length ? ` (추가 오류: ${extra.join(' / ')})` : ''}`.slice(0, 1000);
 }
 
 /** 알람·정리: 만료된 creating → 결과 모름, 오래된 본문·기록 삭제 (여러 번 실행돼도 결과 같음) */

@@ -60,9 +60,13 @@ export function computeRows(ov: PrepOverview, st: PrepState): PrepRow[] {
     const stage: PrepStage = hasDayDialogue(ov.dialogues, v.id) ? 'done' : hasContent(sentences, items) && aiSentencesOf(sentences).length > 0 ? 'daypack' : hasTranscript(ov, v.id) ? 'pack' : 'transcript';
     const job = ov.jobs.find((j) => j.videoId === v.id);
     const inflight = stage === 'transcript' && job?.status === 'running' && !!job.currentRequestId;
-    const failure = st.videos[v.id] ?? null;
+    const saved = st.videos[v.id] ?? null;
     const retrying = st.retry.includes(v.id);
-    const inQueue = st.allStarted || st.queue.includes(v.id) || inflight || retrying;
+    // 자막 단계 실패·건너뜀 뒤에 자막이 생겼으면(직접 입력 등) 그 기록은 지난 일 — 실패로 보지 않는다.
+    // 다만 Gemini를 자동으로 부르지 않도록 '전체 시작' 상태여도 대기열에 넣지 않고, 사용자가 '이 영상 자료 만들기'를 눌러야 시작한다.
+    const stale = !!saved && saved.stage === 'transcript' && stage !== 'transcript';
+    const failure = stale ? null : saved;
+    const inQueue = stale ? st.queue.includes(v.id) || retrying : st.allStarted || st.queue.includes(v.id) || inflight || retrying;
     const status: PrepRowStatus = stage === 'done' ? 'ready' : failure && !retrying ? failure.status : inQueue ? 'queued' : 'not_queued';
     rows.push({ video: v, dayNumber: dayByVideo.get(v.id) ?? parseDayNumber(v.title), stage, status, failure: stage === 'done' ? null : failure, inflight });
   }

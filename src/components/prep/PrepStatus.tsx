@@ -164,6 +164,11 @@ export function VideoPrepStatus({ videoId }: { videoId: string }) {
       )}
       {row.status === 'skipped' && row.failure && <p className="mt-1 text-sm text-muted">{row.failure.error.message}</p>}
       {row.status === 'queued' && !running && <p className="mt-1 text-sm text-muted">대기열에 있어요. 차례가 되면 자동으로 만들어요.</p>}
+      {row.status === 'not_queued' && row.stage !== 'transcript' && (
+        <p className="mt-1 text-sm text-muted" data-testid="video-prep-ready-hint">
+          자막이 준비됐어요. ‘이 영상 자료 만들기’를 누르면 학습 자료를 만들어요 (AI 요청 1회).
+        </p>
+      )}
       <div className="mt-2 flex flex-wrap gap-2">
         {row.status === 'not_queued' && (
           <Button size="sm" onClick={() => void prepController.enqueue([videoId])} data-testid="video-prep-enqueue">

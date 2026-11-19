@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
-import { handleAiExtract, parseCaps, sweepLedger, workKeyForBody, type AiCaps } from './extractHandler.ts';
+import { describeGeminiFailure, handleAiExtract, parseCaps, sweepLedger, workKeyForBody, type AiCaps } from './extractHandler.ts';
 import { memoryLedgerStore, pacificDate, nextPacificMidnight, type LedgerStore } from './ledger.ts';
 import { createMockGemini } from './mockGemini.ts';
 import { sqliteLedgerStore } from './durableObject.ts';
@@ -212,3 +212,27 @@ for (const [label, makeStore] of [['메모리 장부', () => memoryLedgerStore()
     });
   });
 }
+
+describe('Gemini 실패 상세 기록', () => {
+  it('상태 · 오류 코드 · 경과 · 토큰 · 작업 id 끝자리 · 추가 오류를 기존 메시지 앞뒤에 붙이고 1,000자로 자른다', () => {
+    const msg = describeGeminiFailure('There was a problem processing your request.', { status: 'failed', errors: [{ code: 'INTERNAL/13', message: 'There was a problem processing your request.' }, { code: 'X', message: '두 번째' }], usage: { inputTokens: 1200, outputTokens: 0, videoTokens: null, thoughtTokens: 35 } }, 'v1_abcdef123456', 12);
+    expect(msg).toBe('[Gemini 상태 failed · 오류 INTERNAL/13, X · 생성 후 12초 · 토큰 입력 1200 · 출력 0 · 생각 35 · 작업 …123456] There was a problem processing your request. (추가 오류: 두 번째)');
+    expect(describeGeminiFailure('m', undefined, null, 3)).toBe('[Gemini 상태 알 수 없음 · 생성 후 3초] m');
+    expect(describeGeminiFailure('x'.repeat(2000), undefined, null, 1)).toHaveLength(1000);
+  });
+
+  it('처리 중 실패하면 상세가 실패 메시지에 남고, 표 구조·사용량 집계는 그대로 (다시 생성하지 않음)', async () => {
+    const store = memoryLedgerStore();
+    const g = createMockGemini();
+    const caps: AiCaps = { dailyVideoSec: 3600, dailyRequests: 5, maxVideoSec: 1800 };
+    const run = (key: string) => handleAiExtract({ idempotencyKey: key, body: body('mockFail009', 300) }, { store, gemini: g, caps, now: () => T });
+    expect((await run(KEY(950))).body.state).toBe('pending'); // 생성
+    expect((await run(KEY(950))).body.state).toBe('pending'); // 첫 조회: 진행 중
+    const r = await run(KEY(950)); // 다음 조회: 실패로 끝남
+    expect(r.status).toBe(502);
+    expect(r.body).toMatchObject({ code: 'gemini_failed', consumed: true });
+    expect((r.body as { message: string }).message).toMatch(/^\[Gemini 상태 failed · 오류 INTERNAL\/13 · 생성 후 0초 · 작업 …[\w-]{1,6}\] 가짜 실패$/);
+    expect(g.createCalls).toEqual(['mockFail009']);
+    expect(store.getUsage(pacificDate(T)).requests).toBe(1);
+  });
+});

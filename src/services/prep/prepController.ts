@@ -154,8 +154,10 @@ export function createPrepController(deps: PrepControllerDeps) {
     },
     /** '실패만 다시 시도' (videoIds 없으면 실패 전체) */
     async retryFailed(videoIds?: string[]) {
+      // 전체 다시 시도는 화면에 '실패'로 보이는 영상만 (자막이 생겨 지난 일이 된 자막 단계 실패는 제외)
+      const shown = videoIds ? null : new Set((await refresh()).rows.filter((r) => r.status === 'failed').map((r) => r.video.id));
       await deps.store.updatePrep((s) => {
-        const ids = videoIds ?? Object.entries(s.videos).filter(([, v]) => v.status === 'failed').map(([id]) => id);
+        const ids = videoIds ?? Object.entries(s.videos).filter(([id, v]) => v.status === 'failed' && shown!.has(id)).map(([id]) => id);
         const videos = { ...s.videos };
         for (const id of ids) delete videos[id];
         return { ...s, videos, retry: [...new Set([...s.retry, ...ids])] };

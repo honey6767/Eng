@@ -223,7 +223,7 @@ export function createMockGemini(): GeminiClient & { createCalls: string[]; getC
       const wait = job.videoId.startsWith('mockSlow') ? 3 : 1;
       if (job.polls <= wait) return { kind: 'running', status: 'in_progress' };
       if (job.text) return { kind: 'completed', text: job.text, model: 'gemini-3.6-flash', usage: { inputTokens: 900, outputTokens: 700, videoTokens: null } };
-      if (job.videoId.startsWith('mockFail')) return { kind: 'failed', status: 'failed', message: '가짜 실패' };
+      if (job.videoId.startsWith('mockFail')) return { kind: 'failed', status: 'failed', message: '가짜 실패', detail: { status: 'failed', errors: [{ code: 'INTERNAL/13', message: '가짜 실패' }], usage: null } };
       const d = job.durationSec;
       const over = job.videoId.startsWith('mockOver');
       const low = job.videoId.startsWith('mockLow');
