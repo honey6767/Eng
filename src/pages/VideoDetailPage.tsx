@@ -110,7 +110,7 @@ export function VideoDetailPage() {
               size="sm"
               onClick={async () => {
                 await startVideo(repos, video);
-                void prepController.enqueue([video.id]);
+                void prepController.enqueue([video.id], { manual: true });
                 toast('이 영상으로 학습을 시작했어요');
               }}
             >

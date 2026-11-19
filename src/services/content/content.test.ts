@@ -25,7 +25,7 @@ function serverClient() {
   const client: AiClient = {
     async extract(key, body): Promise<AiTransportResult> {
       sent.push({ key, body });
-      const r = await handleAiExtract({ idempotencyKey: key, body }, { store, gemini, caps: DEFAULT_AI_CAPS, now: () => Date.parse(T) });
+      const r = await handleAiExtract({ idempotencyKey: key, body }, { store, gemini, caps: { ...DEFAULT_AI_CAPS, minGapMs: 0 }, now: () => Date.parse(T) });
       return { kind: 'response', httpStatus: r.status, body: r.body };
     },
   };

@@ -203,7 +203,10 @@ export function createGeminiClient(opts: { apiKey: string | null; model?: string
       }
       const json = (await res.json().catch(() => null)) as Json | null;
       if (res.ok && json && typeof json.id === 'string') return { kind: 'created', interactionId: json.id, status: String(json.status ?? '') };
-      if (res.status === 429) return { kind: 'rejected', httpStatus: 429, reason: 'quota', message: 'Gemini 무료 사용 한도에 도달했어요.' };
+      if (res.status === 429) {
+        const detail = errorMessage(json);
+        return { kind: 'rejected', httpStatus: 429, reason: 'quota', message: `Gemini 무료 사용 한도에 도달했어요.${detail ? ` (${detail})` : ''}` };
+      }
       if (res.status === 401 || res.status === 403) return { kind: 'rejected', httpStatus: res.status, reason: 'not_configured', message: 'Gemini 키가 거부됐어요.' };
       // Google은 잘못된 키를 400(API_KEY_INVALID)으로 돌려준다 — 요청 문제가 아니라 키 설정 문제로 보여 준다
       if (res.status === 400 && /API_KEY/.test(errorReason(json))) return { kind: 'rejected', httpStatus: 400, reason: 'not_configured', message: `Gemini 키가 올바르지 않아요 (${errorReason(json)}).` };

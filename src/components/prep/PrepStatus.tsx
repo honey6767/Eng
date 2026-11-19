@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { prepController } from '@/services/prep';
+import { fetchAiUsage } from '@/services/integrations/aiClient';
+import type { AiUsageResponse } from '@/types/aiApi';
 import type { PrepSnapshot } from '@/services/prep/prepController';
 import type { PrepRow, PrepStage } from '@/services/prep/prepRunner';
 import { Card } from '@/components/ui/Card';
@@ -8,6 +10,32 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 
 /** 학습 자료 자동 생성 상태 (영상 등록 → 자동 대기열 → 순차 생성 → 저장) */
+
+/** 오늘 Gemini 사용량 (읽기 전용 조회 — Gemini를 부르지 않음). 대기열 상태가 바뀔 때 다시 읽는다 */
+function useAiUsage(dep: unknown): AiUsageResponse | null {
+  const [usage, setUsage] = useState<AiUsageResponse | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void fetchAiUsage().then((u) => alive && setUsage(u));
+    return () => {
+      alive = false;
+    };
+  }, [dep]);
+  return usage;
+}
+
+const resetLabel = (iso: string) => new Date(iso).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+function UsageLine({ usage }: { usage: AiUsageResponse | null }) {
+  if (!usage) return null;
+  const left = Math.max(0, usage.dailyRequests - usage.requests);
+  return (
+    <p className="text-xs text-muted" data-testid="prep-usage">
+      오늘 Gemini 요청 {usage.requests}/{usage.dailyRequests}회 (남은 {left}회) · 자동 준비 {usage.auto?.used ?? 0}/{usage.auto?.cap ?? usage.dailyRequests}회
+      {usage.resetAt && ` · 초기화 ${resetLabel(usage.resetAt)}`}
+    </p>
+  );
+}
 
 export function usePrep(): PrepSnapshot {
   const [snap, setSnap] = useState<PrepSnapshot>(prepController.getSnapshot());
@@ -43,6 +71,15 @@ function StatusLine({ snap }: { snap: PrepSnapshot }) {
         {st.note && <span className="mt-0.5 block text-xs text-subtle">{st.note}</span>}
       </p>
     );
+  if (st.kind === 'paused' && st.code === 'stopped')
+    return (
+      <div role="status" className="rounded-2xl bg-warn-soft p-3 text-sm text-warn" data-testid="prep-paused">
+        <p>멈춤 — {st.message}</p>
+        <Button className="mt-2" size="sm" variant="secondary" onClick={() => void prepController.continueQueue()} data-testid="prep-continue">
+          이어서 만들기
+        </Button>
+      </div>
+    );
   if (st.kind === 'paused')
     return (
       <p role="status" className="rounded-2xl bg-warn-soft p-3 text-sm text-warn" data-testid="prep-paused">
@@ -57,6 +94,7 @@ function StatusLine({ snap }: { snap: PrepSnapshot }) {
 /** 자료 생성 상태 카드 — full이면 실패 목록·다시 시도·기존 영상 시작 버튼까지 */
 export function PrepStatusCard({ full = false }: { full?: boolean }) {
   const snap = usePrep();
+  const usage = useAiUsage(`${snap.status.kind}:${snap.summary?.ready ?? 0}:${snap.summary?.failed ?? 0}`);
   const s = snap.summary;
   if (!s || s.total === 0) return null;
   if (!full && s.queued === 0 && s.failed === 0 && snap.status.kind !== 'running' && snap.status.kind !== 'paused') return null;
@@ -79,6 +117,7 @@ export function PrepStatusCard({ full = false }: { full?: boolean }) {
         {s.notQueued > 0 && ` · 시작 전 ${s.notQueued}`}
       </p>
       <StatusLine snap={snap} />
+      {full && <UsageLine usage={usage} />}
       {full && notStarted && (
         <div className="rounded-2xl bg-canvas p-3">
           <p className="text-sm">
@@ -147,9 +186,13 @@ function FailRow({ row }: { row: PrepRow }) {
 /** 영상 1개의 자료 상태 (학습 화면용 — 생성은 대기열이 하고, 여기서는 Gemini를 직접 부르지 않음) */
 export function VideoPrepStatus({ videoId }: { videoId: string }) {
   const snap = usePrep();
+  const usage = useAiUsage(snap.status.kind);
   const row = snap.rows.find((r) => r.video.id === videoId);
   if (!row || row.status === 'ready') return null;
   const running = snap.status.kind === 'running' && snap.status.videoId === videoId;
+  // 자동 준비 몫을 다 써서 자동 영상이 기다리는 중 → 사용자가 직접 시작할 수 있게 (사용자 작업으로 셈)
+  const st = snap.state;
+  const autoWaiting = row.status === 'queued' && !running && !!st?.autoPausedUntil && Date.parse(st.autoPausedUntil) > Date.now() && !(st.manual ?? []).includes(videoId);
   return (
     <Card className="p-4" data-testid="video-prep">
       <div className="flex flex-wrap items-center gap-2">
@@ -163,15 +206,27 @@ export function VideoPrepStatus({ videoId }: { videoId: string }) {
         </p>
       )}
       {row.status === 'skipped' && row.failure && <p className="mt-1 text-sm text-muted">{row.failure.error.message}</p>}
-      {row.status === 'queued' && !running && <p className="mt-1 text-sm text-muted">대기열에 있어요. 차례가 되면 자동으로 만들어요.</p>}
+      {row.status === 'queued' && !running && !autoWaiting && <p className="mt-1 text-sm text-muted">대기열에 있어요. 차례가 되면 자동으로 만들어요.</p>}
+      {autoWaiting && (
+        <p className="mt-1 text-sm text-muted" data-testid="video-prep-auto-wait">
+          오늘 자동 준비 몫을 다 써서 기다리는 중이에요. 지금 바로 만들려면 ‘지금 만들기’를 누르세요 (AI 요청 1회
+          {usage ? ` · 오늘 남은 요청 ${Math.max(0, usage.dailyRequests - usage.requests)}회` : ''}).
+        </p>
+      )}
       {row.status === 'not_queued' && row.stage !== 'transcript' && (
         <p className="mt-1 text-sm text-muted" data-testid="video-prep-ready-hint">
-          자막이 준비됐어요. ‘이 영상 자료 만들기’를 누르면 학습 자료를 만들어요 (AI 요청 1회).
+          자막이 준비됐어요. ‘이 영상 자료 만들기’를 누르면 학습 자료를 만들어요 (AI 요청 1회
+          {usage ? ` · 오늘 남은 요청 ${Math.max(0, usage.dailyRequests - usage.requests)}회` : ''}).
         </p>
       )}
       <div className="mt-2 flex flex-wrap gap-2">
+        {autoWaiting && (
+          <Button size="sm" onClick={() => void prepController.enqueue([videoId], { manual: true })} data-testid="video-prep-now">
+            지금 만들기
+          </Button>
+        )}
         {row.status === 'not_queued' && (
-          <Button size="sm" onClick={() => void prepController.enqueue([videoId])} data-testid="video-prep-enqueue">
+          <Button size="sm" onClick={() => void prepController.enqueue([videoId], { manual: true })} data-testid="video-prep-enqueue">
             이 영상 자료 만들기
           </Button>
         )}

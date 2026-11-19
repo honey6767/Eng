@@ -23,7 +23,7 @@ const BASE = `http://localhost:${PORT}`;
 function startServer() {
   const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort'], {
     stdio: 'pipe',
-    env: { ...process.env, YOUTUBE_API_KEY: '', YOUTUBE_API_MOCK: '', AI_GEMINI_MOCK: '1', GEMINI_API_KEY: '' },
+    env: { ...process.env, YOUTUBE_API_KEY: '', YOUTUBE_API_MOCK: '', AI_GEMINI_MOCK: '1', GEMINI_API_KEY: '', AI_DAILY_AUTO_CAP: '50', AI_DAILY_REQUEST_CAP: '50' },
   });
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('preview server timeout')), 15000);
@@ -150,7 +150,8 @@ async function main() {
     // ── 자료 생성: 기존 영상 자료 만들기 시작 (대기열이 차례로 처리) ──
     await page.goto(`${BASE}/extraction`);
     await page.getByTestId('prep-start-all').click();
-    for (let i = 0; i < 90; i++) {
+    // 결과 조회 간격이 10초라 영상 1개에 약 20초 — 5개면 2분 가까이
+    for (let i = 0; i < 240; i++) {
       await page.waitForTimeout(1000);
       const t = (await page.getByTestId('prep-counts').count()) ? await page.getByTestId('prep-counts').innerText() : '';
       if (/완료 5 · 대기 0/.test(t)) break;

@@ -263,7 +263,7 @@ async function main() {
     check('화면을 열기만 해서는 AI 요청 없음', sends.length === n0);
     await page.getByTestId('useful-analyze').click();
     await page.getByTestId('useful-confirm').waitFor();
-    check('호출 전 확인: 요청 1회 · 오늘 사용량 · 남은 요청', /요청 1회/.test(await page.getByTestId('useful-confirm').innerText()) && /오늘 사용 \d+\/20회/.test(await page.getByTestId('useful-usage').innerText()) && /남은 요청/.test(await page.getByTestId('useful-usage').innerText()), await page.getByTestId('useful-usage').innerText());
+    check('호출 전 확인: 요청 1회 · 오늘 사용량 · 남은 요청', /요청 1회/.test(await page.getByTestId('useful-confirm').innerText()) && /오늘 사용 \d+\/16회/.test(await page.getByTestId('useful-usage').innerText()) && /남은 요청/.test(await page.getByTestId('useful-usage').innerText()), await page.getByTestId('useful-usage').innerText());
     check('확인 전에는 요청 없음', sends.length === n0);
     await page.getByTestId('useful-confirm-run').click();
     await page.getByTestId('useful-analyzed').waitFor({ timeout: 30000 });

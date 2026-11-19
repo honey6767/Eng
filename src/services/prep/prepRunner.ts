@@ -106,9 +106,9 @@ export interface PrepDeps {
   now?: () => Date;
   newId?: () => string;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-  /** 학습 자료 조회 간격 (기본 5초) */
+  /** 학습 자료 조회 간격 (기본 10초) */
   pollMs?: number;
-  /** 자막 추출 조회 간격 (기본 15초) */
+  /** 자막 추출 조회 간격 (기본 10초) */
   extractPollMs?: number;
 }
 
@@ -122,18 +122,18 @@ const defaultSleep = (ms: number, signal?: AbortSignal) =>
   });
 
 /** 대기열 전체를 멈춰야 하는 오류 */
-const PAUSE_CODES = new Set(['daily_cap', 'gemini_quota', 'auth', 'gemini_not_configured', 'ledger_unavailable', 'bad_request', 'network', 'server', 'cancelled']);
+const PAUSE_CODES = new Set(['daily_cap', 'auto_cap', 'gemini_quota', 'auth', 'gemini_not_configured', 'ledger_unavailable', 'bad_request', 'network', 'server', 'cancelled']);
 
 function pauseFor(code: string, message: string, httpStatus: number | null, now: Date, until?: string | null): VideoOutcome {
-  const reset = code === 'daily_cap' || code === 'gemini_quota' ? (until ?? nextPacificMidnight(now.getTime())) : null;
+  const reset = code === 'daily_cap' || code === 'auto_cap' || code === 'gemini_quota' ? (until ?? nextPacificMidnight(now.getTime())) : null;
   return { kind: 'pause', code, message, until: reset, httpStatus };
 }
 
-async function runTranscript(video: Video, deps: PrepDeps, retry: boolean, onNote: (n: StepNote) => void, signal?: AbortSignal): Promise<VideoOutcome> {
+async function runTranscript(video: Video, deps: PrepDeps, retry: boolean, onNote: (n: StepNote) => void, signal?: AbortSignal, auto = false): Promise<VideoOutcome> {
   const now = deps.now ?? (() => new Date());
   const sleep = deps.sleep ?? defaultSleep;
   const ex = deps.extraction;
-  const rdeps = { store: ex, client: deps.client, now: deps.now, newId: deps.newId };
+  const rdeps = { store: ex, client: deps.client, now: deps.now, newId: deps.newId, auto };
   const id = `job-${video.id}`;
   let job = await ex.getJob(id);
   if (!job) {
@@ -176,7 +176,7 @@ async function runTranscript(video: Video, deps: PrepDeps, retry: boolean, onNot
   return pauseFor('cancelled', '멈췄어요.', null, now());
 }
 
-async function runPack(video: Video, kind: 'pack' | 'daypack', deps: PrepDeps, retry: boolean, onNote: (n: StepNote) => void, signal?: AbortSignal): Promise<VideoOutcome> {
+async function runPack(video: Video, kind: 'pack' | 'daypack', deps: PrepDeps, retry: boolean, onNote: (n: StepNote) => void, signal?: AbortSignal, auto = false): Promise<VideoOutcome> {
   const now = deps.now ?? (() => new Date());
   const ctx = await deps.store.readVideo(video.id);
   if (!ctx) return { kind: 'fail', stage: kind, code: 'not_found', message: '영상을 찾지 못했어요.', httpStatus: null };
@@ -187,7 +187,7 @@ async function runPack(video: Video, kind: 'pack' | 'daypack', deps: PrepDeps, r
   const exprs = new Map<string, Expression>(ctx.expressions.map((e) => [e.id, e]));
   const key = `${kind}:${video.id}`;
   const makeBody = () => (kind === 'pack' ? buildPackRequest(video, ctx.transcript!, ctx.day) : buildDayPackRequest(video, ctx.day, ctx.sentences, ctx.items, exprs, ctx.transcript));
-  const out = await runAiTask(key, makeBody, deps, (p) => onNote({ stage: kind, note: p.phase === 'processing' ? p.note : p.phase === 'sending' ? '요청 보내는 중' : undefined }), signal, { retryFailed: retry });
+  const out = await runAiTask(key, makeBody, deps, (p) => onNote({ stage: kind, note: p.phase === 'processing' ? p.note : p.phase === 'sending' ? '요청 보내는 중' : undefined }), signal, { retryFailed: retry, auto });
   if (!out.ok) {
     if (PAUSE_CODES.has(out.code)) return pauseFor(out.code, out.message, out.httpStatus, now());
     return { kind: 'fail', stage: kind, code: out.code, message: out.message, httpStatus: out.httpStatus };
@@ -210,13 +210,14 @@ async function runPack(video: Video, kind: 'pack' | 'daypack', deps: PrepDeps, r
 }
 
 /** 영상 1개: 빠진 단계만 차례로 */
-export async function processVideo(row: PrepRow, deps: PrepDeps, retry: boolean, onNote: (n: StepNote) => void, signal?: AbortSignal): Promise<VideoOutcome> {
+/** auto: 사용자가 누르지 않은 자동 준비 (서버가 하루 자동 준비 몫으로 셈) */
+export async function processVideo(row: PrepRow, deps: PrepDeps, retry: boolean, onNote: (n: StepNote) => void, signal?: AbortSignal, auto = false): Promise<VideoOutcome> {
   let stage = row.stage;
   if (stage === 'transcript') {
-    const r = await runTranscript(row.video, deps, retry, onNote, signal);
+    const r = await runTranscript(row.video, deps, retry, onNote, signal, auto);
     if (r.kind !== 'ok') return r;
     stage = 'pack';
   }
-  if (stage === 'pack' || stage === 'daypack') return runPack(row.video, stage, deps, retry, onNote, signal);
+  if (stage === 'pack' || stage === 'daypack') return runPack(row.video, stage, deps, retry, onNote, signal, auto);
   return { kind: 'ok' };
 }

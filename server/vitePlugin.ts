@@ -61,7 +61,8 @@ export function youtubeProxyPlugin(): Plugin {
       env.AI_GEMINI_MOCK === '1'
         ? createMockGemini()
         : createGeminiClient({ apiKey: env.GEMINI_API_KEY?.trim() || null, model: env.GEMINI_MODEL, fetch });
-    const aiCaps = parseCaps(env);
+    // 가짜 Gemini(테스트)에서는 요청 간격 대기를 기본으로 끈다 (AI_MIN_GAP_SEC로 켤 수 있음). 상한은 운영과 같음
+    const aiCaps = parseCaps(env.AI_GEMINI_MOCK === '1' && env.AI_MIN_GAP_SEC === undefined ? { ...env, AI_MIN_GAP_SEC: '0' } : env);
     const readBody = (req: Parameters<Connect.NextHandleFunction>[0]) =>
       new Promise<string>((resolve) => {
         let data = '';

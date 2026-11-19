@@ -18,10 +18,10 @@ const uuid = () => `00000000-0000-4000-8000-${String(++seq).padStart(12, '0')}`;
 function server(caps: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 20, maxVideoSec: 1800 }, clock = () => Date.parse(T)) {
   const gemini = createMockGemini();
   const ledger = memoryLedgerStore();
-  const sent: { key: string; task: string; retryFailed?: boolean }[] = [];
+  const sent: { key: string; task: string; retryFailed?: boolean; auto?: boolean }[] = [];
   const client: AiClient = {
     async extract(key, body): Promise<AiTransportResult> {
-      sent.push({ key, task: body.task ?? 'extract', retryFailed: body.retryFailed });
+      sent.push({ key, task: body.task ?? 'extract', retryFailed: body.retryFailed, auto: body.auto });
       const r = await handleAiExtract({ idempotencyKey: key, body }, { store: ledger, gemini, caps, now: clock });
       return { kind: 'response', httpStatus: r.status, body: r.body };
     },
@@ -140,7 +140,7 @@ describe('학습 자료 자동 생성 대기열', () => {
     expect(pc2.getSnapshot().summary).toMatchObject({ ready: 3 });
   });
 
-  it('실패한 영상만 실패로 남고 나머지는 계속, 실패만 다시 시도 (첫 요청에만 retryFailed)', async () => {
+  it('Gemini 처리 실패: 그 영상만 실패(자동 재시도 없음) + 대기열 멈춤(앱을 다시 열어도 유지) → 이어서 만들기로 나머지 진행, 실패만 다시 시도 (첫 요청에만 retryFailed)', async () => {
     const { db } = createTestRepos();
     await seedVideo(db, 'bad', 'mockFail001', '[Day 1] bad', { transcript: ['1. I could use a break.'] });
     await seedVideo(db, 'ok', 'okokokokoko', '[Day 2] ok', { transcript: ['1. I could use a break.'] });
@@ -148,9 +148,19 @@ describe('학습 자료 자동 생성 대기열', () => {
     const pc = device(db, client);
     await pc.startAll();
     await pc.start();
-    expect(pc.getSnapshot().summary).toMatchObject({ ready: 1, failed: 1 });
+    expect(pc.getSnapshot().summary).toMatchObject({ ready: 0, failed: 1, queued: 1 });
+    expect(pc.getSnapshot().status).toMatchObject({ kind: 'paused', code: 'stopped' });
     const fail = pc.getSnapshot().rows.find((r) => r.video.id === 'bad')!;
     expect(fail.failure).toMatchObject({ stage: 'pack', error: { code: 'gemini_failed', httpStatus: 502 } });
+    // 앱을 다시 열어도 멈춘 그대로 (다음 영상을 보내지 않음)
+    await pc.resume();
+    await pc.start();
+    expect(gemini.createCalls).toEqual(['pack:mockFail001']);
+    // 이어서 만들기: 나머지 영상만 (실패한 영상은 다시 보내지 않음)
+    await pc.continueQueue();
+    await pc.start();
+    expect(gemini.createCalls).toEqual(['pack:mockFail001', 'pack:okokokokoko']);
+    expect(pc.getSnapshot().summary).toMatchObject({ ready: 1, failed: 1 });
     // 결과를 모르는 실패(consumed)는 그냥 다시 열어도 재생성하지 않음
     await pc.resume();
     expect(gemini.createCalls.filter((c) => c.startsWith('pack:mockFail'))).toHaveLength(1);
@@ -159,6 +169,84 @@ describe('학습 자료 자동 생성 대기열', () => {
     expect(gemini.createCalls.filter((c) => c.startsWith('pack:mockFail'))).toHaveLength(2);
     const packSends = sent.filter((s) => s.task === 'pack' && s.key !== sent.find((x) => x.task === 'pack')!.key);
     expect(packSends.filter((s) => s.retryFailed).length).toBe(1);
+  });
+
+  it('자동 준비 몫(실제 요청 수 기준): 다 쓰면 자동 영상만 멈추고, 사용자가 넣은 영상은 계속 — 초기화 뒤 자동 영상 이어서', async () => {
+    const { db } = createTestRepos();
+    for (let i = 1; i <= 3; i++) await seedVideo(db, `a${i}`, `autoVid000${i}`, `[Day ${i}] auto`, { transcript: [`1. I could use a break ${i}.`] });
+    await seedVideo(db, 'm1', 'manualVid01', '[Day 9] manual', { transcript: ['1. I could really use some help.'] });
+    let t = Date.parse(T);
+    const { client, gemini, sent } = server({ dailyVideoSec: 6 * 3600, dailyRequests: 10, maxVideoSec: 1800, dailyAutoRequests: 2 }, () => t);
+    const pc = device(db, client, () => new Date(t));
+    await pc.startAll(); // 기존 영상 자동 준비
+    await pc.start();
+    expect(gemini.createCalls).toEqual(['pack:autoVid0001', 'pack:autoVid0002']);
+    expect(pc.getSnapshot().status).toMatchObject({ kind: 'paused', code: 'auto_cap' });
+    expect(sent.filter((s) => s.task === 'pack').every((s) => (s as { auto?: boolean }).auto === true)).toBe(true);
+    // 사용자가 '이 영상 자료 만들기'를 누른 영상은 자동 몫과 상관없이 진행
+    await pc.enqueue(['m1'], { manual: true });
+    await pc.start();
+    expect(gemini.createCalls).toEqual(['pack:autoVid0001', 'pack:autoVid0002', 'pack:manualVid01']);
+    expect(pc.getSnapshot().rows.find((r) => r.video.id === 'm1')?.status).toBe('ready');
+    expect(pc.getSnapshot().rows.find((r) => r.video.id === 'a3')?.status).toBe('queued');
+    // 초기화 뒤 자동 영상 이어서
+    t = Date.parse((pc.getSnapshot().state?.autoPausedUntil ?? '')) + 60_000;
+    const pc2 = device(db, client, () => new Date(t));
+    await pc2.resume();
+    await pc2.start();
+    expect(gemini.createCalls.at(-1)).toBe('pack:autoVid0003');
+    expect(pc2.getSnapshot().summary).toMatchObject({ ready: 4 });
+  });
+
+  it('자막 단계에서 자동 몫을 다 써도: 그 영상은 사용자가 누르면 바로 자막부터 진행 (초기화 시각까지 묶이지 않음)', async () => {
+    const { db } = createTestRepos();
+    await seedVideo(db, 'h1', 'hasTrans001', '[Day 1] has', { transcript: ['1. I could use a break.'] });
+    await seedVideo(db, 'n2', 'noTrans0002', '[Day 2] none');
+    const { client, gemini } = server({ dailyVideoSec: 6 * 3600, dailyRequests: 10, maxVideoSec: 1800, dailyAutoRequests: 1 });
+    const pc = device(db, client);
+    await pc.startAll();
+    await pc.start();
+    expect(gemini.createCalls).toEqual(['pack:hasTrans001']); // n2 자막 요청은 auto_cap (Gemini 호출 없음)
+    expect(pc.getSnapshot().status).toMatchObject({ kind: 'paused', code: 'auto_cap' });
+    await pc.enqueue(['n2'], { manual: true });
+    await pc.start();
+    expect(gemini.createCalls).toEqual(['pack:hasTrans001', 'noTrans0002', 'pack:noTrans0002']);
+    expect(pc.getSnapshot().rows.find((r) => r.video.id === 'n2')?.status).toBe('ready');
+  });
+
+  it('Google 한도 초과로 보류: 대기열 멈춤 → 초기화 뒤 그 영상을 먼저 1번만 이어서 → 또 보류되면 실패로 두고 더 보내지 않음', async () => {
+    const { db } = createTestRepos();
+    await seedVideo(db, 'q', 'mockExhaus1', '[Day 1] quota', { transcript: ['1. I could use a break.'] });
+    await seedVideo(db, 'o', 'otherVideo1', '[Day 2] other', { transcript: ['1. I could use a break.'] });
+    let t = Date.parse(T);
+    const { client, gemini } = server({ dailyVideoSec: 6 * 3600, dailyRequests: 10, maxVideoSec: 1800 }, () => t);
+    const pc = device(db, client, () => new Date(t));
+    await pc.startAll();
+    await pc.start();
+    expect(gemini.createCalls).toEqual(['pack:mockExhaus1']);
+    let snap = pc.getSnapshot();
+    expect(snap.status).toMatchObject({ kind: 'paused', code: 'gemini_quota' });
+    expect(snap.state?.held).toEqual({ q: 1 });
+    expect(snap.rows.find((r) => r.video.id === 'q')?.status).toBe('queued'); // 보류 (실패 아님)
+    // 같은 날 다시 열어도 보내지 않음
+    await pc.resume();
+    await pc.start();
+    expect(gemini.createCalls).toHaveLength(1);
+    // 초기화 뒤: 보류된 영상을 먼저 1번 이어서 (가짜 Gemini는 또 한도 초과)
+    t = Date.parse((snap.status as { until: string }).until) + 60_000;
+    const pc2 = device(db, client, () => new Date(t));
+    await pc2.resume();
+    await pc2.start();
+    expect(gemini.createCalls).toEqual(['pack:mockExhaus1', 'pack:mockExhaus1']);
+    snap = pc2.getSnapshot();
+    expect(snap.rows.find((r) => r.video.id === 'q')).toMatchObject({ status: 'failed', failure: { error: { code: 'gemini_quota' } } });
+    expect(snap.state?.held).toEqual({});
+    // 다음 초기화 뒤: 실패로 둔 영상은 보내지 않고 다른 영상만
+    t = Date.parse((snap.status as { until: string }).until) + 60_000;
+    const pc3 = device(db, client, () => new Date(t));
+    await pc3.resume();
+    await pc3.start();
+    expect(gemini.createCalls).toEqual(['pack:mockExhaus1', 'pack:mockExhaus1', 'pack:otherVideo1']);
   });
 
   it('자막 단계 실패 뒤 자막을 직접 넣으면: 실패로 막히지 않고 버튼 대기(Gemini 자동 요청 없음) → 버튼을 눌러야 다음 단계 요청', async () => {

@@ -46,10 +46,10 @@ function hintFor(code: string, body: AiTaskRequest): string {
   return '';
 }
 
-export async function runAiTask(key: string, makeBody: () => AiTaskRequest, deps: TaskDeps, onProgress: (p: TaskProgress) => void, signal?: AbortSignal, opts: { retryFailed?: boolean } = {}): Promise<TaskOutcome> {
+export async function runAiTask(key: string, makeBody: () => AiTaskRequest, deps: TaskDeps, onProgress: (p: TaskProgress) => void, signal?: AbortSignal, opts: { retryFailed?: boolean; auto?: boolean } = {}): Promise<TaskOutcome> {
   const now = deps.now ?? (() => new Date());
   const sleep = deps.sleep ?? defaultSleep;
-  const pollMs = deps.pollMs ?? 5_000;
+  const pollMs = deps.pollMs ?? 10_000;
   let st = await deps.store.getTask(key);
   if (st?.status === 'succeeded' && st.resultText) return { ok: true, requestId: st.requestId, text: st.resultText, reused: true };
 
@@ -71,7 +71,9 @@ export async function runAiTask(key: string, makeBody: () => AiTaskRequest, deps
   let transportFails = 0;
   while (!signal?.aborted) {
     // '다시 시도'는 새로 만든 요청의 첫 전송에만 (그 뒤 조회에는 붙이지 않음 → 같은 작업을 두 번 생성하지 않음)
-    const r = await deps.client.extract(st.requestId, sendRetry ? { ...st.body, retryFailed: true } : st.body);
+    // 자동 준비 요청이면 표시만 덧붙인다 (보낸 내용·작업 키는 그대로)
+    const send = { ...st.body, ...(opts.auto ? { auto: true } : {}), ...(sendRetry ? { retryFailed: true } : {}) };
+    const r = await deps.client.extract(st.requestId, send);
     sendRetry = false;
     if (r.kind === 'transport_error') {
       if (++transportFails > MAX_TRANSPORT_RETRIES) return { ok: false, httpStatus: r.httpStatus ?? null, code: 'network', message: `${r.message} 다시 누르면 같은 요청으로 이어서 확인해요(새로 생성하지 않음).` };
@@ -83,7 +85,9 @@ export async function runAiTask(key: string, makeBody: () => AiTaskRequest, deps
     if (r.kind === 'auth_error') return { ok: false, httpStatus: r.httpStatus, code: 'auth', message: r.message };
     const body = r.body;
     if (body.state === 'pending') {
-      onProgress({ phase: 'processing', since: st.startedAt, note: 'Gemini가 만드는 중이에요. 보통 30초~2분 걸려요.' });
+      // 아직 보내지 않음(요청 간격·토큰 관문 대기) — 서버가 Gemini를 부르지 않고 기다리라고 함
+      const waiting = body.interactionId === null && body.retryAfterSec !== 15;
+      onProgress({ phase: 'processing', since: st.startedAt, note: waiting ? `요청 간격(1분 최대 4회)을 지키려고 ${body.retryAfterSec}초쯤 기다렸다 보내요.` : 'Gemini가 만드는 중이에요. 보통 30초~2분 걸려요.' });
       await sleep(pollMs, signal);
       continue;
     }

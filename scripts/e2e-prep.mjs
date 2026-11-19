@@ -27,7 +27,7 @@ function startServer() {
   const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort'], {
     stdio: 'pipe',
     // 가짜 YouTube 사용량은 파일에 쌓이므로 실행마다 새 파일 (오늘 다른 점검에서 쓴 양과 섞이지 않게)
-    env: { ...process.env, YOUTUBE_API_KEY: '', YOUTUBE_API_MOCK: '1', AI_GEMINI_MOCK: '1', GEMINI_API_KEY: '', YOUTUBE_QUOTA_FILE: join(tmpdir(), `mes-e2e-prep-quota-${process.pid}.json`) },
+    env: { ...process.env, YOUTUBE_API_KEY: '', YOUTUBE_API_MOCK: '1', AI_GEMINI_MOCK: '1', GEMINI_API_KEY: '', AI_DAILY_AUTO_CAP: '50', AI_DAILY_REQUEST_CAP: '50', YOUTUBE_QUOTA_FILE: join(tmpdir(), `mes-e2e-prep-quota-${process.pid}.json`) },
   });
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('preview server timeout')), 15000);
@@ -168,10 +168,17 @@ async function main() {
     await waitFor(async () => sends.some((s) => s.task === 'pack' && s.videoId === 'bbbbbbbbbbb'), 60, 500);
     await page.reload();
     await page.locator('main').first().waitFor();
+    // Gemini 처리 실패(Day 14)가 나면 대기열이 멈춘다 → 나머지는 '이어서 만들기'를 눌러야 진행
+    const stopped = await waitFor(async () => (await page.getByTestId('prep-continue').count()) > 0, 150);
+    const beforeContinue = await page.getByTestId('prep-counts').innerText();
+    check('Gemini 처리 실패 → 대기열 멈춤 (다음 영상을 보내지 않음, 이어서 만들기 버튼)', stopped && /실패 1/.test(beforeContinue) && /대기 1/.test(beforeContinue) && !sends.some((s) => s.videoId === 'ddddddddddd'), beforeContinue);
+    const nStop = sends.filter((s) => s.videoId === 'mockFail001').length;
+    await page.getByTestId('prep-continue').click();
     const allDone = await waitFor(async () => {
       const t = (await page.getByTestId('prep-counts').count()) ? await page.getByTestId('prep-counts').innerText() : '';
       return /대기 0/.test(t);
     }, 150);
+    check('이어서 만들기: 실패한 영상은 다시 보내지 않음', sends.filter((s) => s.videoId === 'mockFail001').length === nStop);
     const counts = await page.getByTestId('prep-counts').innerText();
     check('기존 영상 차례로 처리 완료 (긴 영상은 건너뜀, 실패 1)', allDone && /실패 1/.test(counts) && /건너뜀 1/.test(counts), counts);
     const order = [...new Set(sends.filter((s) => s.task !== 'extract' || s.videoId !== 'mocksolo001').map((s) => s.videoId))].filter((v) => v !== 'mocksolo001');

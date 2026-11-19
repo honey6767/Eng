@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
-import { describeGeminiFailure, handleAiExtract, parseCaps, sweepLedger, workKeyForBody, type AiCaps } from './extractHandler.ts';
+import { describeGeminiFailure, estimateRequestTokens, gateWaitMs, handleAiExtract, parseCaps, readUsage, sweepLedger, workKeyForBody, type AiCaps } from './extractHandler.ts';
 import { memoryLedgerStore, pacificDate, nextPacificMidnight, type LedgerStore } from './ledger.ts';
 import { createMockGemini } from './mockGemini.ts';
 import { sqliteLedgerStore } from './durableObject.ts';
@@ -86,18 +86,106 @@ for (const [label, makeStore] of [['메모리 장부', () => memoryLedgerStore()
       expect(g.createCalls).toHaveLength(5);
     });
 
-    it('Gemini 무료 한도(429)·거절(400): consumed=false로 알리고 사용량을 되돌린다', async () => {
+    it('Gemini 거절(400): consumed=false로 알리고 사용량을 되돌린다', async () => {
       const g = createMockGemini();
       const { run, store } = setup(g);
-      const q = await run(KEY(30), body('mockQuota01', 300));
-      expect(q.body).toMatchObject({ ok: false, code: 'gemini_quota', consumed: false });
       const b = await run(KEY(31), body('mockBad0001', 300));
       expect(b.body).toMatchObject({ ok: false, code: 'gemini_rejected', consumed: false });
       expect(store.getUsage(pacificDate(T))).toMatchObject({ requests: 0, videoSec: 0 });
-      // 같은 식별자로 다시 물어도 다시 생성하지 않는다
-      await run(KEY(30), body('mockQuota01', 300));
-      expect(g.createCalls).toHaveLength(2);
     });
+
+    it('Gemini 무료 한도(429): consumed=false, 그날은 모든 요청 차단(다시 시도 포함, Gemini 호출 없음), 같은 식별자로 다시 물어도 재생성 없음', async () => {
+      const g = createMockGemini();
+      const { run, store } = setup(g);
+      const q = await run(KEY(30), body('mockQuota01', 300));
+      expect(q.status).toBe(429);
+      expect(q.body).toMatchObject({ ok: false, code: 'gemini_quota', consumed: false });
+      expect(store.getUsage(pacificDate(T)).requests).toBe(caps.dailyRequests); // 상한까지 채움 → 다른 기기도 막힘
+      const other = await run(KEY(32), body('otherVideo1', 300));
+      expect(other.body).toMatchObject({ ok: false, code: 'daily_cap' });
+      const retry = await run(KEY(33), { ...body('otherVideo2', 300), retryFailed: true });
+      expect(retry.body).toMatchObject({ ok: false, code: 'daily_cap' });
+      await run(KEY(30), body('mockQuota01', 300));
+      expect(g.createCalls).toEqual(['mockQuota01']);
+    });
+
+    it('작업이 한도 초과(RESOURCE_EXHAUSTED)로 끝나면: gemini_quota(보류, consumed=false)로 알리고 그날 모든 요청 차단 → 초기화 뒤 같은 작업을 1번 다시 생성할 수 있음', async () => {
+      const g = createMockGemini();
+      let t = T;
+      const { run, store } = setup(g, () => t);
+      expect((await run(KEY(34), body('mockExhaus1', 300))).body.state).toBe('pending'); // 생성
+      expect((await run(KEY(34), body('mockExhaus1', 300))).body.state).toBe('pending'); // 진행 중
+      const r = await run(KEY(34), body('mockExhaus1', 300));
+      expect(r.status).toBe(429);
+      expect(r.body).toMatchObject({ ok: false, code: 'gemini_quota', consumed: false });
+      expect((r.body as { message: string; retryAt?: string }).message).toMatch(/오류 RESOURCE_EXHAUSTED\/429/);
+      expect((r.body as { retryAt?: string }).retryAt).toBe(nextPacificMidnight(T));
+      expect(store.getUsage(pacificDate(T)).requests).toBe(caps.dailyRequests);
+      expect((await run(KEY(35), body('otherVideo1', 300))).body).toMatchObject({ code: 'daily_cap' });
+      // 초기화 전에는 같은 작업을 새 식별자로 보내도 다시 생성하지 않음
+      expect((await run(KEY(36), body('mockExhaus1', 300))).body).toMatchObject({ code: 'gemini_quota' });
+      expect(g.createCalls).toEqual(['mockExhaus1']);
+      // 초기화 뒤: 같은 작업을 다시 생성 (보류 작업 이어서)
+      t = Date.parse(nextPacificMidnight(T)) + 1000;
+      expect((await run(KEY(37), body('mockExhaus1', 300))).body.state).toBe('pending');
+      expect(g.createCalls).toEqual(['mockExhaus1', 'mockExhaus1']);
+    });
+
+    it('자동 준비 몫: auto 요청은 하루 몫까지만(실제 요청 수 기준), 넘으면 Gemini 호출 없이 auto_cap — 사용자가 누른 요청은 계속 가능', async () => {
+      const g = createMockGemini();
+      const store = makeStore();
+      const c: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 5, maxVideoSec: 1800, dailyAutoRequests: 2 };
+      const run = (key: string, b: unknown) => handleAiExtract({ idempotencyKey: key, body: b }, { store, gemini: g, caps: c, now: () => T });
+      expect((await run(KEY(40), { ...body('autoVideo01', 60), auto: true })).body.state).toBe('pending');
+      expect((await run(KEY(41), { ...body('autoVideo02', 60), auto: true })).body.state).toBe('pending');
+      const third = await run(KEY(42), { ...body('autoVideo03', 60), auto: true });
+      expect(third.status).toBe(429);
+      expect(third.body).toMatchObject({ ok: false, code: 'auto_cap', consumed: false });
+      expect((third.body as { retryAt?: string }).retryAt).toBe(nextPacificMidnight(T));
+      // 사용자가 누른 요청(같은 영상이어도)은 통과
+      expect((await run(KEY(43), body('autoVideo03', 60))).body.state).toBe('pending');
+      expect(g.createCalls).toEqual(['autoVideo01', 'autoVideo02', 'autoVideo03']);
+      expect(store.getUsage(pacificDate(T)).requests).toBe(3);
+      // 자동 표시는 작업 키에 들어가지 않음 (같은 작업이면 같은 결과를 함께 씀)
+      expect(await workKeyForBody({ ...body('autoVideo01', 60), auto: true })).toBe(await workKeyForBody(body('autoVideo01', 60)));
+    });
+
+    it('Gemini가 거절(4xx)하면 자동 준비 몫도 되돌린다', async () => {
+      const g = createMockGemini();
+      const store = makeStore();
+      const c: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 5, maxVideoSec: 1800, dailyAutoRequests: 1 };
+      const run = (key: string, b: unknown) => handleAiExtract({ idempotencyKey: key, body: b }, { store, gemini: g, caps: c, now: () => T });
+      expect((await run(KEY(44), { ...body('mockBad0002', 60), auto: true })).body).toMatchObject({ code: 'gemini_rejected' });
+      expect((await run(KEY(45), { ...body('autoVideo04', 60), auto: true })).body.state).toBe('pending');
+    });
+
+    it('요청 간격: 생성 요청 사이 15초 — 그 전에는 Gemini를 부르지 않고 잠시 뒤로(기록도 만들지 않음), 긴 영상은 앞뒤 60초', async () => {
+      const g = createMockGemini();
+      const store = makeStore();
+      let t = T;
+      const c: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 10, maxVideoSec: 1800, minGapMs: 15_000 };
+      const run = (key: string, b: unknown) => handleAiExtract({ idempotencyKey: key, body: b }, { store, gemini: g, caps: c, now: () => t });
+      expect((await run(KEY(50), body('gapVideo001', 60))).body.state).toBe('pending');
+      t += 5_000;
+      const wait = await run(KEY(51), body('gapVideo002', 60));
+      expect(wait.status).toBe(202);
+      expect(wait.body).toMatchObject({ state: 'pending', interactionId: null, retryAfterSec: 10 });
+      expect(g.createCalls).toEqual(['gapVideo001']);
+      expect(store.getUsage(pacificDate(T)).requests).toBe(1); // 기다리는 동안은 세지 않음
+      t += 10_000;
+      expect((await run(KEY(51), body('gapVideo002', 60))).body.state).toBe('pending');
+      expect(g.createCalls).toEqual(['gapVideo001', 'gapVideo002']);
+      // 긴 영상(추정 60K 토큰 초과)은 앞 요청 뒤 60초가 지나야
+      t += 15_000;
+      expect((await run(KEY(52), body('bigVideo001', 1200))).body).toMatchObject({ interactionId: null, retryAfterSec: 45 });
+      t += 45_000;
+      expect((await run(KEY(52), body('bigVideo001', 1200))).body.state).toBe('pending');
+      // 긴 영상 다음 요청도 60초 뒤
+      t += 15_000;
+      expect((await run(KEY(53), body('gapVideo003', 60))).body).toMatchObject({ interactionId: null, retryAfterSec: 45 });
+      expect(g.createCalls).toEqual(['gapVideo001', 'gapVideo002', 'bigVideo001']);
+    });
+
 
     it('생성 결과를 모르면(네트워크·5xx) 결과 모름(consumed=true), 같은 식별자로 다시 물어도 재생성 없음', async () => {
       let calls = 0;
@@ -208,7 +296,8 @@ for (const [label, makeStore] of [['메모리 장부', () => memoryLedgerStore()
       expect(store.getUsage(pacificDate(T)).requests).toBe(0);
       expect(store.countCounted('ask', pacificDate(T))).toBe(0);
       expect(await workKeyForBody(askBody)).toBeNull();
-      expect(parseCaps({})).toEqual({ dailyVideoSec: 6 * 3600, dailyRequests: 20, maxVideoSec: 30 * 60 });
+      expect(parseCaps({})).toEqual({ dailyVideoSec: 6 * 3600, dailyRequests: 16, maxVideoSec: 30 * 60, dailyAutoRequests: 6, minGapMs: 15_000 });
+      expect(parseCaps({ AI_DAILY_REQUEST_CAP: '4', AI_DAILY_AUTO_CAP: '9', AI_MIN_GAP_SEC: '0' })).toMatchObject({ dailyRequests: 4, dailyAutoRequests: 4, minGapMs: 0 });
     });
   });
 }
@@ -234,5 +323,30 @@ describe('Gemini 실패 상세 기록', () => {
     expect((r.body as { message: string }).message).toMatch(/^\[Gemini 상태 failed · 오류 INTERNAL\/13 · 생성 후 0초 · 작업 …[\w-]{1,6}\] 가짜 실패$/);
     expect(g.createCalls).toEqual(['mockFail009']);
     expect(store.getUsage(pacificDate(T)).requests).toBe(1);
+  });
+});
+
+describe('요청 토큰 추정·관문·사용량 조회', () => {
+  it('토큰 추정: 영상은 1초 100토큰 + 출력 여유, 텍스트는 3자에 1토큰 + 출력 여유', () => {
+    expect(estimateRequestTokens({ videoId: 'eNODHkrNuDA', durationSec: 300, promptVersion: 'v1' }, 300)).toBe(45_000);
+    expect(estimateRequestTokens({ videoId: 'eNODHkrNuDA', durationSec: 1800, promptVersion: 'v1' }, 1800)).toBe(195_000); // 30분도 TPM 250K 안
+    const text = estimateRequestTokens({ task: 'dialogue', chunks: [{ ref: 'a', text: 'could use', meaningKo: '필요하다', source: 'Day 11' }, { ref: 'b', text: 'look tired', meaningKo: '피곤해 보이다', source: 'Day 11' }], lineCount: 8, promptVersion: 'd2' } as never, 0);
+    expect(text).toBeGreaterThan(15_000);
+    expect(text).toBeLessThan(16_000);
+  });
+  it('관문: 첫 요청·간격 0은 대기 없음, 15초 간격, 큰 요청은 60초', () => {
+    expect(gateWaitMs(null, 50_000, 0, 15_000)).toBe(0);
+    expect(gateWaitMs({ at: 0, tokens: 20_000 }, 20_000, 1_000, 0)).toBe(0);
+    expect(gateWaitMs({ at: 0, tokens: 20_000 }, 20_000, 1_000, 15_000)).toBe(14_000);
+    expect(gateWaitMs({ at: 0, tokens: 20_000 }, 20_000, 20_000, 15_000)).toBe(0);
+    expect(gateWaitMs({ at: 0, tokens: 20_000 }, 120_000, 20_000, 15_000)).toBe(40_000);
+    expect(gateWaitMs({ at: 0, tokens: 120_000 }, 20_000, 20_000, 15_000)).toBe(40_000);
+  });
+  it('사용량 조회: 전체·자동 준비 사용량과 다음 초기화 시각 (읽기만)', async () => {
+    const store = memoryLedgerStore();
+    const g = createMockGemini();
+    const c: AiCaps = { dailyVideoSec: 3600, dailyRequests: 16, maxVideoSec: 1800, dailyAutoRequests: 6 };
+    await handleAiExtract({ idempotencyKey: KEY(970), body: { ...body('usageVideo1', 60), auto: true } }, { store, gemini: g, caps: c, now: () => T });
+    expect(readUsage(store, c, T)).toMatchObject({ ok: true, requests: 1, dailyRequests: 16, auto: { used: 1, cap: 6 }, resetAt: nextPacificMidnight(T) });
   });
 });

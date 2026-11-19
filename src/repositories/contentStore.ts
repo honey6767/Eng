@@ -37,6 +37,14 @@ export interface PrepState {
   pausedUntil: string | null;
   pauseReason: string | null;
   pauseMessage: string | null;
+  /** 사용자가 직접 넣은 영상(버튼·다시 시도) — 자동 준비 몫으로 세지 않는다. 없으면 [] */
+  manual?: string[];
+  /** Gemini 한도 초과로 보류된 횟수 (영상별) — 초기화 뒤 1번만 이어서 보낸다 */
+  held?: Record<string, number>;
+  /** 자동 준비 몫을 다 써서 자동 영상만 멈춘 시각 (이 시각까지 사용자가 넣은 영상만 처리) */
+  autoPausedUntil?: string | null;
+  /** Gemini 처리 실패로 대기열을 멈춤 — 사용자가 '이어서 만들기'를 누를 때까지 (앱을 다시 열어도 그대로) */
+  stopped?: { code: string; message: string; at: string } | null;
   updatedAt: string;
 }
 

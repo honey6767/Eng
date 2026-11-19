@@ -48,7 +48,7 @@ export function DraftReviewPage() {
       await fn();
       toast(msg);
       if (restart) {
-        await prepController.enqueue([draft.videoId]);
+        await prepController.enqueue([draft.videoId], { manual: true });
         void prepController.retryFailed([draft.videoId]);
       }
       navigate('/extraction');

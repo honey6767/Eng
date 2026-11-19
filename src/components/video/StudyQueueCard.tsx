@@ -114,7 +114,7 @@ export function StudyQueueCard({ compact = false }: { compact?: boolean }) {
                     act(async () => {
                       await startVideo(repos, v);
                       // 이 영상의 학습 자료가 없으면 대기열 앞에 넣는다 (기다리지 않음)
-                      void prepController.enqueue([v.id]);
+                      void prepController.enqueue([v.id], { manual: true });
                       navigate(`/videos/${v.id}`);
                     })
                   }
@@ -138,7 +138,7 @@ export function StudyQueueCard({ compact = false }: { compact?: boolean }) {
               onClick={() =>
                 act(async () => {
                   await startVideo(repos, v);
-                  void prepController.enqueue([v.id]);
+                  void prepController.enqueue([v.id], { manual: true });
                   navigate(`/videos/${v.id}`);
                 })
               }

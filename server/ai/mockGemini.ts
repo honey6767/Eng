@@ -170,6 +170,7 @@ export function mockDialogueResult(r: AiDialogueRequest) {
  * - 'mockQuota…' → 생성 시 429 (무료 한도)
  * - 'mockBad…'   → 생성 시 400 (거부)
  * - 'mockFail…'  → 처리 후 failed
+ * - 'mockExhaus…' → 접수 후 작업이 한도 초과(RESOURCE_EXHAUSTED)로 실패 (자막·문장 작업 모두)
  * - 'mockOver…'  → 영상 길이를 넘는 타임스탬프가 섞인 결과 (경고, 자동 적용)
  * - 'mockLow…'   → 앞부분만 전사된 결과 (전사 비율 낮음 → 확인 필요)
  * - 'mockSlow…'  → 조회 3번까지 진행 중
@@ -196,6 +197,11 @@ export function createMockGemini(): GeminiClient & { createCalls: string[]; getC
         const tag = input.task === 'dialogue' ? 'dialogue' : `${input.task}:${input.videoId}`;
         createCalls.push(tag);
         if (input.task !== 'dialogue' && input.videoId.startsWith('mockBad')) return { kind: 'rejected', httpStatus: 400, reason: 'invalid', message: '가짜 거부' };
+        if (input.task !== 'dialogue' && input.videoId.startsWith('mockExhaus')) {
+          const id = `mock-interaction-${++seq}-${tag}`;
+          jobs.set(id, { videoId: 'mockExhaus', durationSec: 0, polls: 0 });
+          return { kind: 'created', interactionId: id, status: 'in_progress' };
+        }
         if (input.task !== 'dialogue' && input.videoId.startsWith('mockFail')) {
           const id = `mock-interaction-${++seq}-${tag}`;
           jobs.set(id, { videoId: 'mockFail', durationSec: 0, polls: 0 });
@@ -223,6 +229,8 @@ export function createMockGemini(): GeminiClient & { createCalls: string[]; getC
       const wait = job.videoId.startsWith('mockSlow') ? 3 : 1;
       if (job.polls <= wait) return { kind: 'running', status: 'in_progress' };
       if (job.text) return { kind: 'completed', text: job.text, model: 'gemini-3.6-flash', usage: { inputTokens: 900, outputTokens: 700, videoTokens: null } };
+      if (job.videoId.startsWith('mockExhaus'))
+        return { kind: 'failed', status: 'failed', message: 'You exceeded your current quota. Please retry later.', detail: { status: 'failed', errors: [{ code: 'RESOURCE_EXHAUSTED/429', message: 'You exceeded your current quota. Please retry later.' }], usage: null } };
       if (job.videoId.startsWith('mockFail')) return { kind: 'failed', status: 'failed', message: '가짜 실패', detail: { status: 'failed', errors: [{ code: 'INTERNAL/13', message: '가짜 실패' }], usage: null } };
       const d = job.durationSec;
       const over = job.videoId.startsWith('mockOver');

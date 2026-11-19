@@ -14,8 +14,11 @@ export type AiTransportResult =
   /** 접근 코드 문제 */
   | { kind: 'auth_error'; httpStatus: number; message: string };
 
-/** retryFailed: 사용자가 '실패만 다시 시도'를 눌렀을 때 첫 요청에만 붙인다 (서버가 결과를 모르는 실패도 다시 생성) */
-export type AiClient = { extract(requestId: string, req: AiTaskRequest & { retryFailed?: boolean }): Promise<AiTransportResult> };
+/**
+ * retryFailed: 사용자가 '실패만 다시 시도'를 눌렀을 때 첫 요청에만 붙인다 (서버가 결과를 모르는 실패도 다시 생성)
+ * auto: 사용자가 누르지 않은 자동 준비 요청 — 서버가 하루 자동 준비 몫으로 센다 (작업 키에는 들어가지 않음)
+ */
+export type AiClient = { extract(requestId: string, req: AiTaskRequest & { retryFailed?: boolean; auto?: boolean }): Promise<AiTransportResult> };
 
 export const aiClient: AiClient = {
   async extract(requestId, req) {

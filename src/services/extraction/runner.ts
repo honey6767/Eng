@@ -19,7 +19,7 @@ import { validateExtraction } from './validateResult';
 /** 앱이 자동 처리하는 최대 영상 길이 (서버 기본값과 같음). 더 긴 영상은 '긴 영상'으로 표시만 */
 export const MAX_AUTO_VIDEO_SEC = 30 * 60;
 /** 결과 조회 간격·연결 실패 시 다시 물어볼 간격 */
-export const POLL_MS = 15_000;
+export const POLL_MS = 10_000;
 export const RETRY_MS = 30_000;
 /** 생성 요청 사이 최소 간격 (무료 등급 분당 요청 수 보호) */
 export const CREATE_GAP_MS = 15_000;
@@ -32,6 +32,8 @@ export interface RunnerDeps {
   now?: () => Date;
   newId?: () => string;
   maxVideoSec?: number;
+  /** 자동 준비 요청 (서버가 하루 자동 준비 몫으로 셈) */
+  auto?: boolean;
 }
 
 const PACIFIC = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -157,7 +159,7 @@ export async function stepJob(job: ExtractionJob, video: Video, deps: RunnerDeps
     await deps.store.putRequest(req);
   }
 
-  const r = await deps.client.extract(req.id, { videoId: video.youtubeVideoId!, durationSec: video.durationSec!, promptVersion: AI_PROMPT_VERSION, ...(job.variant && job.variant > 1 ? { variant: job.variant } : {}), ...(sendRetry ? { retryFailed: true } : {}) });
+  const r = await deps.client.extract(req.id, { videoId: video.youtubeVideoId!, durationSec: video.durationSec!, promptVersion: AI_PROMPT_VERSION, ...(job.variant && job.variant > 1 ? { variant: job.variant } : {}), ...(sendRetry ? { retryFailed: true } : {}), ...(deps.auto ? { auto: true } : {}) });
   const iso2 = clock().toISOString();
   if (r.kind === 'transport_error') return { kind: 'retry', message: r.message, httpStatus: r.httpStatus ?? null };
   if (r.kind === 'auth_error') return { kind: 'pause', reason: 'auth', until: null, message: r.message, httpStatus: r.httpStatus, code: 'auth' };
@@ -189,10 +191,11 @@ export async function stepJob(job: ExtractionJob, video: Video, deps: RunnerDeps
   const failedReq: AiRequest = { ...req, status: reqStatus, errorCode: body.code, httpStatus: r.httpStatus, finishedAt: iso2, updatedAt: iso2 };
   const err = { code: body.code, message: body.message };
   if (!body.consumed) {
-    if (body.code === 'daily_cap' || body.code === 'gemini_quota') {
+    if (body.code === 'daily_cap' || body.code === 'auto_cap' || body.code === 'gemini_quota') {
       // 처리 안 됨 → 이 영상은 대기열로 되돌리고(다음에 새 식별자), 전체는 초기화 시각까지 멈춤
-      await deps.store.saveResult({ ...job, status: 'queued', currentRequestId: null, attemptAfter: body.retryAt ?? null, lastError: err, updatedAt: iso2 }, failedReq, null);
-      return { kind: 'pause', reason: body.code, until: body.retryAt ?? null, message: body.message, httpStatus: r.httpStatus, code: body.code };
+      // 자동 준비 몫(auto_cap)은 그 영상을 기다리게 하지 않는다 — 사용자가 '지금 만들기'를 누르면 바로 보낼 수 있게 (자동 대기는 대기열이 관리)
+      await deps.store.saveResult({ ...job, status: 'queued', currentRequestId: null, attemptAfter: body.code === 'auto_cap' ? null : (body.retryAt ?? null), lastError: err, updatedAt: iso2 }, failedReq, null);
+      return { kind: 'pause', reason: body.code === 'auto_cap' ? 'daily_cap' : body.code, until: body.retryAt ?? null, message: body.message, httpStatus: r.httpStatus, code: body.code };
     }
     if (body.code === 'too_long') {
       await deps.store.saveResult({ ...job, status: 'skipped', currentRequestId: null, lastError: err, updatedAt: iso2 }, failedReq, null);

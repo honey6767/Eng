@@ -29,7 +29,7 @@ export function ExtractionPage() {
       await fn();
       toast(msg);
       // 자막을 다시 추출할 영상은 자료 생성 대기열에서 이어서 처리 (실패 기록을 지우고 다시 시도)
-      await prepController.enqueue(videoIds);
+      await prepController.enqueue(videoIds, { manual: true });
       void prepController.retryFailed(videoIds);
     } finally {
       setBusy(false);

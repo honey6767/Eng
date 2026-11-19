@@ -31,6 +31,8 @@ export interface AiLedgerEnv {
   AI_DAILY_VIDEO_SEC_CAP?: string;
   AI_DAILY_REQUEST_CAP?: string;
   AI_MAX_VIDEO_SEC?: string;
+  AI_DAILY_AUTO_CAP?: string;
+  AI_MIN_GAP_SEC?: string;
 }
 
 const COLS = 'key, body_hash, video_id, duration_sec, state, interaction_id, lease_until, pacific_date, counted, failure_code, failure_message, consumed, result_text, model, usage_json, created_at, updated_at';

@@ -1,4 +1,4 @@
-import type { AiExtractRequest, AiExtractResponse, AiFailureCode, AiUsageResponse } from '../../src/types/aiApi.ts';
+import type { AiExtractRequest, AiExtractResponse, AiFailureCode, AiTaskRequest, AiUsageResponse } from '../../src/types/aiApi.ts';
 import { isValidVideoId } from '../../src/utils/youtubeUrl.ts';
 import { bodyHashSource, taskOf, validateTaskRequest } from './tasks.ts';
 import type { GeminiClient, GeminiFailureDetail } from './gemini.ts';
@@ -21,22 +21,70 @@ export interface AiCaps {
   dailyRequests: number;
   /** 한 번에 처리할 최대 영상 길이 (초) */
   maxVideoSec: number;
-  /** 하루 AI 질문 수 상한 — 전체 요청 상한 안에서, 학습 자료 생성 몫을 남겨 두기 위해 */
+  /** 자동 준비(사용자가 누르지 않은 대기열 요청)의 하루 상한 — 실제 Gemini 요청 수 기준, 전체 상한 안에서. 없으면 전체 상한과 같음 */
+  dailyAutoRequests?: number;
+  /** 생성 요청 사이 최소 간격 (ms) — RPM 한도 보호. 없거나 0이면 간격 검사 안 함 */
+  minGapMs?: number;
 }
 
-export const DEFAULT_AI_CAPS: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 20, maxVideoSec: 30 * 60 };
+/**
+ * 기본값 — Google 무료 RPD 20회보다 낮게(16회) 두고, 그중 자동 준비는 6회까지 (나머지는 사용자가 누르는 작업 몫)
+ * 생성 요청은 15초 간격(1분 4회, RPM 5회보다 낮게)
+ */
+export const DEFAULT_AI_CAPS: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 16, maxVideoSec: 30 * 60, dailyAutoRequests: 6, minGapMs: 15_000 };
 
-export function parseCaps(env: { AI_DAILY_VIDEO_SEC_CAP?: string; AI_DAILY_REQUEST_CAP?: string; AI_MAX_VIDEO_SEC?: string }): AiCaps {
+export function parseCaps(env: { AI_DAILY_VIDEO_SEC_CAP?: string; AI_DAILY_REQUEST_CAP?: string; AI_MAX_VIDEO_SEC?: string; AI_DAILY_AUTO_CAP?: string; AI_MIN_GAP_SEC?: string }): AiCaps {
   const pos = (v: string | undefined, d: number, max: number) => {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), max) : d;
   };
+  const dailyRequests = pos(env.AI_DAILY_REQUEST_CAP, DEFAULT_AI_CAPS.dailyRequests, 10_000);
+  const gap = Number(env.AI_MIN_GAP_SEC);
   return {
     // 무료 등급 하루 YouTube 8시간을 넘지 못하게 막는다
     dailyVideoSec: pos(env.AI_DAILY_VIDEO_SEC_CAP, DEFAULT_AI_CAPS.dailyVideoSec, 8 * 3600),
-    dailyRequests: pos(env.AI_DAILY_REQUEST_CAP, DEFAULT_AI_CAPS.dailyRequests, 10_000),
+    dailyRequests,
     maxVideoSec: pos(env.AI_MAX_VIDEO_SEC, DEFAULT_AI_CAPS.maxVideoSec, 3 * 3600),
+    dailyAutoRequests: Math.min(pos(env.AI_DAILY_AUTO_CAP, DEFAULT_AI_CAPS.dailyAutoRequests!, 10_000), dailyRequests),
+    minGapMs: env.AI_MIN_GAP_SEC !== undefined && Number.isFinite(gap) && gap >= 0 ? Math.min(gap, 600) * 1000 : DEFAULT_AI_CAPS.minGapMs,
   };
+}
+
+// ── 요청 간격·토큰 관문 (RPM·TPM 보호) ──
+// 사용량 표(usage)의 별도 키 행에 기록한다 — 표 구조는 그대로
+/** 마지막 생성 요청: requests = 시각(ms), videoSec = 추정 토큰 */
+const GATE_KEY = 'gate:last-create';
+/** 그날 자동 준비 요청 수: requests = 횟수 */
+const autoKey = (date: string) => `auto:${date}`;
+/** 이보다 큰 요청(긴 영상 자막 등)은 앞뒤 60초를 비워 1분 토큰 한도(TPM 250K)를 넘지 않게 한다 */
+export const BIG_REQUEST_TOKENS = 60_000;
+const BIG_GAP_MS = 60_000;
+/** 출력·생각 토큰 여유 */
+const OUTPUT_MARGIN_TOKENS = 15_000;
+
+/** 생성 요청 1건의 토큰 추정 — 영상은 실측(1초에 약 91토큰)보다 여유 있게 100, 텍스트는 3자에 1토큰 */
+export function estimateRequestTokens(req: AiTaskRequest, videoSec: number): number {
+  return (taskOf(req) === 'extract' ? videoSec * 100 : Math.ceil(JSON.stringify(req).length / 3)) + OUTPUT_MARGIN_TOKENS;
+}
+
+/** 지금 보내도 되는지 — 기다려야 하면 남은 ms */
+export function gateWaitMs(last: { at: number; tokens: number } | null, estTokens: number, t: number, minGapMs: number): number {
+  if (!last || !minGapMs) return 0;
+  const gap = last.tokens > BIG_REQUEST_TOKENS || estTokens > BIG_REQUEST_TOKENS ? Math.max(BIG_GAP_MS, minGapMs) : minGapMs;
+  return Math.max(0, last.at + gap - t);
+}
+
+/** Gemini 한도 초과 신호 (RESOURCE_EXHAUSTED · 429 · quota) — 작업 실패 상세나 거절 메시지에서 */
+export function isQuotaSignal(text: string): boolean {
+  return /RESOURCE_EXHAUSTED|\b429\b|quota|rate.?limit|exceeded your current/i.test(text);
+}
+
+/** Google 한도 초과가 확인되면: 그날 전체·자동 사용량을 상한까지 채워 모든 기기의 추가 요청을 막는다 (초기화 시각까지) */
+function blockForToday(store: LedgerStore, caps: AiCaps, date: string) {
+  const u = store.getUsage(date);
+  store.putUsage({ ...u, requests: Math.max(u.requests, caps.dailyRequests) });
+  const a = store.getUsage(autoKey(date));
+  store.putUsage({ ...a, requests: Math.max(a.requests, caps.dailyAutoRequests ?? caps.dailyRequests) });
 }
 
 export interface ExtractDeps {
@@ -66,6 +114,7 @@ function fail(requestId: string | null, code: AiFailureCode, message: string, co
 /** 실패 종류별 HTTP 상태 — 화면에 그대로 보여 준다 (본문의 code·consumed가 실제 판단 기준) */
 const FAILURE_HTTP: Partial<Record<AiFailureCode, number>> = {
   daily_cap: 429,
+  auto_cap: 429,
   gemini_quota: 429,
   too_long: 413,
   gemini_not_configured: 503,
@@ -85,7 +134,7 @@ function respond(row: LedgerRow): ExtractResult {
     };
   }
   if (row.state === 'failed') {
-    const retryAt = row.failureCode === 'daily_cap' || row.failureCode === 'gemini_quota' ? nextPacificMidnight(row.updatedAt) : undefined;
+    const retryAt = row.failureCode === 'daily_cap' || row.failureCode === 'auto_cap' || row.failureCode === 'gemini_quota' ? nextPacificMidnight(row.updatedAt) : undefined;
     const code = (row.failureCode as AiFailureCode) ?? 'unknown';
     return fail(row.key, code, row.failureMessage ?? '', row.consumed, FAILURE_HTTP[code] ?? 500, retryAt);
   }
@@ -131,6 +180,7 @@ function canRecreate(row: LedgerRow, t: number, retryFailed: boolean): boolean {
   if (row.consumed) return false;
   switch (row.failureCode) {
     case 'daily_cap': // 서버 상한 — 다시 확인할 때 상한을 다시 검사 (Gemini 호출 없음)
+    case 'auto_cap': // 자동 준비 상한 — 다시 확인할 때 다시 검사 (사용자가 누른 요청이면 통과)
     case 'gemini_not_configured': // 키 문제 — 키를 고친 뒤 이어서
       return true;
     case 'gemini_quota': // Gemini 무료 한도 — 초기화 시각 이후에만
@@ -147,6 +197,8 @@ async function handleInner(input: { idempotencyKey: string | null; body: unknown
   const req = validateTaskRequest(input.body);
   if (!req) return fail(key, 'bad_request', '요청 형식이 올바르지 않아요.', false, 400);
   const retryFailed = (input.body as { retryFailed?: unknown }).retryFailed === true;
+  // 자동 준비 요청 표시 (작업 키에는 넣지 않음 — 같은 작업이면 누가 보냈든 같은 키)
+  const auto = (input.body as { auto?: unknown }).auto === true;
   const bodyHash = await sha256(bodyHashSource(req));
   const workKey = workKeyOf(bodyHash);
   // 자막 추출만 영상 분량을 쓴다. 문장·Chunk·대화문은 텍스트만 보내므로 요청 수만 센다
@@ -180,12 +232,26 @@ async function handleInner(input: { idempotencyKey: string | null; body: unknown
   }
   const usage = store.getUsage(date);
   if (usage.requests + 1 > caps.dailyRequests || usage.videoSec + videoSec > caps.dailyVideoSec) {
-    const row = { ...base, state: 'failed' as const, leaseUntil: null, failureCode: 'daily_cap', failureMessage: '오늘 사용 상한에 도달했어요. 태평양 시간 자정 이후 다시 시작해요.' };
+    const row = { ...base, state: 'failed' as const, leaseUntil: null, failureCode: 'daily_cap', failureMessage: `오늘 Gemini 요청 상한(${caps.dailyRequests}회)에 도달했어요. 태평양 시간 자정(한국 시간 오후 4~5시) 이후 이어서 해요.` };
     store.put(row);
     return respond(row);
   }
+  const autoUsage = store.getUsage(autoKey(date));
+  const autoCap = caps.dailyAutoRequests ?? caps.dailyRequests;
+  if (auto && autoUsage.requests + 1 > autoCap) {
+    const row = { ...base, state: 'failed' as const, leaseUntil: null, failureCode: 'auto_cap', failureMessage: `오늘 자동 준비 몫(${autoCap}회)을 다 썼어요. 나머지는 직접 누르는 작업에 남겨 두고, 태평양 시간 자정 이후 자동 준비를 이어서 해요.` };
+    store.put(row);
+    return respond(row);
+  }
+  // 요청 간격·토큰 관문 — 아직이면 Gemini를 부르지 않고 '잠시 뒤'로 응답 (기록을 만들지 않으므로 같은 식별자로 다시 물으면 다시 검사)
+  const est = estimateRequestTokens(req, videoSec);
+  const gate = store.getUsage(GATE_KEY);
+  const waitMs = gateWaitMs(gate.requests ? { at: gate.requests, tokens: gate.videoSec } : null, est, t, caps.minGapMs ?? 0);
+  if (waitMs > 0) return { status: 202, body: { ok: true, state: 'pending', requestId: key, interactionId: null, retryAfterSec: Math.ceil(waitMs / 1000) } };
   store.put({ ...base, counted: true });
   store.putUsage({ pacificDate: date, videoSec: usage.videoSec + videoSec, requests: usage.requests + 1 });
+  if (auto) store.putUsage({ ...autoUsage, requests: autoUsage.requests + 1 });
+  store.putUsage({ pacificDate: GATE_KEY, videoSec: est, requests: t });
 
   // ── Gemini 생성 요청 — 정확히 1회 ──
   const created = await deps.gemini.create(req);
@@ -202,7 +268,13 @@ async function handleInner(input: { idempotencyKey: string | null; body: unknown
     // Gemini가 처리하지 않은 것이 확실함 → 사용량 되돌림
     const u = store.getUsage(cur.pacificDate);
     store.putUsage({ pacificDate: cur.pacificDate, videoSec: Math.max(0, u.videoSec - cur.durationSec), requests: Math.max(0, u.requests - 1) });
+    if (auto) {
+      const a = store.getUsage(autoKey(cur.pacificDate));
+      store.putUsage({ ...a, requests: Math.max(0, a.requests - 1) });
+    }
     const code: AiFailureCode = created.reason === 'quota' ? 'gemini_quota' : created.reason === 'not_configured' ? 'gemini_not_configured' : 'gemini_rejected';
+    // Google 한도 초과 → 모든 기기에서 초기화 시각까지 더 보내지 않는다
+    if (code === 'gemini_quota') blockForToday(store, caps, cur.pacificDate);
     const upstream = created.httpStatus ? ` (Gemini HTTP ${created.httpStatus})` : '';
     const row: LedgerRow = { ...cur, state: 'failed', counted: false, consumed: false, leaseUntil: null, failureCode: code, failureMessage: `${created.message}${upstream}`, updatedAt: t2 };
     store.put(row);
@@ -247,9 +319,15 @@ async function poll(row: LedgerRow, deps: ExtractDeps): Promise<ExtractResult> {
   else {
     // 원인 확인용 상세를 기존 실패 메시지 칸에 함께 남긴다 (표 구조 그대로) — 생성 후 경과는 running이 된 시각(updatedAt) 기준
     const failureMessage = describeGeminiFailure(r.message, r.detail, row.interactionId, Math.max(0, Math.round((t - cur.updatedAt) / 1000)));
-    next = { ...cur, state: 'failed', consumed: true, failureCode: 'gemini_failed', failureMessage, usageJson: r.detail?.usage ? JSON.stringify(r.detail.usage) : cur.usageJson, updatedAt: t };
+    const quota = isQuotaSignal([r.message, ...(r.detail?.errors ?? []).flatMap((e) => [e.code, e.message])].join(' '));
+    if (quota) {
+      // 작업이 한도 초과로 끝남: 처리되지 않은 작업이므로 '보류'(consumed=false) — 초기화 뒤 1번 이어서 보낼 수 있게.
+      // 그리고 모든 기기에서 오늘은 더 보내지 않는다
+      blockForToday(deps.store, deps.caps, pacificDate(t));
+      next = { ...cur, state: 'failed', consumed: false, failureCode: 'gemini_quota', failureMessage: `${failureMessage} — Gemini 하루 한도를 넘었어요. 태평양 시간 자정(한국 시간 오후 4~5시) 이후 이어서 해요.`.slice(0, 1000), usageJson: r.detail?.usage ? JSON.stringify(r.detail.usage) : cur.usageJson, updatedAt: t };
+    } else next = { ...cur, state: 'failed', consumed: true, failureCode: 'gemini_failed', failureMessage, usageJson: r.detail?.usage ? JSON.stringify(r.detail.usage) : cur.usageJson, updatedAt: t };
     // 실시간 로그(wrangler tail)에서만 보이는 한 줄 — 키·지시문·결과 내용은 넣지 않는다
-    console.warn(JSON.stringify({ event: 'gemini_failed', task: row.videoId === 'dialogue' || row.videoId === 'phrases' ? row.videoId : 'video', status: r.detail?.status ?? r.status, errors: r.detail?.errors?.map((e) => e.code) ?? [], elapsedSec: Math.round((t - cur.updatedAt) / 1000) }));
+    console.warn(JSON.stringify({ event: next.failureCode, task: row.videoId === 'dialogue' || row.videoId === 'phrases' ? row.videoId : 'video', status: r.detail?.status ?? r.status, errors: r.detail?.errors?.map((e) => e.code) ?? [], elapsedSec: Math.round((t - cur.updatedAt) / 1000) }));
   }
   deps.store.put(next);
   return respond(next);
@@ -288,6 +366,8 @@ export function readUsage(store: LedgerStore, caps: AiCaps, now = Date.now()): A
   const u = store.getUsage(date);
   return {
     ok: true, date, requests: u.requests, dailyRequests: caps.dailyRequests,
+    auto: { used: store.getUsage(autoKey(date)).requests, cap: caps.dailyAutoRequests ?? caps.dailyRequests },
+    resetAt: nextPacificMidnight(now),
     phrases: { used: store.countCounted('phrases', date) },
   };
 }

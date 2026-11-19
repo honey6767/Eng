@@ -123,6 +123,10 @@ export interface AiUsageResponse {
   date: string;
   requests: number;
   dailyRequests: number;
+  /** 자동 준비 요청 수 / 하루 몫 */
+  auto: { used: number; cap: number };
+  /** 다음 초기화 시각 (태평양 자정) */
+  resetAt: string;
   phrases: { used: number };
 }
 
@@ -136,6 +140,8 @@ export const DIALOGUE_LIMITS = { minChunks: 2, maxChunks: 15, textChars: 120, me
 export type AiFailureCode =
   /** 우리 서버의 하루 상한 (Gemini 호출 안 함) */
   | 'daily_cap'
+  /** 자동 준비 몫(하루)을 다 씀 (Gemini 호출 안 함) — 사용자가 누르는 작업은 계속 가능 */
+  | 'auto_cap'
   /** 한 번에 처리할 수 있는 길이를 넘음 (Gemini 호출 안 함) */
   | 'too_long'
   /** Gemini 무료 한도 초과 (429, 처리 안 됨) */

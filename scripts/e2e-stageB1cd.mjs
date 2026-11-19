@@ -24,7 +24,7 @@ const BASE = `http://localhost:${PORT}`;
 function startServer() {
   const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort'], {
     stdio: 'pipe',
-    env: { ...process.env, YOUTUBE_API_KEY: '', YOUTUBE_API_MOCK: '', AI_GEMINI_MOCK: '1', GEMINI_API_KEY: '' },
+    env: { ...process.env, YOUTUBE_API_KEY: '', YOUTUBE_API_MOCK: '', AI_GEMINI_MOCK: '1', GEMINI_API_KEY: '', AI_DAILY_AUTO_CAP: '50', AI_DAILY_REQUEST_CAP: '50' },
   });
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('preview server timeout')), 15000);
@@ -132,7 +132,19 @@ async function main() {
     // ── 1. '기존 영상 자료 만들기 시작' 한 번으로 자동 추출·자동 적용 ──
     await page.goto(`${BASE}/extraction`);
     await page.getByTestId('prep-start-all').click();
-    const after1 = await waitFor(page, (d) => d.tables.extractionJobs.filter((j) => ['succeeded', 'failed_permanent'].includes(j.status)).length === 4 && d.tables.extractionJobs.some((j) => j.videoId === 'cd-long'), '1차 추출');
+    // Gemini 처리 실패(cd-fail)가 나면 대기열이 멈춘다 → '이어서 만들기'를 눌러 나머지 진행
+    const done1 = (d) => d.tables.extractionJobs.filter((j) => ['succeeded', 'failed_permanent'].includes(j.status)).length === 4 && d.tables.extractionJobs.some((j) => j.videoId === 'cd-long');
+    let continued = 0;
+    for (let i = 0; i < 120; i++) {
+      if (done1(await dumpDb(page))) break;
+      if (await page.getByTestId('prep-continue').count()) {
+        continued++;
+        await page.getByTestId('prep-continue').click();
+      }
+      await page.waitForTimeout(2000);
+    }
+    check('Gemini 처리 실패 → 대기열 멈춤 → 이어서 만들기로 나머지 진행', continued >= 1, `이어서 만들기 ${continued}번`);
+    const after1 = await waitFor(page, done1, '1차 추출');
     const jobs = Object.fromEntries(after1.tables.extractionJobs.map((j) => [j.videoId, j]));
     check('시작 한 번으로 4개 영상 자동 처리 (자막 있는 영상·긴 영상 제외)', ['cd-ok', 'cd-low', 'cd-over'].every((v) => jobs[v]?.status === 'succeeded') && jobs['cd-fail']?.status === 'failed_permanent' && !jobs['cd-has'] && jobs['cd-long']?.status === 'skipped');
     const drafts = Object.fromEntries(after1.tables.extractionDrafts.map((d) => [d.videoId, d]));
