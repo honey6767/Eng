@@ -124,7 +124,7 @@ async function main() {
       if (!r.url().endsWith('/api/ai/extract')) return;
       const b = JSON.parse(r.request().postData() || '{}');
       const j = await r.json().catch(() => ({}));
-      sends.push({ at: Date.now(), task: b.task ?? 'extract', videoId: b.videoId, key: r.request().headers()['idempotency-key'], auto: !!b.auto, status: r.status(), state: j.state, code: j.code, interactionId: j.interactionId ?? null, retryAfterSec: j.retryAfterSec });
+      sends.push({ at: Date.now(), task: b.task ?? 'extract', videoId: b.videoId, key: r.request().headers()['idempotency-key'], origin: b.origin ?? null, status: r.status(), state: j.state, code: j.code, interactionId: j.interactionId ?? null, retryAfterSec: j.retryAfterSec });
     });
     const page = await ctx.newPage();
     page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
@@ -143,7 +143,7 @@ async function main() {
     const created = sends.filter((s) => s.state === 'pending' && s.interactionId);
     const createdIds = [...new Set(created.map((s) => s.videoId))];
     check('자동 준비는 실제 Gemini 요청 6회까지 (Day 1~6), 그다음 자동 영상만 멈춤', autoPaused && createdIds.join(',') === 'limitVid001,limitVid002,limitVid003,limitVid004,limitVid005,limitVid006', createdIds.join(','));
-    check('자동 준비 요청에는 자동 표시가 붙음', created.every((s) => s.auto));
+    check('자동 준비 요청에는 자동 표시(origin: auto)', created.every((s) => s.origin === 'auto'), [...new Set(created.map((s) => s.origin))].join(','));
     const firstCreateAt = createdIds.map((v) => sends.find((s) => s.videoId === v && s.state === 'pending' && s.interactionId).at);
     const gaps = firstCreateAt.slice(1).map((t, i) => t - firstCreateAt[i]);
     check(`생성 요청 사이 간격 지킴 (설정 ${GAP_SEC}초)`, gaps.every((g) => g >= GAP_SEC * 1000 - 500), gaps.map((g) => `${(g / 1000).toFixed(1)}초`).join(', '));
@@ -164,7 +164,7 @@ async function main() {
     await page.getByTestId('video-prep-now').click();
     const d7done = await waitFor(async () => (await page.getByTestId('video-prep').count()) === 0 || /자료 준비됨/.test(await page.getByTestId('video-prep').innerText().catch(() => '')), 120, 500);
     const d7 = sends.slice(nD7).filter((s) => s.videoId === 'limitVid007');
-    check('‘지금 만들기’(사용자 작업)는 자동 몫과 상관없이 진행', d7done && d7.some((s) => s.state === 'succeeded') && d7.every((s) => !s.auto), d7.map((s) => s.state).join(','));
+    check('‘지금 만들기’(사용자 작업)는 자동 몫과 상관없이 진행', d7done && d7.some((s) => s.state === 'succeeded') && d7.every((s) => s.origin === 'user'), d7.map((s) => `${s.state}:${s.origin}`).join(','));
     check('자동 영상(Day 8)은 그대로 대기 (보내지 않음)', !sends.some((s) => s.videoId === 'limitVid008'));
 
     // ── 3. 작업이 한도 초과로 끝남 → 보류 + 모든 요청 차단 ──

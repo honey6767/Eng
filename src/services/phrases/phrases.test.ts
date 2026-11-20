@@ -137,6 +137,9 @@ describe('기존 대화문 ✨ 분석 (버튼을 눌렀을 때만)', () => {
     const before = JSON.stringify(dlg);
     const out = await analyzeDialogue(d, dlg);
     expect(out).toMatchObject({ ok: true, already: false });
+    // 사용자가 누른 작업 → 사용자 표시를 분명히 보낸다 (자동 준비 몫을 다 써도 막히지 않게)
+    expect(s.sent.length).toBeGreaterThan(0);
+    expect(s.sent.every((x) => x.body.origin === 'user')).toBe(true);
     const set = await d.store.getPhraseSet(dlg.id);
     expect(set!.phrases.map((p) => p.base)).toContain('I know what you mean');
     expect(set!.phrases.some((p) => p.base === 'hit the road' || p.base === 'could use' || p.base === 'honestly')).toBe(false);

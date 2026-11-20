@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
-import { describeGeminiFailure, estimateRequestTokens, gateWaitMs, handleAiExtract, parseCaps, readUsage, sweepLedger, workKeyForBody, type AiCaps } from './extractHandler.ts';
+import { describeGeminiFailure, estimateRequestTokens, gateWaitMs, handleAiExtract, parseCaps, readUsage, requestOrigin, sweepLedger, workKeyForBody, type AiCaps } from './extractHandler.ts';
 import { memoryLedgerStore, pacificDate, nextPacificMidnight, type LedgerStore } from './ledger.ts';
 import { createMockGemini } from './mockGemini.ts';
 import { sqliteLedgerStore } from './durableObject.ts';
@@ -136,18 +136,107 @@ for (const [label, makeStore] of [['메모리 장부', () => memoryLedgerStore()
       const store = makeStore();
       const c: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 5, maxVideoSec: 1800, dailyAutoRequests: 2 };
       const run = (key: string, b: unknown) => handleAiExtract({ idempotencyKey: key, body: b }, { store, gemini: g, caps: c, now: () => T });
-      expect((await run(KEY(40), { ...body('autoVideo01', 60), auto: true })).body.state).toBe('pending');
-      expect((await run(KEY(41), { ...body('autoVideo02', 60), auto: true })).body.state).toBe('pending');
-      const third = await run(KEY(42), { ...body('autoVideo03', 60), auto: true });
+      expect((await run(KEY(40), { ...body('autoVideo01', 60), origin: 'auto' })).body.state).toBe('pending');
+      expect((await run(KEY(41), { ...body('autoVideo02', 60), origin: 'auto' })).body.state).toBe('pending');
+      const third = await run(KEY(42), { ...body('autoVideo03', 60), origin: 'auto' });
       expect(third.status).toBe(429);
       expect(third.body).toMatchObject({ ok: false, code: 'auto_cap', consumed: false });
       expect((third.body as { retryAt?: string }).retryAt).toBe(nextPacificMidnight(T));
-      // 사용자가 누른 요청(같은 영상이어도)은 통과
-      expect((await run(KEY(43), body('autoVideo03', 60))).body.state).toBe('pending');
+      // 사용자 표시가 분명한 요청(같은 영상이어도)은 통과
+      expect((await run(KEY(43), { ...body('autoVideo03', 60), origin: 'user' })).body.state).toBe('pending');
       expect(g.createCalls).toEqual(['autoVideo01', 'autoVideo02', 'autoVideo03']);
       expect(store.getUsage(pacificDate(T)).requests).toBe(3);
       // 자동 표시는 작업 키에 들어가지 않음 (같은 작업이면 같은 결과를 함께 씀)
-      expect(await workKeyForBody({ ...body('autoVideo01', 60), auto: true })).toBe(await workKeyForBody(body('autoVideo01', 60)));
+      expect(await workKeyForBody({ ...body('autoVideo01', 60), origin: 'auto' })).toBe(await workKeyForBody(body('autoVideo01', 60)));
+      expect(await workKeyForBody({ ...body('autoVideo01', 60), origin: 'user' })).toBe(await workKeyForBody(body('autoVideo01', 60)));
+    });
+
+    it('구버전 앱(표시 없음)·잘못된 값·서로 맞지 않는 값은 모두 자동 작업으로 — 자동 몫을 우회할 수 없음', async () => {
+      const g = createMockGemini();
+      const store = makeStore();
+      const c: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 16, maxVideoSec: 1800, dailyAutoRequests: 2 };
+      const run = (key: string, b: unknown) => handleAiExtract({ idempotencyKey: key, body: b }, { store, gemini: g, caps: c, now: () => T });
+      // 표시 없음(구버전 앱) 2번으로 자동 몫을 다 씀
+      expect((await run(KEY(60), body('oldApp00001', 60))).body.state).toBe('pending');
+      expect((await run(KEY(61), body('oldApp00002', 60))).body.state).toBe('pending');
+      const tries: [string, unknown][] = [
+        ['표시 없음', body('oldApp00003', 60)],
+        ['대문자', { ...body('oldApp00004', 60), origin: 'USER' }],
+        ['공백', { ...body('oldApp00005', 60), origin: 'user ' }],
+        ['다른 형식(true)', { ...body('oldApp00006', 60), origin: true }],
+        ['배열', { ...body('oldApp00007', 60), origin: ['user'] }],
+        ['객체', { ...body('oldApp00008', 60), origin: { type: 'user' } }],
+        ['user + auto:true (서로 맞지 않음)', { ...body('oldApp00009', 60), origin: 'user', auto: true }],
+        ['user + auto:"false" (형식 다름)', { ...body('oldApp00010', 60), origin: 'user', auto: 'false' }],
+        ['auto:false만 (예전 형식)', { ...body('oldApp00011', 60), auto: false }],
+        ['origin auto', { ...body('oldApp00012', 60), origin: 'auto' }],
+      ];
+      for (const [i, [label, b]] of tries.entries()) {
+        const r = await run(KEY(62 + i), b);
+        expect(r.body, label).toMatchObject({ ok: false, code: 'auto_cap' });
+      }
+      expect(g.createCalls).toEqual(['oldApp00001', 'oldApp00002']); // 우회 요청은 Gemini를 부르지 않음
+      // 사용자 표시가 정확한 요청만 통과 (전체 상한 안에서)
+      expect((await run(KEY(80), { ...body('newApp00001', 60), origin: 'user' })).body.state).toBe('pending');
+      expect((await run(KEY(81), { ...body('newApp00002', 60), origin: 'user', auto: false })).body.state).toBe('pending');
+      expect(g.createCalls).toHaveLength(4);
+      expect(requestOrigin(null)).toBe('auto');
+      expect(requestOrigin('user')).toBe('auto');
+    });
+
+    it('사용자 작업도 전체 상한(16회)은 넘지 못함', async () => {
+      const g = createMockGemini();
+      const store = makeStore();
+      const c: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 3, maxVideoSec: 1800, dailyAutoRequests: 2 };
+      const run = (key: string, b: unknown) => handleAiExtract({ idempotencyKey: key, body: b }, { store, gemini: g, caps: c, now: () => T });
+      for (let i = 0; i < 3; i++) expect((await run(KEY(90 + i), { ...body(`userCap000${i}`, 60), origin: 'user' })).body.state).toBe('pending');
+      expect((await run(KEY(93), { ...body('userCap0009', 60), origin: 'user' })).body).toMatchObject({ code: 'daily_cap' });
+      expect((await run(KEY(94), body('oldCap00001', 60))).body).toMatchObject({ code: 'daily_cap' });
+      expect(g.createCalls).toHaveLength(3);
+    });
+
+    it('동시 요청 30건(자동·표시 없음·사용자 섞임): Gemini 생성은 전체 16회, 그중 자동은 6회를 넘지 않음', async () => {
+      const g = createMockGemini();
+      const store = makeStore();
+      const c: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 16, maxVideoSec: 1800, dailyAutoRequests: 6 };
+      const run = (key: string, b: unknown) => handleAiExtract({ idempotencyKey: key, body: b }, { store, gemini: g, caps: c, now: () => T });
+      const reqs = Array.from({ length: 30 }, (_, i) => {
+        const kind = i % 3 === 0 ? 'auto' : i % 3 === 1 ? 'none' : 'user';
+        const v = `cc${kind.slice(0, 2)}${String(i).padStart(7, '0')}`.slice(0, 11);
+        return { v, kind, body: kind === 'none' ? body(v, 60) : { ...body(v, 60), origin: kind } };
+      });
+      const out = await Promise.all(reqs.map((r, i) => run(KEY(300 + i), r.body)));
+      expect(g.createCalls).toHaveLength(16);
+      const autoCreated = g.createCalls.filter((v) => reqs.find((r) => r.v === v)!.kind !== 'user');
+      expect(autoCreated).toHaveLength(6);
+      expect(store.getUsage(pacificDate(T)).requests).toBe(16);
+      expect(out.filter((r) => r.body.ok === false).every((r) => ['auto_cap', 'daily_cap'].includes((r.body as { code: string }).code))).toBe(true);
+    });
+
+    it('간격 15초: 동시에 온 요청 10건 중 Gemini 생성은 1건뿐, 나머지는 기록 없이 잠시 뒤로', async () => {
+      const g = createMockGemini();
+      const store = makeStore();
+      const c: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 16, maxVideoSec: 1800, dailyAutoRequests: 6, minGapMs: 15_000 };
+      const run = (key: string, b: unknown) => handleAiExtract({ idempotencyKey: key, body: b }, { store, gemini: g, caps: c, now: () => T });
+      const out = await Promise.all(Array.from({ length: 10 }, (_, i) => run(KEY(400 + i), { ...body(`gapCc${String(i).padStart(6, '0')}`, 60), origin: 'user' })));
+      expect(g.createCalls).toHaveLength(1);
+      expect(out.filter((r) => r.body.state === 'pending' && r.body.interactionId === null)).toHaveLength(9);
+      expect(store.getUsage(pacificDate(T)).requests).toBe(1);
+    });
+
+    it('여러 기기가 같은 작업을 동시에 요청(식별자 다름) → Gemini 생성 1번, 동시 다시 시도도 1번만 다시 생성', async () => {
+      const g = createMockGemini();
+      const store = makeStore();
+      const c: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 16, maxVideoSec: 1800, dailyAutoRequests: 6 };
+      const run = (key: string, b: unknown) => handleAiExtract({ idempotencyKey: key, body: b }, { store, gemini: g, caps: c, now: () => T });
+      await Promise.all(Array.from({ length: 5 }, (_, i) => run(KEY(500 + i), { ...body('sameWork001', 60), origin: i % 2 ? 'user' : 'auto' })));
+      expect(g.createCalls).toEqual(['sameWork001']);
+      // 결과를 모르는 실패(mockFail)를 두 기기가 동시에 '다시 시도'
+      await run(KEY(510), { ...body('mockFail002', 60), origin: 'user' });
+      await run(KEY(510), { ...body('mockFail002', 60), origin: 'user' });
+      expect((await run(KEY(510), { ...body('mockFail002', 60), origin: 'user' })).body).toMatchObject({ code: 'gemini_failed' });
+      await Promise.all([run(KEY(511), { ...body('mockFail002', 60), origin: 'user', retryFailed: true }), run(KEY(512), { ...body('mockFail002', 60), origin: 'user', retryFailed: true })]);
+      expect(g.createCalls.filter((v) => v === 'mockFail002')).toHaveLength(2); // 처음 1번 + 다시 시도 1번
     });
 
     it('Gemini가 거절(4xx)하면 자동 준비 몫도 되돌린다', async () => {
@@ -155,8 +244,8 @@ for (const [label, makeStore] of [['메모리 장부', () => memoryLedgerStore()
       const store = makeStore();
       const c: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 5, maxVideoSec: 1800, dailyAutoRequests: 1 };
       const run = (key: string, b: unknown) => handleAiExtract({ idempotencyKey: key, body: b }, { store, gemini: g, caps: c, now: () => T });
-      expect((await run(KEY(44), { ...body('mockBad0002', 60), auto: true })).body).toMatchObject({ code: 'gemini_rejected' });
-      expect((await run(KEY(45), { ...body('autoVideo04', 60), auto: true })).body.state).toBe('pending');
+      expect((await run(KEY(44), { ...body('mockBad0002', 60), origin: 'auto' })).body).toMatchObject({ code: 'gemini_rejected' });
+      expect((await run(KEY(45), { ...body('autoVideo04', 60), origin: 'auto' })).body.state).toBe('pending');
     });
 
     it('요청 간격: 생성 요청 사이 15초 — 그 전에는 Gemini를 부르지 않고 잠시 뒤로(기록도 만들지 않음), 긴 영상은 앞뒤 60초', async () => {
@@ -346,7 +435,7 @@ describe('요청 토큰 추정·관문·사용량 조회', () => {
     const store = memoryLedgerStore();
     const g = createMockGemini();
     const c: AiCaps = { dailyVideoSec: 3600, dailyRequests: 16, maxVideoSec: 1800, dailyAutoRequests: 6 };
-    await handleAiExtract({ idempotencyKey: KEY(970), body: { ...body('usageVideo1', 60), auto: true } }, { store, gemini: g, caps: c, now: () => T });
+    await handleAiExtract({ idempotencyKey: KEY(970), body: { ...body('usageVideo1', 60), origin: 'auto' } }, { store, gemini: g, caps: c, now: () => T });
     expect(readUsage(store, c, T)).toMatchObject({ ok: true, requests: 1, dailyRequests: 16, auto: { used: 1, cap: 6 }, resetAt: nextPacificMidnight(T) });
   });
 });

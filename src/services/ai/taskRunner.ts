@@ -1,5 +1,5 @@
 import type { AiTaskRequest } from '@/types/aiApi';
-import type { AiClient } from '@/services/integrations/aiClient';
+import type { AiClient, AiOrigin } from '@/services/integrations/aiClient';
 import type { AiTaskState, ContentStore } from '@/repositories/contentStore';
 
 /**
@@ -46,7 +46,7 @@ function hintFor(code: string, body: AiTaskRequest): string {
   return '';
 }
 
-export async function runAiTask(key: string, makeBody: () => AiTaskRequest, deps: TaskDeps, onProgress: (p: TaskProgress) => void, signal?: AbortSignal, opts: { retryFailed?: boolean; auto?: boolean } = {}): Promise<TaskOutcome> {
+export async function runAiTask(key: string, makeBody: () => AiTaskRequest, deps: TaskDeps, onProgress: (p: TaskProgress) => void, signal?: AbortSignal, opts: { retryFailed?: boolean; origin?: AiOrigin } = {}): Promise<TaskOutcome> {
   const now = deps.now ?? (() => new Date());
   const sleep = deps.sleep ?? defaultSleep;
   const pollMs = deps.pollMs ?? 10_000;
@@ -71,8 +71,8 @@ export async function runAiTask(key: string, makeBody: () => AiTaskRequest, deps
   let transportFails = 0;
   while (!signal?.aborted) {
     // '다시 시도'는 새로 만든 요청의 첫 전송에만 (그 뒤 조회에는 붙이지 않음 → 같은 작업을 두 번 생성하지 않음)
-    // 자동 준비 요청이면 표시만 덧붙인다 (보낸 내용·작업 키는 그대로)
-    const send = { ...st.body, ...(opts.auto ? { auto: true } : {}), ...(sendRetry ? { retryFailed: true } : {}) };
+    // 요청 유형 표시만 덧붙인다 (보낸 내용·작업 키는 그대로). 표시가 없으면 서버는 자동 준비로 센다
+    const send = { ...st.body, ...(opts.origin ? { origin: opts.origin } : {}), ...(sendRetry ? { retryFailed: true } : {}) };
     const r = await deps.client.extract(st.requestId, send);
     sendRetry = false;
     if (r.kind === 'transport_error') {

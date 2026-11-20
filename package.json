@@ -26,7 +26,8 @@
     "e2e:qa": "node scripts/e2e-qa.mjs",
     "e2e:final": "node scripts/e2e-final.mjs",
     "e2e:manual": "node scripts/e2e-manual-transcript.mjs",
-    "e2e:limits": "node scripts/e2e-limits.mjs"
+    "e2e:limits": "node scripts/e2e-limits.mjs",
+    "e2e:oldapp": "node scripts/e2e-oldapp.mjs"
   },
   "dependencies": {
     "@fontsource-variable/plus-jakarta-sans": "^5.2.8",

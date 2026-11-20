@@ -21,7 +21,8 @@ export interface AiCaps {
   dailyRequests: number;
   /** 한 번에 처리할 최대 영상 길이 (초) */
   maxVideoSec: number;
-  /** 자동 준비(사용자가 누르지 않은 대기열 요청)의 하루 상한 — 실제 Gemini 요청 수 기준, 전체 상한 안에서. 없으면 전체 상한과 같음 */
+  /** 자동 준비의 하루 상한 — 실제 Gemini 요청 수 기준, 전체 상한 안에서. 없으면 전체 상한과 같음.
+   *  사용자 표시(origin: 'user')가 없는 요청은 모두 여기로 센다 (구버전 앱 포함) */
   dailyAutoRequests?: number;
   /** 생성 요청 사이 최소 간격 (ms) — RPM 한도 보호. 없거나 0이면 간격 검사 안 함 */
   minGapMs?: number;
@@ -72,6 +73,16 @@ export function gateWaitMs(last: { at: number; tokens: number } | null, estToken
   if (!last || !minGapMs) return 0;
   const gap = last.tokens > BIG_REQUEST_TOKENS || estTokens > BIG_REQUEST_TOKENS ? Math.max(BIG_GAP_MS, minGapMs) : minGapMs;
   return Math.max(0, last.at + gap - t);
+}
+
+/**
+ * 요청 유형 — origin이 정확히 'user'이고 자동 표시와 어긋나지 않을 때만 사용자 작업.
+ * 표시가 없거나(구버전 앱), 다른 값·다른 형식이거나, 서로 맞지 않으면 자동 작업으로 본다 (더 엄격한 하루 자동 몫 적용)
+ */
+export function requestOrigin(raw: unknown): 'user' | 'auto' {
+  if (!raw || typeof raw !== 'object') return 'auto';
+  const b = raw as { origin?: unknown; auto?: unknown };
+  return b.origin === 'user' && (b.auto === undefined || b.auto === false) ? 'user' : 'auto';
 }
 
 /** Gemini 한도 초과 신호 (RESOURCE_EXHAUSTED · 429 · quota) — 작업 실패 상세나 거절 메시지에서 */
@@ -197,8 +208,8 @@ async function handleInner(input: { idempotencyKey: string | null; body: unknown
   const req = validateTaskRequest(input.body);
   if (!req) return fail(key, 'bad_request', '요청 형식이 올바르지 않아요.', false, 400);
   const retryFailed = (input.body as { retryFailed?: unknown }).retryFailed === true;
-  // 자동 준비 요청 표시 (작업 키에는 넣지 않음 — 같은 작업이면 누가 보냈든 같은 키)
-  const auto = (input.body as { auto?: unknown }).auto === true;
+  // 요청 유형 (작업 키에는 넣지 않음 — 같은 작업이면 누가 보냈든 같은 키). 사용자 표시가 분명한 것만 사용자 작업
+  const auto = requestOrigin(input.body) === 'auto';
   const bodyHash = await sha256(bodyHashSource(req));
   const workKey = workKeyOf(bodyHash);
   // 자막 추출만 영상 분량을 쓴다. 문장·Chunk·대화문은 텍스트만 보내므로 요청 수만 센다

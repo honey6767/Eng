@@ -32,7 +32,8 @@ export async function generateCombinedDialogue(deps: DialogueDeps, req: AiDialog
     onProgress(p);
     return p;
   };
-  const out = await runAiTask(DIALOGUE_TASK_KEY, () => req, deps, report, signal);
+  // 사용자가 '대화문 만들기'를 눌렀을 때만 (사용자 작업)
+  const out = await runAiTask(DIALOGUE_TASK_KEY, () => req, deps, report, signal, { origin: 'user' });
   if (!out.ok) return report({ phase: 'failed', httpStatus: out.httpStatus, code: out.code, message: out.message });
   // 이어서 확인한 요청이면 그때 보낸 내용으로 결과를 해석한다
   const st = await deps.store.getTask(DIALOGUE_TASK_KEY);

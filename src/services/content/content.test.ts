@@ -182,6 +182,8 @@ describe('통합 대화문: 여러 Day의 Chunk', () => {
     if (out.phase !== 'succeeded') return;
     expect(gemini.createCalls.filter((c) => c === 'dialogue')).toHaveLength(1);
     expect(sent.filter((s) => s.body.task === 'dialogue').every((s) => s.key === sent.find((x) => x.body.task === 'dialogue')!.key)).toBe(true);
+    // '대화문 만들기'는 사용자가 누른 작업 → 사용자 표시
+    expect(sent.filter((s) => s.body.task === 'dialogue').every((s) => (s.body as { origin?: string }).origin === 'user')).toBe(true);
     const d = (await db.dialogues.get(out.dialogueId))!;
     expect(d.kind).toBe('combined');
     expect(d.sourceDays).toEqual([11, 12]); // 가짜 Gemini는 마지막 Chunk를 쓰지 않음

@@ -133,7 +133,7 @@ async function runTranscript(video: Video, deps: PrepDeps, retry: boolean, onNot
   const now = deps.now ?? (() => new Date());
   const sleep = deps.sleep ?? defaultSleep;
   const ex = deps.extraction;
-  const rdeps = { store: ex, client: deps.client, now: deps.now, newId: deps.newId, auto };
+  const rdeps = { store: ex, client: deps.client, now: deps.now, newId: deps.newId, origin: auto ? ('auto' as const) : ('user' as const) };
   const id = `job-${video.id}`;
   let job = await ex.getJob(id);
   if (!job) {
@@ -187,7 +187,7 @@ async function runPack(video: Video, kind: 'pack' | 'daypack', deps: PrepDeps, r
   const exprs = new Map<string, Expression>(ctx.expressions.map((e) => [e.id, e]));
   const key = `${kind}:${video.id}`;
   const makeBody = () => (kind === 'pack' ? buildPackRequest(video, ctx.transcript!, ctx.day) : buildDayPackRequest(video, ctx.day, ctx.sentences, ctx.items, exprs, ctx.transcript));
-  const out = await runAiTask(key, makeBody, deps, (p) => onNote({ stage: kind, note: p.phase === 'processing' ? p.note : p.phase === 'sending' ? '요청 보내는 중' : undefined }), signal, { retryFailed: retry, auto });
+  const out = await runAiTask(key, makeBody, deps, (p) => onNote({ stage: kind, note: p.phase === 'processing' ? p.note : p.phase === 'sending' ? '요청 보내는 중' : undefined }), signal, { retryFailed: retry, origin: auto ? 'auto' : 'user' });
   if (!out.ok) {
     if (PAUSE_CODES.has(out.code)) return pauseFor(out.code, out.message, out.httpStatus, now());
     return { kind: 'fail', stage: kind, code: out.code, message: out.message, httpStatus: out.httpStatus };

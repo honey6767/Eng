@@ -46,7 +46,7 @@ export async function analyzeDialogue(deps: QaDeps, d: Dialogue, onProgress?: (p
     const key = phraseTaskKey(d.id);
     // 앞 시도가 실패했다면, 이번 누름은 사용자가 고른 '다시 시도' (첫 요청에만 다시 생성 표시)
     const retry = attempts.some((a) => a.status === 'failed') && !attempts.some((a) => a.status === 'succeeded');
-    const out = await runAiTask(key, () => buildPhrasesRequest(d), { store: deps.store, client: deps.client, now: deps.now, newId: deps.newId, sleep: deps.sleep, pollMs: deps.pollMs }, (p) => onProgress?.(p), undefined, { retryFailed: retry });
+    const out = await runAiTask(key, () => buildPhrasesRequest(d), { store: deps.store, client: deps.client, now: deps.now, newId: deps.newId, sleep: deps.sleep, pollMs: deps.pollMs }, (p) => onProgress?.(p), undefined, { retryFailed: retry, origin: 'user' });
     const requestId = (await deps.store.getTask(key))?.requestId ?? null;
     if (!out.ok) {
       await deps.store.addAttempt({ id: newId(), dialogueId: d.id, status: 'failed', requestId, at: now(), error: { code: out.code, message: out.message, httpStatus: out.httpStatus }, count: 0 });

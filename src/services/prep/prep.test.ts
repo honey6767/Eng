@@ -18,10 +18,10 @@ const uuid = () => `00000000-0000-4000-8000-${String(++seq).padStart(12, '0')}`;
 function server(caps: AiCaps = { dailyVideoSec: 6 * 3600, dailyRequests: 20, maxVideoSec: 1800 }, clock = () => Date.parse(T)) {
   const gemini = createMockGemini();
   const ledger = memoryLedgerStore();
-  const sent: { key: string; task: string; retryFailed?: boolean; auto?: boolean }[] = [];
+  const sent: { key: string; task: string; retryFailed?: boolean; origin?: string }[] = [];
   const client: AiClient = {
     async extract(key, body): Promise<AiTransportResult> {
-      sent.push({ key, task: body.task ?? 'extract', retryFailed: body.retryFailed, auto: body.auto });
+      sent.push({ key, task: body.task ?? 'extract', retryFailed: body.retryFailed, origin: body.origin });
       const r = await handleAiExtract({ idempotencyKey: key, body }, { store: ledger, gemini, caps, now: clock });
       return { kind: 'response', httpStatus: r.status, body: r.body };
     },
@@ -182,7 +182,7 @@ describe('학습 자료 자동 생성 대기열', () => {
     await pc.start();
     expect(gemini.createCalls).toEqual(['pack:autoVid0001', 'pack:autoVid0002']);
     expect(pc.getSnapshot().status).toMatchObject({ kind: 'paused', code: 'auto_cap' });
-    expect(sent.filter((s) => s.task === 'pack').every((s) => (s as { auto?: boolean }).auto === true)).toBe(true);
+    expect(sent.filter((s) => s.task === 'pack').every((s) => s.origin === 'auto')).toBe(true);
     // 사용자가 '이 영상 자료 만들기'를 누른 영상은 자동 몫과 상관없이 진행
     await pc.enqueue(['m1'], { manual: true });
     await pc.start();

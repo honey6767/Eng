@@ -1,5 +1,5 @@
 import type { ExtractionStore, ExtractionRunState } from '@/repositories/extractionStore';
-import type { AiClient } from '@/services/integrations/aiClient';
+import type { AiClient, AiOrigin } from '@/services/integrations/aiClient';
 import { AI_PROMPT_VERSION, type AiExtractResponse } from '@/types/aiApi';
 import type { AiRequest, ExtractionDraft, ExtractionJob, Video } from '@/types/models';
 import { validateExtraction } from './validateResult';
@@ -32,8 +32,8 @@ export interface RunnerDeps {
   now?: () => Date;
   newId?: () => string;
   maxVideoSec?: number;
-  /** 자동 준비 요청 (서버가 하루 자동 준비 몫으로 셈) */
-  auto?: boolean;
+  /** 요청 유형 — 'user'는 사용자가 누른 작업. 없으면 서버가 자동 준비로 셈 */
+  origin?: AiOrigin;
 }
 
 const PACIFIC = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -159,7 +159,7 @@ export async function stepJob(job: ExtractionJob, video: Video, deps: RunnerDeps
     await deps.store.putRequest(req);
   }
 
-  const r = await deps.client.extract(req.id, { videoId: video.youtubeVideoId!, durationSec: video.durationSec!, promptVersion: AI_PROMPT_VERSION, ...(job.variant && job.variant > 1 ? { variant: job.variant } : {}), ...(sendRetry ? { retryFailed: true } : {}), ...(deps.auto ? { auto: true } : {}) });
+  const r = await deps.client.extract(req.id, { videoId: video.youtubeVideoId!, durationSec: video.durationSec!, promptVersion: AI_PROMPT_VERSION, ...(job.variant && job.variant > 1 ? { variant: job.variant } : {}), ...(sendRetry ? { retryFailed: true } : {}), ...(deps.origin ? { origin: deps.origin } : {}) });
   const iso2 = clock().toISOString();
   if (r.kind === 'transport_error') return { kind: 'retry', message: r.message, httpStatus: r.httpStatus ?? null };
   if (r.kind === 'auth_error') return { kind: 'pause', reason: 'auth', until: null, message: r.message, httpStatus: r.httpStatus, code: 'auth' };
