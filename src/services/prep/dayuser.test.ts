@@ -143,8 +143,8 @@ describe('Day 1~100: 자동 준비에서 빠진다', () => {
   });
 });
 
-describe('Day 자료 만들기 (사용자 문장만)', () => {
-  it('요청: 사용자 문장만 사용자 순서대로 1번부터, 원문 그대로 — AI 문장·자막·힌트 없음, 사용자 요청 표시', async () => {
+describe('Day 자료 만들기 (영상 원문 후보 + 사용자 문장)', () => {
+  it('요청: 영상 원문 후보(번호순) → 사용자 문장(사용자 순서), 1번부터 원문 그대로 — 자막·힌트 없음, 사용자 요청 표시', async () => {
     const { db } = createTestRepos();
     await seedDay7(db);
     const { client, gemini, sent } = server();
@@ -158,19 +158,19 @@ describe('Day 자료 만들기 (사용자 문장만)', () => {
     expect(body.origin).toBe('user');
     expect(body).toMatchObject({ seriesKind: 'day', dayNumber: 7 });
     expect(body.sentences.map((s) => [s.number, s.text])).toEqual([
-      [1, 'I could use a cup of coffee.'],
-      [2, 'We could really use some help here.'],
-      [3, 'That sounds like a plan.'],
+      [1, 'I could use a break.'],
+      [2, 'You could use some rest.'],
+      [3, 'I could use a cup of coffee.'],
+      [4, 'We could really use some help here.'],
+      [5, 'That sounds like a plan.'],
     ]);
     expect(body.sentences.every((s) => s.chunks.length === 0)).toBe(true);
     expect('transcript' in body).toBe(false);
     expect('taughtHints' in body).toBe(false);
-    const raw = JSON.stringify(body);
-    expect(raw).not.toContain('You could use some rest.');
-    expect(raw).not.toContain('Welcome to Day 7');
+    expect(JSON.stringify(body)).not.toContain('Welcome to Day 7');
   });
 
-  it('저장: 대화·Chunk는 사용자 문장에만 연결, 원문·AI 문장·기존 표현은 그대로, 이미 있으면 다시 만들지 않음', async () => {
+  it('저장: 대화·Chunk는 Day 자료 문장(원문 후보 + 사용자 문장)에 연결, 문장·기존 표현은 그대로, 이미 있으면 다시 만들지 않음', async () => {
     const { db } = createTestRepos();
     const { ai, mine } = await seedDay7(db);
     const hintBefore = await db.expressions.get('ex-hint');
@@ -181,14 +181,11 @@ describe('Day 자료 만들기 (사용자 문장만)', () => {
     const d = (await db.dialogues.where('videoId').equals('d7').toArray()).find((x) => x.generatedBy === 'ai')!;
     expect(d).toMatchObject({ kind: 'original', sourceDays: [7] });
     const sources = d.lines.map((l) => l.sourceSentenceId).filter(Boolean);
-    expect(sources.length).toBe(3);
-    expect(sources.every((id) => ['u1', 'u2', 'u3'].includes(id!))).toBe(true);
+    expect(new Set(sources)).toEqual(new Set(['ai1', 'ai2', 'u1', 'u2', 'u3']));
     const items = await db.learningItems.where('videoId').equals('d7').toArray();
     const core = items.filter((i) => i.kind === 'core');
     expect(core).toHaveLength(1);
-    expect(core[0].occurrences!.map((o) => o.sentenceId).sort()).toEqual(['u1', 'u2']);
-    const links = items.filter((i) => i.id !== 'li-hint').flatMap((i) => [i.sentenceId, ...(i.occurrences ?? []).map((o) => o.sentenceId)]).filter(Boolean);
-    expect(links.some((id) => id === 'ai1' || id === 'ai2')).toBe(false);
+    expect(core[0].occurrences!.map((o) => o.sentenceId).sort()).toEqual(['ai1', 'ai2', 'u1', 'u2']);
     // 원문 보존: 문장은 새로 만들지 않고, 기존 문장(AI·사용자)은 그대로
     const after = await db.keySentences.where('videoId').equals('d7').toArray();
     expect(after).toHaveLength(5);
@@ -241,7 +238,8 @@ describe('Day 자료 만들기 (사용자 문장만)', () => {
     await seedVideo(db, 'l1', 'longDay0003', '[Day 3] long');
     for (let i = 1; i <= 21; i++) await addSentence(db, `m${i}`, 'm1', i, `Sentence number ${i}.`, 'manual');
     await addSentence(db, 'long', 'l1', 1, `${'word '.repeat(110)}end.`, 'manual');
-    await addSentence(db, 'aiOnly', 'e1', 1, 'AI sentence only.', 'ai_extracted', { aiNumber: 1 });
+    // 번호가 없는 AI 문장은 영상 원문 후보가 아님 → 재료로 쓰지 않음 (원문 후보를 새로 만들지도 않음)
+    await addSentence(db, 'aiNoNumber', 'e1', 1, 'AI sentence without number.', 'ai_extracted');
     const { client, gemini } = server();
     const pc = device(db, client);
     for (const id of ['e1', 'm1', 'l1']) {
@@ -335,18 +333,22 @@ describe('Day 자료 만들기 (사용자 문장만)', () => {
 });
 
 describe('핵심 문장 입력 (Day 영상: 최대 20개)', () => {
-  it('Day: 사용자 문장끼리만 세고(예전 AI 문장 제외) 20개까지, 500자 초과는 저장 안 함 / 일반: 기존 5개 규칙 그대로', async () => {
+  it('Day: 20개 제한은 Day 자료에 쓰는 문장(원문 후보 포함, 중복·뺀 문장 제외)으로 세고, 500자 초과는 저장 안 함 / 일반: 기존 5개 규칙 그대로', async () => {
     const { db, repos } = createTestRepos();
     await seedVideo(db, 'd', 'dayVideo001', '[Day 10] x');
     for (let i = 1; i <= 6; i++) await addSentence(db, `ai${i}`, 'd', 100 + i, `AI sentence ${i}.`, 'ai_extracted', { aiNumber: i });
-    // AI 문장과 같은 문장도 사용자 문장으로 넣을 수 있음 (Day 재료는 사용자 문장만)
+    // 원문 후보와 같은 문장도 사용자 문장으로 넣을 수 있지만 Day 자료에는 한 번만 (개수에도 한 번)
     await addKeySentence(repos, 'd', { english: 'AI sentence 1.', origin: 'transcript' }, { day: true });
     await expect(addKeySentence(repos, 'd', { english: 'AI sentence 1.', origin: 'manual' }, { day: true })).rejects.toMatchObject({ code: 'duplicate' });
-    for (let i = 2; i <= 20; i++) await addKeySentence(repos, 'd', { english: `My sentence ${i}.`, origin: 'manual' }, { day: true });
+    for (let i = 1; i <= 14; i++) await addKeySentence(repos, 'd', { english: `My sentence ${i}.`, origin: 'manual' }, { day: true });
+    // 원문 후보 6 + 사용자 14 = 20 → 더 넣을 수 없음
     await expect(addKeySentence(repos, 'd', { english: 'One more.', origin: 'manual' }, { day: true })).rejects.toMatchObject({ code: 'limit' });
     const mine = (await db.keySentences.where('videoId').equals('d').toArray()).filter((s) => s.origin !== 'ai_extracted');
-    expect(mine).toHaveLength(20);
-    expect(new Set(mine.map((s) => s.order)).size).toBe(20);
+    expect(mine).toHaveLength(15);
+    expect(new Set(mine.map((s) => s.order)).size).toBe(15);
+    // 원문 후보 하나를 빼면 자리가 생김
+    await createContentStore(db).setDayExcluded('d', 'ai6', true);
+    await addKeySentence(repos, 'd', { english: 'One more.', origin: 'manual' }, { day: true });
     await seedVideo(db, 'd2', 'dayVideo002', '[Day 11] y');
     await expect(addKeySentence(repos, 'd2', { english: `${'a'.repeat(501)}`, origin: 'manual' }, { day: true })).rejects.toMatchObject({ code: 'limit' });
     // 일반 영상은 예전 규칙 그대로 (5개)

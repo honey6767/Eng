@@ -45,13 +45,14 @@ const ks = (id: string, videoId: string, order: number, english: string, origin:
 
 async function view(db: StudyDatabase, videoId: string) {
   const store = createContentStore(db);
-  const [sentences, items, dialogues, task] = await Promise.all([
+  const [sentences, items, dialogues, task, excluded] = await Promise.all([
     db.keySentences.where('videoId').equals(videoId).toArray(),
     db.learningItems.where('videoId').equals(videoId).toArray(),
     db.dialogues.where('videoId').equals(videoId).toArray(),
     store.getTask(`dayuser:${videoId}`),
+    store.getDayExcluded(videoId),
   ]);
-  return dayViewOf(sentences, items, dialogues, dayUserRecordOf(task));
+  return dayViewOf(sentences, items, dialogues, dayUserRecordOf(task), excluded);
 }
 
 const TRANSCRIPT = ['Welcome.', '1. I could use a break.', '2. You could use some rest.', '3. That sounds like a plan.'];
@@ -98,8 +99,8 @@ describe('기존 Day 자료와 호환', () => {
   });
 });
 
-describe('사용자 문장 Day 자료: 요청 때 번호 유지', () => {
-  async function made() {
+describe('Day 자료(영상 원문 후보 + 사용자 문장): 요청 때 번호 유지', () => {
+  async function made(opts: { excludeCandidate?: boolean } = {}) {
     const s = setup();
     await seedVideo(s.db, 'd7', '[Day 7] 사용자 문장');
     await s.db.keySentences.bulkAdd([
@@ -108,6 +109,7 @@ describe('사용자 문장 Day 자료: 요청 때 번호 유지', () => {
       ks('u2', 'd7', 2, 'We could really use some help here.', 'manual'),
       ks('u3', 'd7', 3, 'That sounds like a plan.', 'manual'),
     ]);
+    if (opts.excludeCandidate) await s.pc.setDayExcluded('d7', 'ai1', true);
     await s.pc.makeDay('d7');
     await s.pc.start();
     return s;
@@ -119,15 +121,16 @@ describe('사용자 문장 Day 자료: 요청 때 번호 유지', () => {
     expect(task).toMatchObject({ status: 'applied', resultText: null });
     const rec = dayUserRecordOf(task)!;
     expect(rec.sentences).toEqual([
-      { number: 1, text: 'I could use a cup of coffee.' },
-      { number: 2, text: 'We could really use some help here.' },
-      { number: 3, text: 'That sounds like a plan.' },
+      { number: 1, text: 'I could use a break.' },
+      { number: 2, text: 'I could use a cup of coffee.' },
+      { number: 3, text: 'We could really use some help here.' },
+      { number: 4, text: 'That sounds like a plan.' },
     ]);
     expect((await db.dialogues.where('videoId').equals('d7').first())!.id).toBe(`dlg-day-${rec.requestId}`);
     const v = await view(db, 'd7');
     expect(v.mode).toBe('user');
-    expect([...v.numbering.entries()]).toEqual([['u1', 1], ['u2', 2], ['u3', 3]]);
-    expect(v.aiSentences.map((s) => s.id)).toEqual(['ai1']);
+    expect([...v.numbering.entries()]).toEqual([['ai1', 1], ['u1', 2], ['u2', 3], ['u3', 4]]);
+    expect(v.candidates.map((s) => s.id)).toEqual(['ai1']);
   });
 
   it('자료를 만든 뒤 문장을 앞쪽 순서로 더하거나 연결 없는 문장을 빼도 자료의 번호는 그대로, 새 문장은 자료에 끼지 않음', async () => {
@@ -136,13 +139,16 @@ describe('사용자 문장 Day 자료: 요청 때 번호 유지', () => {
     await db.keySentences.add(ks('u9', 'd7', 9, 'Added later.', 'manual'));
     await db.keySentences.delete('u9'); // 연결 없는 문장 선정 취소
     const v = await view(db, 'd7');
-    expect([...v.numbering.entries()]).toEqual([['u1', 1], ['u2', 2], ['u3', 3]]);
+    expect([...v.numbering.entries()]).toEqual([['ai1', 1], ['u1', 2], ['u2', 3], ['u3', 4]]);
     expect(v.numbering.has('u0')).toBe(false);
     expect(v.linkedIds.has('u0')).toBe(false);
   });
 
-  it('요청 기록이 없을 때(다른 기기로 옮김 등): 연결로 사용자 자료를 알아보고 지금 순서로 번호 / 다른 요청의 기록이면 쓰지 않음', async () => {
-    const { db, store } = await made();
+  it('요청 기록이 없을 때: 원문 후보를 쓴 자료는 예전 자료처럼 아무것도 접지 않고 보여 줌(안전), 사용자 문장만 쓴 자료는 연결로 알아보고 지금 순서로 번호', async () => {
+    const withCandidate = await made();
+    await withCandidate.store.putTask('dayuser:d7', null);
+    expect((await view(withCandidate.db, 'd7')).mode).toBe('old_ai');
+    const { db, store } = await made({ excludeCandidate: true });
     const task = (await store.getTask('dayuser:d7'))!;
     await store.putTask('dayuser:d7', null);
     let v = await view(db, 'd7');

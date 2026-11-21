@@ -64,6 +64,8 @@ export interface AiDialogueRequest {
 export const AI_PACK_PROMPT_VERSION = 'p5';
 /** 이미 저장된 원문 문장 → 공통 핵심 Chunk·Day 통합 대화문 */
 export const AI_DAYPACK_PROMPT_VERSION = 'dp5';
+/** Day 1~100 영상의 Day 자료(사용자가 고른 핵심 문장만) — 고른 문장을 모두 원문 그대로 대화문에 넣는 규칙 */
+export const AI_DAYUSER_PROMPT_VERSION = 'du1';
 
 export interface AiPackRequest {
   task: 'pack';
@@ -96,6 +98,8 @@ export interface AiDayPackRequest {
   /** 자막 추출 때 '강사가 가르친 표현'으로 찾은 것 (참고) */
   taughtHints?: string[];
   promptVersion: string;
+  /** 2~99: 같은 문장으로 새로 만들기 (앞 결과가 규칙에 맞지 않아 사용자가 다시 누른 경우). 없으면 1번째 */
+  variant?: number;
 }
 
 /**

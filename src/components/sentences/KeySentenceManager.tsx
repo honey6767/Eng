@@ -48,6 +48,7 @@ export function KeySentenceManager({
   linkedIds,
   excludedIds,
   hasMaterial = false,
+  dayIncludedCount,
 }: {
   video: Video;
   transcript: Transcript | undefined;
@@ -63,34 +64,37 @@ export function KeySentenceManager({
   excludedIds?: ReadonlySet<string>;
   /** Day 영상: Day 자료가 이미 있음 (빼기·다시 넣기 버튼 숨김) */
   hasMaterial?: boolean;
+  /** Day 영상: Day 자료에 실제로 쓰는 문장 수 (영상 원문 후보 포함, 뺀 문장·중복 제외) — 20개 제한에 쓴다 */
+  dayIncludedCount?: number;
 }) {
   const sorted = [...sentences].sort((a, b) => a.order - b.order);
   const max = day ? DAY_SENTENCE_MAX : KEY_SENTENCE_COUNT;
   // Day: 개수 제한은 Day 자료에 실제로 쓰는 문장(뺀 문장 제외)만
   const counted = day && excludedIds ? sentences.filter((s) => !excludedIds.has(s.id)) : sentences;
   const excludedCount = sentences.length - counted.length;
-  const remaining = max - counted.length;
+  const total = day && dayIncludedCount !== undefined ? dayIncludedCount : counted.length;
+  const remaining = max - total;
 
   return (
     <div className="space-y-4">
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-bold">
-            핵심 문장 <span data-testid="key-sentence-count">{counted.length}</span> / {max}
+            핵심 문장 <span data-testid="key-sentence-count">{total}</span> / {max}
             {excludedCount > 0 && <span className="ml-1.5 text-sm font-semibold text-muted" data-testid="day-excluded-count">· 뺀 문장 {excludedCount}</span>}
           </h3>
           {day ? (
-            <Badge tone={counted.length ? 'ok' : 'warn'}>{counted.length ? `Day 자료 재료 ${counted.length}개` : '1개 이상 입력'}</Badge>
+            <Badge tone={total ? 'ok' : 'warn'}>{total ? `Day 자료 재료 ${total}개` : '1개 이상 입력'}</Badge>
           ) : remaining === 0 ? (
             <Badge tone="ok">선정 완료</Badge>
           ) : (
             <Badge tone="warn">{remaining}개 더 선정</Badge>
           )}
         </div>
-        <ProgressBar value={(counted.length / max) * 100} className="mt-2" label="핵심 문장 선정 진행률" />
+        <ProgressBar value={(total / max) * 100} className="mt-2" label="핵심 문장 선정 진행률" />
         {day && (
           <p className="mt-2 text-sm text-muted">
-            직접 입력하거나 자막에서 고른 문장(1~{DAY_SENTENCE_MAX}개)만 Day 자료 재료가 돼요. 예전에 AI가 뽑은 문장은 쓰지 않아요. ‘Day 자료에서 빼기’를 누른 문장은 문장·학습 기록은 그대로 두고 Day 자료 요청에서만 빠져요 (개수에도 세지 않음).
+            영상 원문 후보(위)와 여기서 직접 입력하거나 자막에서 고른 문장이 합쳐서 Day 자료 재료가 돼요 (최대 {DAY_SENTENCE_MAX}개, 같은 문장은 한 번만). ‘Day 자료에서 빼기’를 누른 문장은 문장·학습 기록은 그대로 두고 Day 자료 요청에서만 빠져요 (개수에도 세지 않음).
           </p>
         )}
         <p className="mt-2 text-sm text-muted">

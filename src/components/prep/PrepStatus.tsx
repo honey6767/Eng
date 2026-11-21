@@ -6,7 +6,7 @@ import type { AiUsageResponse } from '@/types/aiApi';
 import type { PrepSnapshot } from '@/services/prep/prepController';
 import type { PrepRow, PrepStage } from '@/services/prep/prepRunner';
 import type { KeySentence } from '@/types/models';
-import { daySentenceProblem, DAY_SENTENCE_MAX, excludedDaySentences, includedDaySentences } from '@/services/days/daySeries';
+import { daySentenceLabel, daySentenceProblem, DAY_SENTENCE_MAX, excludedDaySentences, includedDaySentences, isOriginalCandidate } from '@/services/days/daySeries';
 import { useToast } from '@/hooks/useToast';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -327,7 +327,12 @@ export function DayMaterialCard({ videoId, dayNumber, sentences, hasMaterial, ex
       ) : (
         <>
           <p className="mt-1 text-sm text-muted">
-            아래 ‘핵심 문장’에 직접 입력하거나 자막에서 고른 문장(1~{DAY_SENTENCE_MAX}개)만으로 공통 핵심 Chunk와 Day 대화문을 만들어요. 원문 문장은 고치지 않고, AI가 예전에 뽑은 문장과 자막은 보내지 않아요.
+            영상 원문 후보(AI가 자막에서 찾은 번호 문장)와 직접 입력하거나 자막에서 고른 문장(합쳐서 1~{DAY_SENTENCE_MAX}개)으로 공통 핵심 Chunk와 Day 대화문을 만들어요. 넣은 문장은 모두 원문 그대로 대화문에 들어가요. 뺀 문장과 자막은 보내지 않아요.
+            {mine.length > 0 && (
+              <span className="mt-0.5 block text-xs text-subtle" data-testid="day-material-breakdown">
+                보낼 문장: 영상 원문 후보 {mine.filter(isOriginalCandidate).length}개 + 직접 넣은 문장 {mine.filter((x) => !isOriginalCandidate(x)).length}개
+              </span>
+            )}
           </p>
           {running && snap.status.kind === 'running' && snap.status.note && <p className="mt-1 text-xs text-subtle">{snap.status.note}</p>}
           {failure && (
@@ -357,7 +362,7 @@ export function DayMaterialCard({ videoId, dayNumber, sentences, hasMaterial, ex
           <ul className="mt-1 space-y-0.5">
             {left.map((s) => (
               <li key={s.id} className="truncate text-muted">
-                <b className="text-ink">{s.order}</b> <span className="en">{s.english}</span>
+                <b className="text-ink">{daySentenceLabel(s)}</b> <span className="en">{s.english}</span>
               </li>
             ))}
           </ul>
@@ -398,5 +403,46 @@ export function DayExclusionToggle({ videoId, sentenceId, excluded, hasMaterial 
     >
       {excluded ? 'Day 자료에 다시 넣기' : 'Day 자료에서 빼기'}
     </Button>
+  );
+}
+
+/**
+ * 영상 원문 후보 — 예전에 AI가 자막에서 찾아 저장한 번호 문장. 실제 영상 원문이라고 확정하지 않는다.
+ * 기본으로 Day 자료에 포함되고, 틀리거나 원하지 않는 문장은 뺄 수 있다 (문장 자체는 고치거나 지우지 않음)
+ */
+export function DayCandidatesCard({ videoId, candidates, excludedIds, hasMaterial }: { videoId: string; candidates: KeySentence[]; excludedIds: ReadonlySet<string>; hasMaterial: boolean }) {
+  if (!candidates.length) return null;
+  const used = candidates.filter((c) => !excludedIds.has(c.id)).length;
+  return (
+    <Card className="p-4" data-testid="day-candidates">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="font-bold">영상 원문 후보 (AI가 자막에서 찾음 · 확인 필요)</h3>
+        <span className="ml-auto text-xs text-muted" data-testid="day-candidates-count">
+          {candidates.length}개 중 {used}개 포함
+        </span>
+      </div>
+      <p className="mt-1 text-sm text-muted">예전에 AI가 자막에서 찾은 번호 문장이에요. 실제 영상 원문과 다를 수 있으니 확인해 주세요. 기본으로 Day 자료에 포함되고, 틀리거나 원하지 않는 문장은 ‘Day 자료에서 빼기’를 눌러 주세요 (문장은 고치거나 지우지 않아요).</p>
+      <ol className="mt-3 space-y-2">
+        {candidates.map((c) => {
+          const excluded = excludedIds.has(c.id);
+          return (
+            <li key={c.id} className={`rounded-xl border border-line p-3 ${excluded ? 'opacity-70' : ''}`} data-testid="day-candidate" data-excluded={String(excluded)}>
+              <div className="flex items-start gap-2.5">
+                <span className="grid size-7 shrink-0 place-items-center rounded-full bg-canvas text-sm font-bold text-ink">{c.aiNumber}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="en text-[16px] font-semibold leading-snug text-ink">{c.english}</p>
+                  {c.korean && <p className="mt-0.5 text-sm text-muted">{c.korean}</p>}
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                    <Badge tone="info">영상 원문 후보</Badge>
+                    {excluded && <Badge tone="warn">Day 자료에서 뺌</Badge>}
+                    <DayExclusionToggle videoId={videoId} sentenceId={c.id} excluded={excluded} hasMaterial={hasMaterial} />
+                  </div>
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </Card>
   );
 }

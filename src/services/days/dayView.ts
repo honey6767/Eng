@@ -1,5 +1,5 @@
 import type { Dialogue, KeySentence, LearningItem } from '@/types/models';
-import { excludedDaySentences, includedDaySentences, userSentencesOf } from './daySeries';
+import { daySourceSentences, excludedDaySentences, includedDaySentences, originalCandidatesOf, userSentencesOf } from './daySeries';
 
 /** 'dayuser:<영상>' 요청 기록에서 읽은 것 (appMeta 'aiTasks' — 기존 형식 그대로, 읽기만) */
 export interface DayUserRequestRecord {
@@ -13,8 +13,8 @@ const linksOf = (i: LearningItem) => [i.sentenceId, ...(i.occurrences ?? []).map
 
 /**
  * Day 영상 화면 구성 (저장 데이터는 읽기만)
- * - none: 아직 Day 자료 없음 → 문장 입력·만들기, 예전 AI 문장은 접어서 참고로
- * - user: 사용자 문장으로 만든 Day 자료 → 그 자료만 위에(요청 때 번호), 예전 AI 문장은 접어서 참고로
+ * - none: 아직 Day 자료 없음 → 영상 원문 후보(기본 포함)·직접 넣은 문장으로 만들기, 예전 AI 자료는 접어서 참고로
+ * - user: 'Day 자료 만들기'로 만든 자료(영상 원문 후보 + 직접 넣은 문장) → 그 자료만 위에(요청 때 번호), 예전 AI 자료는 접어서 참고로
  * - old_ai: 그 밖의 기존 Day 자료(예전 pack·daypack 방식) → 예전 화면 그대로 (접거나 번호를 바꾸지 않음)
  *
  * user 판단: 'dayuser' 요청 기록의 요청 식별자가 Day 대화문(dlg-day-<요청 식별자>)과 같거나,
@@ -40,8 +40,11 @@ export function dayViewOf(sentences: KeySentence[], items: LearningItem[], dialo
   let numbering = new Map<string, number>();
   if (fromRecord) {
     const used = new Set<string>();
+    // 요청 문장은 영상 원문 후보 + 사용자 문장 중 빼지 않은 것에서 왔다 (뺀 문장은 건너뜀 —
+    // 원문 후보를 빼고 같은 문장을 사용자가 넣었다면 사용자 문장에 연결). Day 자료가 생긴 뒤에는 빼기 상태를 바꿀 수 없어 요청 때와 같다
+    const pool = daySourceSentences(sentences).filter((s) => !excluded.has(s.id));
     for (const x of record!.sentences) {
-      const s = mine.find((m) => !used.has(m.id) && m.english === x.text);
+      const s = pool.find((m) => !used.has(m.id) && m.english === x.text);
       if (s) {
         used.add(s.id);
         numbering.set(s.id, x.number);
@@ -52,7 +55,7 @@ export function dayViewOf(sentences: KeySentence[], items: LearningItem[], dialo
   if (!numbering.size) numbering = new Map(includedDaySentences(sentences, excluded).map((s, i) => [s.id, i + 1]));
   // 선정 취소 보호: 이 영상의 Chunk가 연결한 사용자 문장 (대화 원문 출처는 서비스가 직접 확인)
   const linkedIds = new Set(items.flatMap(linksOf).filter((id) => mineIds.has(id)));
-  return { mode, hasMaterial: !!dlg, aiSentences, userItems, oldItems: items.filter((i) => !userItemIds.has(i.id)), numbering, linkedIds, excludedSentences: excludedDaySentences(sentences, excluded) };
+  return { mode, hasMaterial: !!dlg, aiSentences, userItems, oldItems: items.filter((i) => !userItemIds.has(i.id)), numbering, linkedIds, excludedSentences: excludedDaySentences(sentences, excluded), candidates: originalCandidatesOf(sentences) };
 }
 
 /** appMeta 'aiTasks'의 'dayuser:<영상>' 기록 → DayUserRequestRecord (형식이 다르면 null) */

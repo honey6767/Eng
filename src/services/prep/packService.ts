@@ -1,5 +1,6 @@
 import {
   AI_DAYPACK_PROMPT_VERSION,
+  AI_DAYUSER_PROMPT_VERSION,
   AI_PACK_PROMPT_VERSION,
   CONTENT_LIMITS,
   DAYPACK_LIMITS,
@@ -64,11 +65,13 @@ export function buildDayPackRequest(video: Video, day: DayAssignment | undefined
 }
 
 /**
- * Day 1~100 영상의 Day 자료 요청 — 사용자가 직접 입력하거나 자막에서 고른 핵심 문장만 (사용자가 정한 순서, 1번부터)
- * - AI가 뽑은 문장·저장된 자막·자막 분석 힌트는 보내지 않는다
+ * Day 1~100 영상의 Day 자료 요청 — Day 자료 문장만 (includedDaySentences: 영상 원문 후보(번호순) → 직접 입력·자막에서 고른 문장,
+ * 뺀 문장·중복 제외), 1번부터
+ * - 저장된 자막·자막 분석 힌트는 보내지 않는다. 번호 없는 AI 문장은 재료가 아니다
  * - 영어 원문은 자르거나 고치지 않는다 (길면 보내기 전에 거절 — daySentenceProblem)
+ * - 넣은 문장은 모두 원문 그대로 대화문에 들어가야 한다 (서버 프롬프트 du1 + 저장 전 검사 validateDayPack requireAll)
  */
-export function buildDayUserRequest(video: Video, day: DayAssignment | undefined, sentences: KeySentence[], excluded: ReadonlySet<string> = new Set()): AiDayPackRequest {
+export function buildDayUserRequest(video: Video, day: DayAssignment | undefined, sentences: KeySentence[], excluded: ReadonlySet<string> = new Set(), variant = 1): AiDayPackRequest {
   const s = seriesOf(video, day);
   const L = DAYPACK_LIMITS;
   return {
@@ -79,7 +82,10 @@ export function buildDayUserRequest(video: Video, day: DayAssignment | undefined
     dayNumber: s.dayNumber,
     // Day 자료에서 뺀 문장은 보내지 않는다 (번호도 건너뜀)
     sentences: includedDaySentences(sentences, excluded).map((x, i) => ({ number: i + 1, text: x.english, meaningKo: (x.korean ?? '').slice(0, L.sentenceChars), chunks: [] })),
-    promptVersion: AI_DAYPACK_PROMPT_VERSION,
+    // 고른 문장을 모두 원문 그대로 대화문에 넣는 규칙 (서버 프롬프트)
+    promptVersion: AI_DAYUSER_PROMPT_VERSION,
+    // 앞 결과가 규칙에 맞지 않아 다시 누른 경우만 (같은 문장으로 새로 생성)
+    ...(variant >= 2 ? { variant: Math.min(99, variant) } : {}),
   };
 }
 
@@ -284,7 +290,22 @@ export function validatePack(text: string, durationSec: number | null): PackVali
   return { ok: true, content, pack, issues };
 }
 
-export function validateDayPack(text: string, sentences: { number: number; text: string }[]): PackValidation {
+/** 영어 문장을 비교용 단어 열로 (대소문자·구두점·따옴표 모양 무시, 단어와 어순은 그대로) */
+const wordSeq = (t: string) => (t.toLowerCase().replace(/[’‘`]/g, "'").match(/[a-z0-9']+/g) ?? []);
+/** 줄 안에 원문 문장이 원문 그대로(단어·어순 그대로, 이어서) 들어 있는지 */
+export function containsVerbatim(line: string, sentence: string): boolean {
+  const a = wordSeq(line);
+  const b = wordSeq(sentence);
+  if (!b.length || b.length > a.length) return false;
+  for (let i = 0; i + b.length <= a.length; i++) if (b.every((w, j) => a[i + j] === w)) return true;
+  return false;
+}
+
+/**
+ * opts.requireAll (Day 1~100 Day 자료: 영상 원문 후보 + 직접 넣은 문장): 보낸 문장이 모두 원문 그대로 대화 줄에 들어 있어야 한다.
+ * 출처 번호를 빠뜨린 줄은 원문이 그대로 들어 있으면 그 번호로 연결하고, 하나라도 빠지거나 바뀌었으면 결과를 쓰지 않는다.
+ */
+export function validateDayPack(text: string, sentences: { number: number; text: string }[], opts: { requireAll?: boolean } = {}): PackValidation {
   let raw: Record<string, unknown>;
   try {
     raw = JSON.parse(text);
@@ -294,6 +315,19 @@ export function validateDayPack(text: string, sentences: { number: number; text:
   const issues: string[] = [];
   const pack = validateDayPackObject(raw, sentences, issues);
   if (typeof pack === 'string') return { ok: false, error: pack };
+  if (opts.requireAll) {
+    const missing: number[] = [];
+    for (const s of sentences) {
+      if (pack.lines.some((l) => l.sourceNumber === s.number && containsVerbatim(l.en, s.text))) continue;
+      const free = pack.lines.find((l) => l.sourceNumber === null && containsVerbatim(l.en, s.text));
+      if (free) {
+        free.sourceNumber = s.number;
+        continue;
+      }
+      missing.push(s.number);
+    }
+    if (missing.length) return { ok: false, error: `고른 핵심 문장 ${sentences.length}개 중 ${missing.join(', ')}번이 원문 그대로 대화문에 들어가지 않았어요.` };
+  }
   return { ok: true, content: null, pack, issues };
 }
 

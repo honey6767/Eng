@@ -53,14 +53,15 @@ const ks = (id: string, videoId: string, order: number, english: string, origin:
 });
 const LONG = `Long ${'word '.repeat(110)}end.`;
 
-/** Day 15: 학습 기록·복습 기록이 있는 500자 초과 문장 + 일반 문장 2개 + 예전 AI 문장 */
+/** Day 15: 학습 기록·복습 기록이 있는 500자 초과 문장 + 일반 문장 2개 + 영상 원문 후보 1개(번호 있는 AI 문장) + 번호 없는 AI 문장 */
 async function seedStuck(db: StudyDatabase) {
   await seedVideo(db, 'x', '[Day 15] 긴 문장');
   await db.keySentences.bulkAdd([
     ks('xl', 'x', 1, LONG, 'manual', { status: 'learning', correctCount: 3, wrongCount: 1 }),
     ks('x2', 'x', 2, 'I could use a cup of coffee.', 'transcript'),
     ks('x3', 'x', 3, 'That sounds like a plan.', 'manual'),
-    ks('xa', 'x', 101, 'AI sentence.', 'ai_extracted', { aiNumber: 1 }),
+    ks('xa', 'x', 101, 'I could use a break.', 'ai_extracted', { aiNumber: 1 }),
+    ks('xn', 'x', 102, 'AI sentence without number.', 'ai_extracted'),
   ]);
   await db.reviewStates.add({ id: 'sentence:xl', createdAt: T, updatedAt: T, itemType: 'sentence', itemId: 'xl' } as never);
   await db.appMeta.put({ key: 'studyQueue', value: { cycle: 1, order: ['x'] } });
@@ -84,7 +85,12 @@ describe('Day 자료에서 뺀 문장', () => {
     expect(await pc.setDayExcluded('x', 'xl', false)).toBe('ok');
     expect((await db.appMeta.get(DAY_EXCLUSIONS_META_KEY))?.value).toEqual({});
     expect(await snapshotOf(db)).toEqual(before);
-    expect(await pc.setDayExcluded('x', 'xa', true)).toBe('not_user_sentence');
+    // 영상 원문 후보(번호 있는 AI 문장)도 빼고 다시 넣을 수 있음, 번호 없는 AI 문장은 재료가 아니라 거절
+    expect(await pc.setDayExcluded('x', 'xa', true)).toBe('ok');
+    expect((await db.appMeta.get(DAY_EXCLUSIONS_META_KEY))?.value).toEqual({ x: ['xa'] });
+    expect(await pc.setDayExcluded('x', 'xa', false)).toBe('ok');
+    expect(await snapshotOf(db)).toEqual(before);
+    expect(await pc.setDayExcluded('x', 'xn', true)).toBe('not_user_sentence');
     await seedVideo(db, 'y', '[Day 16] 다른 영상');
     expect(await pc.setDayExcluded('y', 'x2', true)).toBe('not_found');
     expect((await db.appMeta.get(DAY_EXCLUSIONS_META_KEY))?.value).toEqual({});
@@ -101,18 +107,18 @@ describe('Day 자료에서 뺀 문장', () => {
     expect(pc.getSnapshot().rows.find((r) => r.video.id === 'x')?.failure?.error.message).toContain('Day 자료에서 빼기');
     const before = await snapshotOf(db);
     expect(await pc.setDayExcluded('x', 'xl', true)).toBe('ok');
-    expect(pc.getSnapshot().rows.find((r) => r.video.id === 'x')?.daySentences).toBe(2);
+    expect(pc.getSnapshot().rows.find((r) => r.video.id === 'x')?.daySentences).toBe(3);
     await pc.makeDay('x');
     await pc.start();
     expect(gemini.createCalls).toEqual(['daypack:xxxxxxxxxxx']);
     const body = sent.find((s) => s.body.task === 'daypack')!.body as AiDayPackRequest;
-    expect(body.sentences.map((s) => [s.number, s.text])).toEqual([[1, 'I could use a cup of coffee.'], [2, 'That sounds like a plan.']]);
+    expect(body.sentences.map((s) => [s.number, s.text])).toEqual([[1, 'I could use a break.'], [2, 'I could use a cup of coffee.'], [3, 'That sounds like a plan.']]);
     expect(JSON.stringify(sent.map((s) => s.body))).not.toContain('Long word');
     const d = (await db.dialogues.where('videoId').equals('x').first())!;
     const items = await db.learningItems.where('videoId').equals('x').toArray();
     const refs = [...d.lines.map((l) => l.sourceSentenceId), ...items.flatMap((i) => [i.sentenceId, ...(i.occurrences ?? []).map((o) => o.sentenceId)])].filter(Boolean);
     expect(refs.length).toBeGreaterThan(0);
-    expect(refs.every((id) => id === 'x2' || id === 'x3')).toBe(true);
+    expect(refs.every((id) => id === 'xa' || id === 'x2' || id === 'x3')).toBe(true);
     const after = await snapshotOf(db);
     expect(after.sentences).toEqual(before.sentences);
     expect(after.reviews).toEqual(before.reviews);

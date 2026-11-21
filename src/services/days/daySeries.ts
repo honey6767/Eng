@@ -1,5 +1,6 @@
 import { parseDayNumber } from '@/db/upgradeV2toV3';
 import type { DayAssignment, KeySentence, Video } from '@/types/models';
+import { normalizeExpressionKey } from '@/utils/text';
 
 /**
  * Day 1~100 시리즈 판별 — 한 곳에서만 정한다 (저장하지 않고 매번 계산, DB 변경 없음)
@@ -9,7 +10,8 @@ import type { DayAssignment, KeySentence, Video } from '@/types/models';
  * 3. 1~100이면 Day 영상, 그 밖(0, 101 이상, 형식 불일치)은 일반 영상
  *
  * Day 영상은 자동 AI 처리(자막 추출·AI 자막·자료 생성)를 하지 않는다.
- * 사용자가 직접 입력하거나 자막에서 고른 핵심 문장으로 'Day 자료 만들기'를 눌렀을 때만 요청한다.
+ * 'Day 자료 만들기'를 눌렀을 때만 요청한다. 재료: 영상 원문 후보(예전에 AI가 자막에서 찾은 번호 문장, 기본 포함)
+ * + 사용자가 직접 입력하거나 자막에서 고른 문장 − 사용자가 뺀 문장, 같은 문장은 한 번만.
  */
 
 export const DAY_SERIES_MIN = 1;
@@ -30,7 +32,7 @@ export function daySeriesOf(video: Pick<Video, 'title'>, day: Pick<DayAssignment
   return typeof n === 'number' && Number.isInteger(n) && n >= DAY_SERIES_MIN && n <= DAY_SERIES_MAX ? { isDay: true, dayNumber: n } : { isDay: false, dayNumber: null };
 }
 
-/** Day 자료 재료: 사용자가 직접 입력하거나 자막에서 고른 문장 (AI가 뽑은 문장은 제외), 사용자가 정한 순서대로 */
+/** 사용자 문장: 직접 입력하거나 자막에서 고른 문장 (AI가 뽑은 문장은 제외), 사용자가 정한 순서대로 */
 export function userSentencesOf(sentences: KeySentence[]): KeySentence[] {
   return sentences.filter((s) => s.origin !== 'ai_extracted').sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt));
 }
@@ -45,9 +47,9 @@ export function daySentenceProblem(sentences: KeySentence[]): string | null {
   if (sentences.length > DAY_SENTENCE_MAX) return `핵심 문장은 ${DAY_SENTENCE_MAX}개까지 쓸 수 있어요 (지금 ${sentences.length}개). 문장을 줄인 뒤 다시 만들어 주세요.`;
   const preview = (t: string) => `“${t.trim().slice(0, 30)}${t.trim().length > 30 ? '…' : ''}”`;
   // 번호는 핵심 문장 카드에 보이는 번호(order)
-  const empty = sentences.flatMap((s) => (s.english.trim() ? [] : [`${s.order}번`]));
+  const empty = sentences.flatMap((s) => (s.english.trim() ? [] : [daySentenceLabel(s)]));
   if (empty.length) return `영어 문장이 비어 있는 핵심 문장이 있어요 (${empty.join(', ')}). 이 문장을 ‘Day 자료에서 빼기’ 하면 나머지 문장으로 만들 수 있어요.`;
-  const long = sentences.flatMap((s) => (s.english.length > DAY_SENTENCE_CHARS ? [`${s.order}번 ${preview(s.english)} ${s.english.length}자`] : []));
+  const long = sentences.flatMap((s) => (s.english.length > DAY_SENTENCE_CHARS ? [`${daySentenceLabel(s)} ${preview(s.english)} ${s.english.length}자`] : []));
   if (long.length)
     return `${DAY_SENTENCE_CHARS}자가 넘는 핵심 문장이 있어 Day 자료를 만들지 않았어요: ${long.join(' · ')}. 원문은 자르지 않아요 — 이 문장을 ‘Day 자료에서 빼기’ 하면 나머지 문장으로 만들 수 있어요 (문장·학습 기록은 그대로).`;
   return null;
@@ -73,12 +75,50 @@ export function parseDayExclusions(value: unknown): DayExclusions {
 
 export const excludedSetOf = (all: DayExclusions, videoId: string): Set<string> => new Set(all[videoId] ?? []);
 
-/** Day 자료에 실제로 쓰는 문장: 사용자 문장(직접 입력·자막에서 고름) 중 빼지 않은 것, 사용자 순서대로 */
-export function includedDaySentences(sentences: KeySentence[], excluded: ReadonlySet<string>): KeySentence[] {
-  return userSentencesOf(sentences).filter((s) => !excluded.has(s.id));
+/**
+ * 영상 원문 후보: 예전에 AI가 자막에서 찾아 저장한 번호 문장 (origin ai_extracted + aiNumber), 영상 번호순.
+ * 실제 영상 원문이라고 확정하지 않는다 — 화면에 '영상 원문 후보 (AI가 자막에서 찾음 · 확인 필요)'로 보여 주고 사용자가 뺄 수 있다.
+ * 같은 문장(대소문자·공백 무시)은 한 번만. 없으면 빈 목록 (새로 만들지 않음)
+ */
+export function originalCandidatesOf(sentences: KeySentence[]): KeySentence[] {
+  const seen = new Set<string>();
+  return sentences
+    .filter((s) => s.origin === 'ai_extracted' && typeof s.aiNumber === 'number')
+    .sort((a, b) => a.aiNumber! - b.aiNumber! || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    .filter((s) => {
+      const k = normalizeExpressionKey(s.english);
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
 }
 
-/** Day 자료에서 뺀 사용자 문장 (사용자 순서). 지워진 문장의 id는 무시 */
-export function excludedDaySentences(sentences: KeySentence[], excluded: ReadonlySet<string>): KeySentence[] {
-  return userSentencesOf(sentences).filter((s) => excluded.has(s.id));
+export const isOriginalCandidate = (s: KeySentence) => s.origin === 'ai_extracted' && typeof s.aiNumber === 'number';
+
+/** Day 자료 재료 후보 전체 (빼기 전): 영상 원문 후보(번호순) → 사용자 문장(직접 입력·자막에서 고름, 사용자 순서) */
+export function daySourceSentences(sentences: KeySentence[]): KeySentence[] {
+  return [...originalCandidatesOf(sentences), ...userSentencesOf(sentences)];
 }
+
+/**
+ * Day 자료에 실제로 쓰는 문장: 재료 후보 중 사용자가 빼지 않은 것, 같은 문장은 한 번만 (앞에 있는 것 — 원문 후보 우선).
+ * 원문 후보를 뺐고 같은 문장을 사용자가 따로 넣었다면 사용자 문장이 쓰인다
+ */
+export function includedDaySentences(sentences: KeySentence[], excluded: ReadonlySet<string>): KeySentence[] {
+  const seen = new Set<string>();
+  return daySourceSentences(sentences).filter((s) => {
+    if (excluded.has(s.id)) return false;
+    const k = normalizeExpressionKey(s.english);
+    if (k && seen.has(k)) return false;
+    if (k) seen.add(k);
+    return true;
+  });
+}
+
+/** Day 자료에서 뺀 문장 (원문 후보 → 사용자 문장 순). 지워진 문장의 id는 무시 */
+export function excludedDaySentences(sentences: KeySentence[], excluded: ReadonlySet<string>): KeySentence[] {
+  return daySourceSentences(sentences).filter((s) => excluded.has(s.id));
+}
+
+/** 화면·안내용 이름: 원문 후보는 '원문 후보 n번'(영상 번호), 사용자 문장은 카드 번호 'n번' */
+export const daySentenceLabel = (s: KeySentence) => (isOriginalCandidate(s) ? `원문 후보 ${s.aiNumber}번` : `${s.order}번`);

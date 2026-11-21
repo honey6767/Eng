@@ -81,11 +81,14 @@ export function validateTaskRequest(raw: unknown): AiTaskRequest | null {
     }
     if (r.transcript !== undefined && !str(r.transcript, CONTENT_LIMITS.transcriptChars, 0)) return null;
     if (r.taughtHints !== undefined && !(Array.isArray(r.taughtHints) && r.taughtHints.length <= 10 && r.taughtHints.every((h) => str(h, L.chunkChars)))) return null;
+    if (r.variant !== undefined && !(typeof r.variant === 'number' && Number.isInteger(r.variant) && r.variant >= 2 && r.variant <= 99)) return null;
     return {
       task: 'daypack', videoId: r.videoId, title: r.title, seriesKind: r.seriesKind, dayNumber: r.dayNumber as number | null, sentences,
       ...(typeof r.transcript === 'string' && r.transcript.trim() ? { transcript: r.transcript } : {}),
       ...(Array.isArray(r.taughtHints) && r.taughtHints.length ? { taughtHints: r.taughtHints as string[] } : {}),
       promptVersion: r.promptVersion,
+      // variant가 없는 예전 요청은 작업 키(본문 해시)가 그대로
+      ...(typeof r.variant === 'number' ? { variant: r.variant } : {}),
     } satisfies AiDayPackRequest;
   }
   if (r.task === 'dialogue') {
@@ -476,11 +479,12 @@ const EXTRA_RULES = `추가 덩어리 표현: 강사가 가르치지는 않았�
   · note: text와 뜻이 달라지면 그 차이 (예: rest는 잠보다 넓게 쉬는 것 전반). 차이가 없으면 ""
 - meaningKo(뜻), meaningInSentence(이 문장 문맥에서의 의미), nuance, usage, comparison, examples(짧은 응용 예문 2개)`;
 
-const DIALOGUE_RULES = (dayLabel: string) => `Day 통합 대화문(dialogue): 이 영상의 원문 문장과 핵심 Chunk로, 학습자가 통째로 외울 자연스러운 대화문 1개를 만듭니다.
+/** sentenceRule·lineRule을 주면 원문 문장 사용·줄 수 규칙만 바꾼다 (Day 1~100 Day 자료: 넣은 문장 모두 원문 그대로 포함) */
+const DIALOGUE_RULES = (dayLabel: string, opts: { sentenceRule?: string; lineRule?: string } = {}) => `Day 통합 대화문(dialogue): 이 영상의 원문 문장과 핵심 Chunk로, 학습자가 통째로 외울 자연스러운 대화문 1개를 만듭니다.
 - 대화의 흐름과 상황이 우선입니다. 실제 원어민이 일상에서 주고받을 법한 대화로 만듭니다.
-- 원문 문장을 그대로 넣어도 되고, 자연스럽게 잇기 위해 새 문장을 더해도 됩니다. 원문 문장을 그대로(또는 거의 그대로) 쓴 줄은 sourceSentenceNumber에 그 번호를, 새로 만든 줄은 0을 적습니다.
+${opts.sentenceRule ?? '- 원문 문장을 그대로 넣어도 되고, 자연스럽게 잇기 위해 새 문장을 더해도 됩니다. 원문 문장을 그대로(또는 거의 그대로) 쓴 줄은 sourceSentenceNumber에 그 번호를, 새로 만든 줄은 0을 적습니다.'}
 - 핵심 Chunk의 의미와 뉘앙스를 유지하고, 가능하면 대화 안에서 여러 번 자연스럽게 씁니다(억지로 반복하지 않음). 추가 덩어리 표현은 자연스러울 때만 일부 씁니다.
-- 화자 A와 B가 번갈아 8~14줄. 모든 줄에 자연스러운 한국어 번역(ko).
+${opts.lineRule ?? '- 화자 A와 B가 번갈아 8~14줄.'} 모든 줄에 자연스러운 한국어 번역(ko).
 - chunkTexts: 그 줄에 들어간 핵심 Chunk·추가 덩어리 표현의 text (없으면 빈 배열)
 - chunkNotes: 대화에 쓴 표현마다 하나. kind는 핵심 Chunk면 "core", 추가 덩어리 표현이면 "extra". usedAs(대화에 실제로 쓴 형태들, en에 그대로 있는 부분), meaningInContext(이 대화에서의 의미), nuance, whyUsed(대화 속에서 쓴 이유), example(다른 상황 응용 예문 en·ko)
 - title은 짧은 한국어 제목(${dayLabel} 포함), situation은 상황과 맥락(한국어 2~3문장).
@@ -517,6 +521,21 @@ ${PARTS_RULE}
 ${r.transcript}`;
 }
 
+/** Day 1~100 시리즈 (앱의 src/services/days/daySeries.ts와 같은 범위) — Day 자료 문장(영상 원문 후보 + 사용자가 직접 넣은 문장, 뺀 문장 제외)으로 만든다 */
+const isDayUserPack = (r: AiDayPackRequest) => r.seriesKind === 'day' && typeof r.dayNumber === 'number' && r.dayNumber >= 1 && r.dayNumber <= 100;
+
+/** 앱이 보낸 Day 자료 문장 n개를 모두 원문 그대로 넣는 대화문 규칙 (줄이거나 고르지 않음, 나열하지 않음) */
+function dayUserDialogueRules(n: number): { sentenceRule: string; lineRule: string } {
+  const min = Math.max(8, n + 4);
+  const max = Math.min(30, Math.max(14, n * 2 + 4));
+  return {
+    sentenceRule: `- 아래 원문 핵심 문장 ${n}개는 학습자가 직접 고른 문장입니다. ${n}개 모두 빠짐없이 대화에 넣습니다. 일부만 고르거나 줄이거나 합치지 않습니다.
+- 각 원문 문장은 원문 그대로(단어·어순·표현을 바꾸지 않고) 한 줄 안에 통째로 넣고, 그 줄의 sourceSentenceNumber에 그 번호를 적습니다. 자연스럽게 잇기 위해 원문 앞뒤에 짧은 말(예: "Honestly, ", ", right?")을 붙이는 것은 괜찮지만 원문 부분은 그대로 둡니다.
+- 원문 문장들을 순서대로 나열하지 않습니다. 하나의 상황 안에서 대화의 맥락과 흐름에 맞게 배치하고(순서는 바꿔도 됩니다), 그 사이를 새 줄로 자연스럽게 잇습니다. 새로 만든 줄은 sourceSentenceNumber에 0을 적습니다.`,
+    lineRule: `- 화자 A와 B가 번갈아 ${min}~${max}줄 (원문 문장 ${n}개가 모두 들어가도록).`,
+  };
+}
+
 export function buildDayPackPrompt(r: AiDayPackRequest): string {
   const list = r.sentences.map((x) => `${x.number}. ${x.text}${x.meaningKo ? ` (뜻: ${x.meaningKo})` : ''}`).join('\n');
   const hints = r.taughtHints?.length ? `\n[이 영상 자막 분석에서 강사가 가르친 표현으로 찾은 것 — 참고]\n${r.taughtHints.join(', ')}\n` : '';
@@ -530,7 +549,7 @@ ${PARTS_RULE}
 - sentenceNumber: 그 표현이 들어 있는 원문 문장 번호
 ${PARTS_RULE}
 
-3. ${DIALOGUE_RULES(dayLabelOf(r))}
+3. ${DIALOGUE_RULES(dayLabelOf(r), isDayUserPack(r) ? dayUserDialogueRules(r.sentences.length) : {})}
 
 4. notes: 확신하지 못한 부분. 없으면 빈 문자열.
 설명은 모두 한국어로 씁니다. JSON으로만 답하세요.

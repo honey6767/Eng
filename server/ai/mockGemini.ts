@@ -125,7 +125,12 @@ export function mockPackResult(r: AiPackRequest) {
 }
 
 export function mockDayPackResult(r: AiDayPackRequest) {
-  return mockDayPack(r.sentences, r.dayNumber ? `Day ${r.dayNumber}` : '영상', r.transcript ?? '');
+  const out = mockDayPack(r.sentences, r.dayNumber ? `Day ${r.dayNumber}` : '영상', r.transcript ?? '');
+  // 시험용: 첫 생성(variant 없음)에서 규칙을 어기는 결과 — mockDrop: 3번째 문장부터 대화에서 빠뜨림, mockAlter: 3번째 문장 원문을 바꿔 씀
+  if (!r.variant && r.videoId.startsWith('mockDrop')) out.dialogue.lines = out.dialogue.lines.filter((l) => l.sourceSentenceNumber === 0 || l.sourceSentenceNumber <= 2);
+  if (!r.variant && r.videoId.startsWith('mockAlter'))
+    out.dialogue.lines = out.dialogue.lines.map((l) => (l.sourceSentenceNumber === 3 ? { ...l, en: l.en.replace(/\b(could|really|use|sounds|plan)\b/i, 'might') } : l));
+  return out;
 }
 
 /** 가짜 ✨ 유용한 회화 표현: 알려진 회화 표현이 대화문에 있으면 (핵심 Chunk 제외), 일부러 문제 있는 항목도 섞어 앱의 걸러내기를 확인 */

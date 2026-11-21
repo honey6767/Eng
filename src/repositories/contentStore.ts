@@ -1,5 +1,5 @@
 import type { StudyDatabase } from '@/db/database';
-import { DAY_EXCLUSIONS_META_KEY, excludedSetOf, parseDayExclusions, type DayExclusions } from '@/services/days/daySeries';
+import { DAY_EXCLUSIONS_META_KEY, excludedSetOf, isOriginalCandidate, parseDayExclusions, type DayExclusions } from '@/services/days/daySeries';
 import type { AiTaskRequest } from '@/types/aiApi';
 import type { DayAssignment, Dialogue, DialogueProgress, Expression, ExtractionDraft, ExtractionJob, KeySentence, LearningItem, ReviewState, Transcript, Video } from '@/types/models';
 import { hasContent, type ContentContext, type ContentPlan } from '@/services/content/contentService';
@@ -120,7 +120,7 @@ export interface ContentStore {
   getDayExcluded(videoId: string): Promise<Set<string>>;
   /**
    * Day 자료에서 빼기·다시 넣기 — appMeta 'dayExclusions' 기록만 바꾼다 (문장·학습·복습 기록은 그대로).
-   * 사용자 문장만, 그 영상에 Day 자료(AI Day 대화문)가 아직 없을 때만. 요청 대기·진행 중 확인은 대기열이 한다
+   * 사용자 문장·영상 원문 후보만, 그 영상에 Day 자료(AI Day 대화문)가 아직 없을 때만. 요청 대기·진행 중 확인은 대기열이 한다
    */
   setDayExcluded(videoId: string, sentenceId: string, excluded: boolean): Promise<DayExclusionResult>;
   applyPack(videoId: string, plan: (ctx: Omit<PackContext, 'content' | 'pack' | 'requestId' | 'now' | 'newId' | 'dayNumber'>) => PackPlan): Promise<PackPlan | null>;
@@ -219,7 +219,8 @@ export function createContentStore(db: StudyDatabase): ContentStore {
       db.transaction('rw', [db.appMeta, db.keySentences, db.dialogues], async (): Promise<DayExclusionResult> => {
         const s = await db.keySentences.get(sentenceId);
         if (!s || s.videoId !== videoId) return 'not_found';
-        if (s.origin === 'ai_extracted') return 'not_user_sentence';
+        // Day 자료 재료만: 사용자 문장 또는 영상 원문 후보(AI가 자막에서 찾은 번호 문장). 그 밖의 AI 문장은 거절
+        if (s.origin === 'ai_extracted' && !isOriginalCandidate(s)) return 'not_user_sentence';
         if (hasDayDialogue(await db.dialogues.where('videoId').equals(videoId).toArray(), videoId)) return 'has_material';
         const all = parseDayExclusions((await db.appMeta.get(DAY_EXCLUSIONS_META_KEY))?.value);
         const ids = new Set(all[videoId] ?? []);

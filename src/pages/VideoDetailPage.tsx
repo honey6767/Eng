@@ -2,8 +2,8 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useState } from 'react';
 import { contentStore, extractionStore, repos } from '@/repositories';
 import { StudyContentPanel } from '@/components/content/StudyContentPanel';
-import { DayMaterialCard, VideoPrepStatus } from '@/components/prep/PrepStatus';
-import { daySeriesOf, userSentencesOf } from '@/services/days/daySeries';
+import { DayCandidatesCard, DayMaterialCard, VideoPrepStatus } from '@/components/prep/PrepStatus';
+import { daySeriesOf, includedDaySentences, userSentencesOf } from '@/services/days/daySeries';
 import { dayUserRecordOf, dayViewOf } from '@/services/days/dayView';
 import { useLiveData } from '@/hooks/useLiveData';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -221,8 +221,9 @@ export function VideoDetailPage() {
               <StudyContentPanel video={video} day={day} sentences={sentences} items={dayView.userItems} expressions={expressions} dialogues={dialogues} numbering={dayView.numbering} onSeek={video.youtubeVideoId ? seekTo : undefined} />
             )
           )}
+          {dayView.mode !== 'old_ai' && <DayCandidatesCard videoId={video.id} candidates={dayView.candidates} excludedIds={dayExcluded} hasMaterial={dayView.hasMaterial} />}
           <section data-testid="day-sentences">
-            <KeySentenceManager video={video} transcript={transcript} sentences={manualSentences} dialogues={dialogues} expressions={expressions} onSeek={seekTo} day linkedIds={dayView.linkedIds} excludedIds={dayExcluded} hasMaterial={dayView.hasMaterial} />
+            <KeySentenceManager video={video} transcript={transcript} sentences={manualSentences} dialogues={dialogues} expressions={expressions} onSeek={seekTo} day linkedIds={dayView.linkedIds} excludedIds={dayExcluded} hasMaterial={dayView.hasMaterial} dayIncludedCount={includedDaySentences(sentences, dayExcluded).length} />
           </section>
           {dayView.mode !== 'old_ai' && dayView.aiSentences.length > 0 && (
             <details className="rounded-2xl border border-line p-3" data-testid="old-ai-sentences">
@@ -397,9 +398,15 @@ function DayDialogueInline({ dialogue, sentences, numbering }: { dialogue: Dialo
   const [openRef, setOpenRef] = useState<string | null>(null);
   const used = new Set(dialogue.lines.map((l) => l.sourceSentenceId).filter(Boolean));
   // 사용자 문장으로 만든 Day 자료면 그 문장들(1번부터), 예전 자료면 AI 원문 문장
-  const fromUser = sentences.some((s) => s.origin !== 'ai_extracted' && used.has(s.id));
-  const ai = fromUser ? (numbering?.size ? sentences.filter((s) => numbering.has(s.id)).sort((a, b) => numbering.get(a.id)! - numbering.get(b.id)!) : userSentencesOf(sentences)) : sentences.filter((s) => s.origin === 'ai_extracted' || used.has(s.id)).sort((a, b) => (a.aiNumber ?? a.order) - (b.aiNumber ?? b.order));
-  const numberOf = (s: KeySentence, i: number) => (fromUser ? (numbering?.get(s.id) ?? i + 1) : (s.aiNumber ?? s.order));
+  // Day 자료 번호(요청 때 번호)가 있으면 그 문장들(원문 후보 + 사용자 문장), 없으면 예전 방식대로
+  const byRequest = !!numbering?.size;
+  const fromUser = !byRequest && sentences.some((s) => s.origin !== 'ai_extracted' && used.has(s.id));
+  const ai = byRequest
+    ? sentences.filter((s) => numbering!.has(s.id)).sort((a, b) => numbering!.get(a.id)! - numbering!.get(b.id)!)
+    : fromUser
+      ? userSentencesOf(sentences)
+      : sentences.filter((s) => s.origin === 'ai_extracted' || used.has(s.id)).sort((a, b) => (a.aiNumber ?? a.order) - (b.aiNumber ?? b.order));
+  const numberOf = (s: KeySentence, i: number) => (byRequest ? numbering!.get(s.id)! : fromUser ? i + 1 : (s.aiNumber ?? s.order));
   return (
     <Card className="space-y-3 p-4" data-testid="day-dialogue">
       <div className="flex flex-wrap items-center gap-2">

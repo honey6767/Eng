@@ -200,7 +200,8 @@ async function main() {
     const failText = (await page.getByTestId('prep-failed').count()) ? await page.getByTestId('prep-failed').innerText() : '';
     // 2단계: Day 1~100 영상의 예전 방식(daypack) 실패 기록은 지우지 않고 보관만 — 일반 영상 실패 목록·'실패만 다시 시도'에는 넣지 않음 (기록 보존은 아래에서 확인)
     check('Day 11 예전 HTTP 502 실패: 일반 실패 목록에 넣지 않음 (자동 재시도 안 함)', !/필요해 I need 말고/.test(failText), failText.split('\n').slice(0, 3).join(' / '));
-    check('자료 생성 화면: Day 1~100 별도 집계 (Day 11 = 문장 입력 전)', /Day 1~100 · 완료 0 · 문장 입력 전 1/.test(await page.getByTestId('prep-day-counts').innerText()));
+    // 예전 AI 원문 문장(번호 있음)은 영상 원문 후보로 기본 포함 → '만들 수 있음' (자동으로 만들지는 않음)
+    check('자료 생성 화면: Day 1~100 별도 집계 (Day 11 = 영상 원문 후보가 있어 만들 수 있음)', /Day 1~100 · 완료 0 · 문장 입력 전 0 · 만들 수 있음 1/.test(await page.getByTestId('prep-day-counts').innerText()));
     await page.reload();
     await page.getByTestId('prep-status').waitFor();
     await page.waitForTimeout(5000);

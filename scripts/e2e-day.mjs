@@ -4,8 +4,9 @@
  *
  * - '기존 영상 자료 만들기 시작'·앱 다시 열기에도 Day 1~100 영상은 AI 요청을 보내지 않음 (일반 영상만 자동 준비)
  * - 영상 목록 'Day 1~100 / 일반 영상 / 전체' (기본 전체), Day 배지, Day 자료 상태
- * - Day 영상: 핵심 문장(직접 입력·자막에서 고름) → 'Day 자료 만들기' 1회 → 그 문장만 보냄 (AI 문장·자막 없음, 사용자 요청)
- * - 예전 AI 추출 문장은 '예전 AI 추출 문장 (참고)'로 접혀 있고 지우거나 바꾸지 않음
+ * - Day 영상: 영상 원문 후보(예전에 AI가 자막에서 찾은 번호 문장, 기본 포함, 뺄 수 있음) + 직접 입력·자막에서 고른 문장
+ *   → 'Day 자료 만들기' 1회 → 그 문장들만 원문 그대로 보냄 (자막 없음, 사용자 요청) → 모두 대화문에 들어감
+ * - 예전 AI 자료는 '예전 AI 추출 문장 (참고)'로 접혀 있고 지우거나 바꾸지 않음
  * - 예전 방식으로 이미 만든 Day 자료는 그대로 (다시 만들지 않음)
  * - 기존 학습 데이터·DB 버전 그대로, 휴대폰 화면
  */
@@ -166,7 +167,7 @@ async function main() {
     await page.waitForTimeout(3000);
     check('Day 1~100 영상은 자동 요청 0건 (자막·자료 모두)', sends.filter((s) => dayYt.has(s.videoId)).length === 0, `일반 생성 ${generalCreates()}건`);
     const dayCounts = (await page.getByTestId('prep-day-counts').textContent()) ?? '';
-    check('자료 생성 화면: Day 1~100 별도 집계 (완료 1 · 문장 입력 전 2)', /완료 1/.test(dayCounts) && /문장 입력 전 2/.test(dayCounts), dayCounts.split('Day 영상은')[0]);
+    check('자료 생성 화면: Day 1~100 별도 집계 (완료 1 · 문장 입력 전 1 — Day 7은 영상 원문 후보가 있어 만들 수 있음)', /완료 1/.test(dayCounts) && /문장 입력 전 1/.test(dayCounts) && /만들 수 있음 2/.test(dayCounts), dayCounts.split('Day 영상은')[0]);
     check('자동 준비 집계는 일반 영상만', /일반 영상 · 완료 2 · 대기 0 · 실패 0/.test((await page.getByTestId('prep-counts').textContent()) ?? ''));
     await page.screenshot({ path: `${SHOTS}/day-01-prep.png`, fullPage: true });
 
@@ -186,17 +187,23 @@ async function main() {
     const genList = await listTitles();
     check('일반 영상 필터: Day 150·Small talk만', genList.includes('[Day 150]') && genList.includes('Small talk') && !genList.includes('[Day 7]'));
 
-    // ── 3. Day 7: 문장 입력 전 → 문장 넣고 Day 자료 만들기 ──
+    // ── 3. Day 7: 영상 원문 후보 2개(기본 포함) + 사용자 문장 3개 → Day 자료 만들기 ──
     await page.goto(`${BASE}/videos/d7`);
     const card = page.getByTestId('day-material');
     await card.waitFor();
-    check('Day 7: 상태 "문장 입력 전", 만들기 버튼 비활성', (await card.getAttribute('data-state')) === 'no_sentences' && (await page.getByTestId('day-make').isDisabled()));
+    const cands = page.getByTestId('day-candidates');
+    check('영상 원문 후보 카드: "영상 원문 후보 (AI가 자막에서 찾음 · 확인 필요)" 2개, 기본 포함', (await visible(cands)) && /영상 원문 후보 \(AI가 자막에서 찾음 · 확인 필요\)/.test((await cands.textContent()) ?? '') && (await cands.getByTestId('day-candidate').count()) === 2 && (await page.getByTestId('day-candidates-count').textContent())?.trim() === '2개 중 2개 포함');
+    check('Day 7: 원문 후보만으로 "만들기 전" · 핵심 문장 2/20', (await card.getAttribute('data-state')) === 'ready_to_make' && (await page.getByTestId('day-sentence-count').textContent())?.trim() === '핵심 문장 2/20');
+    // 원문 후보 빼기 → 다시 넣기
+    const cand2 = cands.getByTestId('day-candidate').filter({ hasText: 'You could use some rest.' });
+    await cand2.getByTestId('day-exclude').click();
+    await page.waitForTimeout(400);
+    check('원문 후보 빼기 → "Day 자료에서 뺌"·1개 포함·뺀 문장 목록', (await cand2.getAttribute('data-excluded')) === 'true' && (await page.getByTestId('day-candidates-count').textContent())?.trim() === '2개 중 1개 포함' && /원문 후보 2번/.test((await page.getByTestId('day-excluded').textContent()) ?? ''));
+    await cand2.getByTestId('day-include').click();
+    await page.waitForTimeout(400);
+    check('다시 넣기 → 2개 포함', (await cand2.getAttribute('data-excluded')) === 'false' && (await page.getByTestId('day-candidates-count').textContent())?.trim() === '2개 중 2개 포함');
     const old = page.getByTestId('old-ai-sentences');
-    check('예전 AI 추출 문장은 "예전 AI 추출 문장 (참고)"로 접혀 있음', (await old.locator(':scope > summary').textContent())?.includes('예전 AI 추출 문장 (참고) 2개') && !(await old.evaluate((d) => d.open)));
-    check('접힌 상태에서는 예전 AI 문장이 보이지 않음', !(await page.getByText('You could use some rest.', { exact: true }).first().isVisible().catch(() => false)));
-    await old.locator(':scope > summary').click();
-    check('펼치면 예전 AI 문장을 볼 수 있음', await visible(old.getByText('You could use some rest.')));
-    await old.locator(':scope > summary').click();
+    check('예전 AI 자료(Chunk 설명 등)는 "예전 AI 추출 문장 (참고)"로 접혀 있음', (await old.locator(':scope > summary').textContent())?.includes('예전 AI 추출 문장 (참고) 2개') && !(await old.evaluate((d) => d.open)));
     check('VideoPrepStatus(일반 자동 준비 카드)는 Day 영상에 없음', (await page.getByTestId('video-prep').count()) === 0);
     await page.screenshot({ path: `${SHOTS}/day-03-before.png`, fullPage: true });
 
@@ -217,7 +224,7 @@ async function main() {
       await confirmDialog('저장');
       await page.waitForTimeout(300);
     }
-    check('핵심 문장 3/20 (Day는 최대 20개)', (await page.getByTestId('day-sentence-count').textContent())?.trim() === '핵심 문장 3/20');
+    check('핵심 문장 5/20 (원문 후보 2 + 직접 넣은 3, Day는 최대 20개)', (await page.getByTestId('day-sentence-count').textContent())?.trim() === '핵심 문장 5/20' && /영상 원문 후보 2개 \+ 직접 넣은 문장 3개/.test((await page.getByTestId('day-material-breakdown').textContent()) ?? ''));
     check('상태 "만들기 전" + 버튼 활성', (await card.getAttribute('data-state')) === 'ready_to_make' && !(await page.getByTestId('day-make').isDisabled()));
     const sentBefore = sends.length;
     check('문장을 넣기만 해서는 AI 요청 없음', sends.length === sentBefore && sends.filter((s) => dayYt.has(s.videoId)).length === 0);
@@ -227,17 +234,18 @@ async function main() {
     const d7 = sends.filter((s) => s.videoId === 'daySeven007');
     const d7Body = d7[0]?.body ?? {};
     check('Day 7 요청은 daypack 1건(같은 식별자)·사용자 요청 표시', d7.length > 0 && d7.every((s) => s.task === 'daypack' && s.origin === 'user') && new Set(d7.map((s) => s.key)).size === 1 && new Set(d7.filter((s) => s.interactionId).map((s) => s.interactionId)).size === 1);
-    check('보낸 문장 = 사용자 문장 3개 그대로 (사용자 순서, 1번부터)', same((d7Body.sentences ?? []).map((s) => [s.number, s.text]), [[1, 'We could really use some help here.'], [2, 'I could use a cup of coffee.'], [3, 'That sounds like a plan.']]));
-    check('AI 문장·자막·힌트는 보내지 않음', !('transcript' in d7Body) && !('taughtHints' in d7Body) && !JSON.stringify(d7Body).includes('You could use some rest.') && !JSON.stringify(d7Body).includes('Welcome to Day 7'));
+    check('보낸 문장 = 원문 후보(번호순) → 사용자 문장(사용자 순서), 원문 그대로 5개', same((d7Body.sentences ?? []).map((s) => [s.number, s.text]), [[1, 'I could use a break.'], [2, 'You could use some rest.'], [3, 'We could really use some help here.'], [4, 'I could use a cup of coffee.'], [5, 'That sounds like a plan.']]));
+    check('자막·힌트는 보내지 않음', !('transcript' in d7Body) && !('taughtHints' in d7Body) && !JSON.stringify(d7Body).includes('Welcome to Day 7'));
     await page.waitForTimeout(800);
     check('Day 자료(핵심 Chunk·원문 문장) 표시', await visible(page.getByTestId('core-chunks')));
-    check('Day 자료 원문 문장 = 사용자 문장 3개', (await page.getByTestId('study-content').first().getByTestId('content-sentence').count()) === 3);
+    check('Day 자료 원문 문장 5개 (원문 후보 2 + 사용자 3)', (await page.getByTestId('study-content').first().getByTestId('content-sentence').count()) === 5);
     check('예전 AI 문장은 계속 접혀 있음', !(await page.getByTestId('old-ai-sentences').evaluate((d) => d.open)));
     await page.screenshot({ path: `${SHOTS}/day-04-made.png`, fullPage: true });
     await page.getByRole('tab', { name: /^대화문/ }).click();
     const map = page.getByTestId('source-map');
     await map.waitFor({ timeout: 10000 }).catch(() => {});
-    check('Day 대화문: 원문 연결이 사용자 문장 1~3번', (await map.locator('li').count()) === 3 && (await map.textContent())?.includes('We could really use some help here.'));
+    const mapText = (await map.textContent()) ?? '';
+    check('Day 대화문: 5개 문장 모두 대화 줄에 연결 (대화에 쓰지 않음 없음)', (await map.locator('li').count()) === 5 && ['I could use a break.', 'You could use some rest.', 'We could really use some help here.', 'I could use a cup of coffee.', 'That sounds like a plan.'].every((t) => mapText.includes(t)) && !mapText.includes('대화에 쓰지 않음'));
     await page.getByRole('tab', { name: /^원문·Chunk/ }).click();
 
     // 자료를 만든 뒤 문장을 하나 더 넣어도 Day 자료의 번호·문장은 그대로 (요청 때 번호), 새 문장은 연결이 없어 선정 취소 가능
@@ -247,7 +255,7 @@ async function main() {
     await confirmDialog('저장');
     await page.waitForTimeout(800);
     const nums = await page.getByTestId('study-content').first().getByTestId('content-sentence').allInnerTexts();
-    check('문장을 더해도 Day 자료 원문 문장은 요청 때 3개·같은 번호', nums.length === 3 && nums[0].startsWith('1') && nums[0].includes('We could really use some help here.') && nums[2].startsWith('3') && nums[2].includes('That sounds like a plan.'), nums.map((t) => t.split('\n').slice(0, 2).join(' ')).join(' | '));
+    check('문장을 더해도 Day 자료 원문 문장은 요청 때 5개·같은 번호', nums.length === 5 && nums[0].startsWith('1') && nums[0].includes('I could use a break.') && nums[4].startsWith('5') && nums[4].includes('That sounds like a plan.'), nums.map((t) => t.split('\n').slice(0, 2).join(' ')).join(' | '));
     const cardOf = (t) => page.getByTestId('key-sentence-card').filter({ hasText: t });
     check('자료에 연결 안 된 새 문장은 선정 취소 가능', !(await cardOf('Let me figure it out later.').getByRole('button', { name: '선정 취소' }).isDisabled()));
     check('대화 원문 출처로 쓰인 문장은 선정 취소 막힘 (이유 표시)', (await cardOf('That sounds like a plan.').getByRole('button', { name: '선정 취소' }).isDisabled()) && /원문 출처|Chunk/.test((await cardOf('That sounds like a plan.').getByRole('button', { name: '선정 취소' }).getAttribute('title')) ?? ''));
@@ -316,7 +324,8 @@ async function main() {
     const userIds = new Set(after.tables.keySentences.filter((s) => s.videoId === 'd7' && s.origin !== 'ai_extracted').map((s) => s.id));
     const d7Items = after.tables.learningItems.filter((i) => i.videoId === 'd7' && i.id !== 'li-old7');
     const links = [...d7Items.flatMap((i) => [i.sentenceId, ...(i.occurrences ?? []).map((o) => o.sentenceId)]), ...d7Dialogues[0].lines.map((l) => l.sourceSentenceId)].filter(Boolean);
-    check('새 Day 자료는 사용자 문장에만 연결 (예전 AI 문장 연결 없음)', links.length > 0 && links.every((id) => userIds.has(id)));
+    const materialIds = new Set([...userIds, 'ai7-1', 'ai7-2']);
+    check('새 Day 자료는 Day 자료 문장(원문 후보 + 사용자 문장)에만 연결, 5개 모두 대화 줄 출처', links.length > 0 && links.every((id) => materialIds.has(id)) && new Set(d7Dialogues[0].lines.map((l) => l.sourceSentenceId).filter(Boolean)).size === 5);
     check('Day 자료가 문장을 새로 만들지 않음 (사용자 3 + 나중에 넣은 1 + 예전 AI 2)', after.tables.keySentences.filter((s) => s.videoId === 'd7').length === 6);
     check('페이지 오류 없음', errors.length === 0, errors.slice(0, 3).join(' / '));
   } finally {

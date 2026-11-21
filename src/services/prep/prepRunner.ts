@@ -281,7 +281,10 @@ async function runDayUser(video: Video, deps: PrepDeps, retry: boolean, onNote: 
     const problem = daySentenceProblem(includedDaySentences(ctx.sentences, excluded));
     if (problem) return { kind: 'fail', stage: 'dayuser', code: 'day_sentences', message: problem, httpStatus: null };
   }
-  const out = await runAiTask(key, () => buildDayUserRequest(video, ctx.day, ctx.sentences, excluded), deps, (p) => onNote({ stage: 'dayuser', note: p.phase === 'processing' ? p.note : p.phase === 'sending' ? '요청 보내는 중' : undefined }), signal, { retryFailed: retry, origin: 'user' });
+  // 앞 결과가 규칙(고른 문장 모두 원문 그대로)에 맞지 않아 다시 누른 경우: 같은 문장으로 새로 생성 (서버 보관 결과를 다시 받지 않게)
+  const prevBody = prev?.body && prev.body.task === 'daypack' ? prev.body : null;
+  const variant = prev?.status === 'failed' && prev.error?.code === 'invalid_result' ? (prevBody?.variant ?? 1) + 1 : 1;
+  const out = await runAiTask(key, () => buildDayUserRequest(video, ctx.day, ctx.sentences, excluded, variant), deps, (p) => onNote({ stage: 'dayuser', note: p.phase === 'processing' ? p.note : p.phase === 'sending' ? '요청 보내는 중' : undefined }), signal, { retryFailed: retry, origin: 'user' });
   if (!out.ok) {
     if (PAUSE_CODES.has(out.code)) return pauseFor(out.code, out.message, out.httpStatus, now());
     return { kind: 'fail', stage: 'dayuser', code: out.code, message: out.message, httpStatus: out.httpStatus };
@@ -292,8 +295,8 @@ async function runDayUser(video: Video, deps: PrepDeps, retry: boolean, onNote: 
     if (st) await deps.store.putTask(key, { ...st, status: 'failed', resultText: null, error: { code, message, httpStatus: null } });
     return { kind: 'fail', stage: 'dayuser', code, message, httpStatus: null } satisfies VideoOutcome;
   };
-  const v = validateDayPack(out.text, sent);
-  if (!v.ok) return failTask('invalid_result', `AI 결과를 쓸 수 없어요: ${v.error}`);
+  const v = validateDayPack(out.text, sent, { requireAll: true });
+  if (!v.ok) return failTask('invalid_result', `AI 결과를 쓸 수 없어요: ${v.error} 저장하지 않았어요. ‘Day 자료 다시 만들기’를 누르면 같은 문장으로 새로 만들어요 (AI 요청 1회).`);
   const { dayNumber } = seriesOf(video, ctx.day);
   let changed = false;
   // 저장 직전의 뺀 문장 기준으로 다시 맞춰 본다 (보낸 뒤 빼기·다시 넣기를 했다면 저장하지 않음)

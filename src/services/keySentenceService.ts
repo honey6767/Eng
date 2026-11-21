@@ -4,7 +4,7 @@ import { createId } from '@/utils/id';
 import { nowISO } from '@/utils/date';
 import { normalizeExpressionKey } from '@/utils/text';
 import { findExpressionSpan, type TextSpan } from '@/utils/expressionSpan';
-import { DAY_EXCLUSIONS_META_KEY, DAY_SENTENCE_CHARS, DAY_SENTENCE_MAX, excludedSetOf, parseDayExclusions, userSentencesOf } from '@/services/days/daySeries';
+import { DAY_EXCLUSIONS_META_KEY, DAY_SENTENCE_CHARS, DAY_SENTENCE_MAX, excludedSetOf, includedDaySentences, parseDayExclusions, userSentencesOf } from '@/services/days/daySeries';
 
 /**
  * 3단계 — 핵심 문장 5개 관리
@@ -60,8 +60,9 @@ export async function addKeySentence(repos: Repositories, videoId: string, input
     const excluded = excludedSetOf(parseDayExclusions(await repos.meta.get(DAY_EXCLUSIONS_META_KEY)), videoId);
     const dup = mine.find((s) => normalizeExpressionKey(s.english) === key);
     if (dup) throw new KeySentenceError('duplicate', excluded.has(dup.id) ? '이미 있는 문장이에요 (Day 자료에서 뺀 상태). 그 문장의 ‘Day 자료에 다시 넣기’를 눌러 주세요.' : '이미 핵심 문장으로 선정한 문장입니다.');
-    if (mine.filter((s) => !excluded.has(s.id)).length >= DAY_SENTENCE_MAX) {
-      throw new KeySentenceError('limit', `Day 자료에 쓰는 핵심 문장은 ${DAY_SENTENCE_MAX}개까지예요. 문장을 ‘Day 자료에서 빼기’ 하면 더 넣을 수 있어요.`);
+    // 개수: Day 자료에 실제로 쓰는 문장(영상 원문 후보 포함, 뺀 문장·중복 제외)
+    if (includedDaySentences(all, excluded).length >= DAY_SENTENCE_MAX) {
+      throw new KeySentenceError('limit', `Day 자료에 쓰는 핵심 문장은 ${DAY_SENTENCE_MAX}개까지예요 (영상 원문 후보 포함). 문장을 ‘Day 자료에서 빼기’ 하면 더 넣을 수 있어요.`);
     }
     const used = new Set(mine.map((s) => s.order));
     order = 1;
