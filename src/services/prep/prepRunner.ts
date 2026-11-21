@@ -8,8 +8,9 @@ import { makeJob, POLL_MS, RETRY_MS, stepJob } from '@/services/extraction/runne
 import { hasContent, seriesOf, transcriptText } from '@/services/content/contentService';
 import { parseDayNumber } from '@/db/upgradeV2toV3';
 import { createId } from '@/utils/id';
+import { daySentenceProblem, daySeriesOf, excludedSetOf, includedDaySentences } from '@/services/days/daySeries';
 import { nextPacificMidnight } from '@/utils/pacific';
-import { aiSentencesOf, buildDayPackRequest, buildPackRequest, hasDayDialogue, planPack, validateDayPack, validatePack } from './packService';
+import { aiSentencesOf, buildDayPackRequest, buildDayUserRequest, buildPackRequest, daySentenceMap, hasDayDialogue, planPack, validateDayPack, validatePack } from './packService';
 
 /**
  * 학습 자료 자동 생성 대기열 — 한 번에 한 영상씩, 앱이 열려 있는 동안 백그라운드로.
@@ -25,7 +26,8 @@ import { aiSentencesOf, buildDayPackRequest, buildPackRequest, hasDayDialogue, p
  * - 하루 상한·무료 한도·서버 문제는 대기열 전체를 멈춤, 영상 문제(거절·결과 모름·품질)는 그 영상만 '실패'
  */
 
-export type PrepStage = 'transcript' | 'pack' | 'daypack' | 'done';
+/** dayuser: Day 1~100 영상의 Day 자료 (사용자가 입력·선택한 핵심 문장으로, 버튼을 눌렀을 때만) */
+export type PrepStage = 'transcript' | 'pack' | 'daypack' | 'dayuser' | 'done';
 export type PrepRowStatus = 'ready' | 'queued' | 'failed' | 'skipped' | 'not_queued';
 
 export interface PrepRow {
@@ -36,8 +38,13 @@ export interface PrepRow {
   failure: PrepVideoState | null;
   /** 이전에 보낸 요청이 진행 중 (먼저 이어서 확인) */
   inflight: boolean;
+  /** day: Day 1~100 영상 (자동 처리 안 함) · general: 일반 영상 (자동 준비) */
+  series: 'day' | 'general';
+  /** Day 영상: 사용자가 입력·선택한 핵심 문장 수 */
+  daySentences?: number;
 }
 
+/** 자동 준비 집계 — 일반 영상만 */
 export interface PrepSummary {
   total: number;
   ready: number;
@@ -45,6 +52,21 @@ export interface PrepSummary {
   failed: number;
   skipped: number;
   notQueued: number;
+  /** Day 1~100 영상 별도 집계 */
+  day: DaySummary;
+}
+
+export interface DaySummary {
+  total: number;
+  /** Day 자료 있음 */
+  done: number;
+  /** 핵심 문장 입력 전 */
+  noSentences: number;
+  /** 문장이 있어 만들 수 있음 (아직 누르지 않음) */
+  canMake: number;
+  /** 만드는 중·대기 (보류 포함) */
+  queued: number;
+  failed: number;
 }
 
 const hasTranscript = (ov: PrepOverview, videoId: string) =>
@@ -52,10 +74,26 @@ const hasTranscript = (ov: PrepOverview, videoId: string) =>
 
 export function computeRows(ov: PrepOverview, st: PrepState): PrepRow[] {
   const dayByVideo = new Map(ov.days.map((d) => [d.videoId, d.dayNumber]));
+  const assignment = new Map(ov.days.map((d) => [d.videoId, d]));
+  const manual = new Set(st.manual ?? []);
   const rows: PrepRow[] = [];
   for (const v of ov.videos) {
     if (v.isSample || !v.youtubeVideoId) continue;
     const sentences = ov.sentences.filter((s) => s.videoId === v.id);
+    const series = daySeriesOf(v, assignment.get(v.id));
+    if (series.isDay) {
+      // Day 1~100: 자동 처리 대상이 아님 (등록·전체 시작·앱 재실행·예전 대기열 항목 모두 무시 — 기록은 그대로 둔다).
+      // 사용자가 'Day 자료 만들기'를 눌러 대기열에 넣었을 때만 처리. 예전 방식(자막→자료) 실패 기록은 보여 주지 않는다
+      const done = hasDayDialogue(ov.dialogues, v.id);
+      const saved = st.videos[v.id];
+      const failure = saved && saved.stage === 'dayuser' ? saved : null;
+      const retrying = st.retry.includes(v.id) && manual.has(v.id);
+      const requested = (st.queue.includes(v.id) && manual.has(v.id)) || retrying;
+      const status: PrepRowStatus = done ? 'ready' : failure && !retrying ? failure.status : requested ? 'queued' : 'not_queued';
+      // 문장 수 = Day 자료에 실제로 쓰는 문장 (뺀 문장 제외)
+      rows.push({ video: v, dayNumber: series.dayNumber, stage: done ? 'done' : 'dayuser', status, failure: done ? null : failure, inflight: false, series: 'day', daySentences: includedDaySentences(sentences, excludedSetOf(ov.dayExclusions, v.id)).length });
+      continue;
+    }
     const items = ov.items.filter((i) => i.videoId === v.id);
     const stage: PrepStage = hasDayDialogue(ov.dialogues, v.id) ? 'done' : hasContent(sentences, items) && aiSentencesOf(sentences).length > 0 ? 'daypack' : hasTranscript(ov, v.id) ? 'pack' : 'transcript';
     const job = ov.jobs.find((j) => j.videoId === v.id);
@@ -68,7 +106,7 @@ export function computeRows(ov: PrepOverview, st: PrepState): PrepRow[] {
     const failure = stale ? null : saved;
     const inQueue = stale ? st.queue.includes(v.id) || retrying : st.allStarted || st.queue.includes(v.id) || inflight || retrying;
     const status: PrepRowStatus = stage === 'done' ? 'ready' : failure && !retrying ? failure.status : inQueue ? 'queued' : 'not_queued';
-    rows.push({ video: v, dayNumber: dayByVideo.get(v.id) ?? parseDayNumber(v.title), stage, status, failure: stage === 'done' ? null : failure, inflight });
+    rows.push({ video: v, dayNumber: dayByVideo.get(v.id) ?? parseDayNumber(v.title), stage, status, failure: stage === 'done' ? null : failure, inflight, series: 'general' });
   }
   // 처리 순서: 진행 중이던 요청 → 새로 넣은 영상(넣은 순서) → Day 번호 순 → 일반 영상(등록 순서)
   const q = new Map(st.queue.map((id, i) => [id, i]));
@@ -82,8 +120,22 @@ export function computeRows(ov: PrepOverview, st: PrepState): PrepRow[] {
 }
 
 export function summarizeRows(rows: PrepRow[]): PrepSummary {
-  const c = (s: PrepRowStatus) => rows.filter((r) => r.status === s).length;
-  return { total: rows.length, ready: c('ready'), queued: c('queued'), failed: c('failed'), skipped: c('skipped'), notQueued: c('not_queued') };
+  const general = rows.filter((r) => r.series === 'general');
+  const c = (s: PrepRowStatus) => general.filter((r) => r.status === s).length;
+  return { total: general.length, ready: c('ready'), queued: c('queued'), failed: c('failed'), skipped: c('skipped'), notQueued: c('not_queued'), day: summarizeDays(rows) };
+}
+
+export function summarizeDays(rows: PrepRow[]): DaySummary {
+  const days = rows.filter((r) => r.series === 'day');
+  const waiting = days.filter((r) => r.status === 'not_queued');
+  return {
+    total: days.length,
+    done: days.filter((r) => r.status === 'ready').length,
+    noSentences: waiting.filter((r) => !r.daySentences).length,
+    canMake: waiting.filter((r) => !!r.daySentences).length,
+    queued: days.filter((r) => r.status === 'queued').length,
+    failed: days.filter((r) => r.status === 'failed' || r.status === 'skipped').length,
+  };
 }
 
 // ─────────────────────────────────────────────
@@ -209,10 +261,64 @@ async function runPack(video: Video, kind: 'pack' | 'daypack', deps: PrepDeps, r
   return { kind: 'ok' };
 }
 
+/**
+ * Day 1~100 영상의 Day 자료 — 사용자가 'Day 자료 만들기'를 눌렀을 때만 (자동 준비로는 부르지 않음)
+ * - 재료: 사용자가 입력하거나 자막에서 고른 핵심 문장만 (AI 문장·자막·힌트는 보내지 않음), 1~20개
+ * - 결과는 추가만: 원문 문장은 고치지 않고, 이미 Day 자료가 있으면 저장하지 않는다
+ * - 보낸 뒤 문장이 바뀌었으면 결과를 저장하지 않는다 (잘못된 연결 방지)
+ */
+async function runDayUser(video: Video, deps: PrepDeps, retry: boolean, onNote: (n: StepNote) => void, signal?: AbortSignal): Promise<VideoOutcome> {
+  const now = deps.now ?? (() => new Date());
+  const ctx = await deps.store.readVideo(video.id);
+  if (!ctx) return { kind: 'fail', stage: 'dayuser', code: 'not_found', message: '영상을 찾지 못했어요.', httpStatus: null };
+  if (!daySeriesOf(video, ctx.day).isDay) return { kind: 'fail', stage: 'dayuser', code: 'not_day', message: 'Day 1~100 영상이 아니에요.', httpStatus: null };
+  const key = `dayuser:${video.id}`;
+  const prev = await deps.store.getTask(key);
+  const resuming = !!prev && (prev.status === 'sent' || (prev.status === 'succeeded' && !!prev.resultText));
+  // Day 자료에서 뺀 문장은 개수·길이 검사와 요청에서 모두 빠진다
+  const excluded = await deps.store.getDayExcluded(video.id);
+  if (!resuming) {
+    const problem = daySentenceProblem(includedDaySentences(ctx.sentences, excluded));
+    if (problem) return { kind: 'fail', stage: 'dayuser', code: 'day_sentences', message: problem, httpStatus: null };
+  }
+  const out = await runAiTask(key, () => buildDayUserRequest(video, ctx.day, ctx.sentences, excluded), deps, (p) => onNote({ stage: 'dayuser', note: p.phase === 'processing' ? p.note : p.phase === 'sending' ? '요청 보내는 중' : undefined }), signal, { retryFailed: retry, origin: 'user' });
+  if (!out.ok) {
+    if (PAUSE_CODES.has(out.code)) return pauseFor(out.code, out.message, out.httpStatus, now());
+    return { kind: 'fail', stage: 'dayuser', code: out.code, message: out.message, httpStatus: out.httpStatus };
+  }
+  const st = await deps.store.getTask(key);
+  const sent = st?.body && st.body.task === 'daypack' ? st.body.sentences : [];
+  const failTask = async (code: string, message: string) => {
+    if (st) await deps.store.putTask(key, { ...st, status: 'failed', resultText: null, error: { code, message, httpStatus: null } });
+    return { kind: 'fail', stage: 'dayuser', code, message, httpStatus: null } satisfies VideoOutcome;
+  };
+  const v = validateDayPack(out.text, sent);
+  if (!v.ok) return failTask('invalid_result', `AI 결과를 쓸 수 없어요: ${v.error}`);
+  const { dayNumber } = seriesOf(video, ctx.day);
+  let changed = false;
+  // 저장 직전의 뺀 문장 기준으로 다시 맞춰 본다 (보낸 뒤 빼기·다시 넣기를 했다면 저장하지 않음)
+  const excludedNow = await deps.store.getDayExcluded(video.id);
+  const applied = await deps.store.applyPack(video.id, (c) => {
+    const map = daySentenceMap(sent, c.existingSentences, excludedNow);
+    if (!map) {
+      changed = true;
+      return { sentences: [], expressions: [], items: [], dialogue: null, summary: { sentences: 0, chunks: 0, core: 0, lines: 0, sourcedLines: 0 } };
+    }
+    return planPack({ ...c, dayNumber, content: null, pack: v.pack, requestId: out.requestId, now: now().toISOString(), newId: deps.newId ?? createId, sentenceIdByNumber: map });
+  });
+  if (changed) return failTask('sentences_changed', '요청을 보낸 뒤 핵심 문장이 바뀌어 결과를 저장하지 않았어요. 문장을 확인하고 다시 만들어 주세요.');
+  // applied === null: 그 사이 Day 자료가 이미 생겼음 → 기존 자료를 그대로 두고 끝
+  void applied;
+  await markApplied(deps.store, key);
+  return { kind: 'ok' };
+}
+
 /** 영상 1개: 빠진 단계만 차례로 */
 /** auto: 사용자가 누르지 않은 자동 준비 (서버가 하루 자동 준비 몫으로 셈) */
 export async function processVideo(row: PrepRow, deps: PrepDeps, retry: boolean, onNote: (n: StepNote) => void, signal?: AbortSignal, auto = false): Promise<VideoOutcome> {
   let stage = row.stage;
+  // Day 1~100 영상은 자막·예전 방식 자료 단계를 거치지 않는다 (사용자가 누른 경우에만 여기까지 옴)
+  if (row.series === 'day') return stage === 'dayuser' && !auto ? runDayUser(row.video, deps, retry, onNote, signal) : { kind: 'ok' };
   if (stage === 'transcript') {
     const r = await runTranscript(row.video, deps, retry, onNote, signal, auto);
     if (r.kind !== 'ok') return r;

@@ -74,8 +74,8 @@ const dumpDb = (page) =>
       }),
   );
 
-// Day 1~8: 자막 있음 (자료 1회씩). Day 9: 가짜 Gemini가 한도 초과로 끝내는 영상
-const VIDEOS = [...Array.from({ length: 8 }, (_, i) => ({ id: `d${i + 1}`, yt: `limitVid00${i + 1}`, title: `[Day ${i + 1}] 한도 시험 ${i + 1}` })), { id: 'q9', yt: 'mockExhaus1', title: '[Day 9] 한도 초과 영상' }];
+// 일반 영상 Day 101~108 (Day 1~100 밖 — 2단계부터 Day 1~100은 자동 준비 대상이 아님): 자막 있음. Day 109: 가짜 Gemini가 한도 초과로 끝내는 영상
+const VIDEOS = [...Array.from({ length: 8 }, (_, i) => ({ id: `d${i + 1}`, yt: `limitVid00${i + 1}`, title: `[Day ${101 + i}] 한도 시험 ${i + 1}` })), { id: 'q9', yt: 'mockExhaus1', title: '[Day 109] 한도 초과 영상' }];
 
 const seed = (page, videos) =>
   page.evaluate(

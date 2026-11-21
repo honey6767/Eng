@@ -2,7 +2,8 @@
  * 원문 문장 · Chunk · 통합 대화문 E2E (Playwright, 새 임시 프로필, 가짜 Gemini — 실제 Google 호출 없음)
  * 사용법: npm run build && node scripts/e2e-content.mjs
  *
- * - Day 영상: 번호별 원문 문장 + 문장 속 Chunk가 따로 보이고, 문장·Chunk를 각각 고를 수 있다
+ * - Day 영상(2단계): 자동으로 만들지 않음 — 사용자가 넣은 핵심 문장으로 'Day 자료 만들기'를 눌러 만든 자료가
+ *   번호별 원문 문장 + 문장 속 Chunk로 따로 보이고, Chunk를 고를 수 있다
  * - 일반 영상: '일반 영상'으로 구분, 맥락에서 고른 문장·Chunk
  * - AI 자막 관리: 자막 있는 영상 문장·Chunk 한꺼번에 만들기
  * - 통합 대화문: 최근 학습한 Day 3개 기본 추천 → Chunk 체크 → 생성 → 사용한 Chunk·출처 Day·한국어·뉘앙스 표시
@@ -94,6 +95,12 @@ const seed = (page) =>
           ts.add(tr('c13', ['Welcome to Day 13.', '1. I need to get back to work.', '2. Let me figure out the plan.']));
           ts.add(tr('c05', ['Day 5.', '1. Sounds like fun.']));
           ts.add(tr('g01', ['So how was your weekend?', 'Honestly, it was no big deal.', 'We should catch up over lunch.', 'The office is in Seoul.']));
+          // Day 자료 재료: 사용자가 자막에서 고른 핵심 문장 (2단계 — Day 1~100은 이 문장으로만 자료를 만든다)
+          const mine = (id, videoId, order, english) => ({ id, createdAt: now, updatedAt: now, videoId, order, english, korean: '', expressionIds: [], situation: '', timestampSec: null, status: 'not_started', correctCount: 0, wrongCount: 0, origin: 'transcript' });
+          ['I could use a little break right now.', 'That sounds like a good idea.', 'Let me figure out what to do.', 'I am running late again.'].forEach((t, i) => tx.objectStore('keySentences').add(mine(`ks-c11-${i + 1}`, 'c11', i + 1, t)));
+          ['We should catch up soon.', 'It is no big deal.', 'Can you make it tonight?'].forEach((t, i) => tx.objectStore('keySentences').add(mine(`ks-c12-${i + 1}`, 'c12', i + 1, t)));
+          tx.objectStore('keySentences').add(mine('ks-c13-2', 'c13', 2, 'Let me figure out the plan.'));
+          tx.objectStore('keySentences').add(mine('ks-c05-1', 'c05', 1, 'Sounds like fun.'));
           // 기존 사용자 데이터 (그대로 있어야 함)
           tx.objectStore('keySentences').add({ id: 'ks-user-1', createdAt: now, updatedAt: now, videoId: 'c13', order: 1, english: 'I need to get back to work.', korean: '내가 쓴 번역', expressionIds: [], situation: '사무실', timestampSec: 10, status: 'learning', correctCount: 2, wrongCount: 1, origin: 'manual' });
           tx.objectStore('expressions').add({ id: 'ex-user-1', createdAt: now, updatedAt: now, normalizedKey: 'could use', text: 'could use', meaningKo: '내가 쓴 뜻', sourceRefs: [], isFavorite: true, isMarkedDifficult: true });
@@ -147,16 +154,26 @@ async function main() {
     await seed(page);
     const before = await dumpDb(page);
 
-    // ── 자료 생성: 기존 영상 자료 만들기 시작 (대기열이 차례로 처리) ──
+    // ── 자료 생성: 기존 영상 자료 만들기 시작 → 일반 영상만 자동 ──
     await page.goto(`${BASE}/extraction`);
     await page.getByTestId('prep-start-all').click();
-    // 결과 조회 간격이 10초라 영상 1개에 약 20초 — 5개면 2분 가까이
-    for (let i = 0; i < 240; i++) {
+    for (let i = 0; i < 120; i++) {
       await page.waitForTimeout(1000);
       const t = (await page.getByTestId('prep-counts').count()) ? await page.getByTestId('prep-counts').innerText() : '';
-      if (/완료 5 · 대기 0/.test(t)) break;
+      if (/완료 1 · 대기 0/.test(t)) break;
     }
-    check('자료 생성: 5개 영상 차례로 완료', /완료 5 · 대기 0/.test(await page.getByTestId('prep-counts').innerText()), await page.getByTestId('prep-counts').innerText());
+    check('자동 준비: 일반 영상 1개만 완료 (Day 영상은 자동으로 만들지 않음)', /일반 영상 · 완료 1 · 대기 0/.test(await page.getByTestId('prep-counts').innerText()) && !tasks.some((t) => t.seriesKind === 'day'), await page.getByTestId('prep-counts').innerText());
+    // Day 영상: 'Day 자료 만들기' (사용자가 누름 — 결과 조회 간격 10초라 영상 1개에 약 20초)
+    for (const id of ['c11', 'c12', 'c13', 'c05']) {
+      await page.goto(`${BASE}/videos/${id}?tab=sentences`);
+      await page.getByTestId('day-make').click();
+      let st = '';
+      for (let i = 0; i < 90 && st !== 'done'; i++) {
+        await page.waitForTimeout(1000);
+        st = (await page.getByTestId('day-material').getAttribute('data-state')) ?? '';
+      }
+      check(`${id}: Day 자료 만들기 → 완료`, st === 'done', st);
+    }
 
     // ── Day 11: 원문 문장·Chunk ──
     await page.goto(`${BASE}/videos/c11?tab=sentences`);
@@ -168,10 +185,9 @@ async function main() {
     await page.getByTestId('content-chunk').first().locator('summary').click();
     const detail = await page.getByTestId('content-chunk').first().innerText();
     check('Chunk 설명: 문장 속 의미·뉘앙스·쓰는 상황·비슷한 표현·예문', ['문장 속 의미', '뉘앙스', '쓰는 상황', '비슷한 표현'].every((k) => detail.includes(k)) && /—/.test(detail));
-    await page.getByTestId('select-sentence').first().click();
     await page.getByTestId('select-chunk').first().click();
     await page.waitForTimeout(500);
-    check('문장과 Chunk를 각각 고를 수 있음', /고른 문장 1 · 고른 Chunk 1/.test(await page.getByTestId('content-counts').innerText()));
+    check('Chunk를 따로 고를 수 있음', /고른 Chunk 1/.test(await page.getByTestId('content-counts').innerText()));
     await page.screenshot({ path: `${SHOTS}/content-01-day11.png`, fullPage: true });
 
     // ── 일반 영상 ──
@@ -179,14 +195,14 @@ async function main() {
     await page.getByTestId('study-content').waitFor();
     const gText = await page.getByTestId('study-content').innerText();
     check('일반 영상: "일반 영상"으로 구분, 맥락에서 고른 문장(고유명사 문장 제외)', gText.includes('일반 영상') && gText.includes('no big deal') && !gText.includes('The office is in Seoul.'));
-    check('일반 영상 요청은 general, Day 영상은 day로 보냄', tasks.find((t) => t.videoId === 'eeeeeeeeeee')?.seriesKind === 'general' && tasks.find((t) => t.videoId === 'eNODHkrNuDA')?.seriesKind === 'day');
+    check('일반 영상 요청은 general, Day 영상은 day로 보냄', tasks.find((t) => t.videoId === 'eeeeeeeeeee')?.seriesKind === 'general' && tasks.find((t) => t.videoId === 'eNODHkrNuDA')?.seriesKind === 'day' && tasks.find((t) => t.videoId === 'eNODHkrNuDA')?.task === 'daypack');
     await page.screenshot({ path: `${SHOTS}/content-02-general.png`, fullPage: true });
 
-    // ── Day 13: 기존 핵심 문장은 그대로, 같은 문장은 연결만 ──
+    // ── Day 13: 학습 기록이 있는 기존 핵심 문장도 그대로 Day 자료 재료로 (문장은 새로 만들지 않음) ──
     await page.goto(`${BASE}/videos/c13?tab=sentences`);
     await page.getByTestId('study-content').waitFor();
     const d13 = await page.getByTestId('study-content').innerText();
-    check('Day 13: 기존 핵심 문장과 같은 문장은 새로 만들지 않고 연결(직접 고른 핵심 문장 표시)', d13.includes('직접 고른 핵심 문장'));
+    check('Day 13: 기존 핵심 문장(학습 기록 있음)이 Day 자료 원문 문장으로 쓰임', d13.includes('I need to get back to work.') && (await page.getByTestId('content-sentence').count()) === 2);
 
     // ── 통합 대화문 ──
     await page.goto(`${BASE}/dialogues`);
@@ -224,7 +240,7 @@ async function main() {
     const chunks = after.tables.learningItems.filter((i) => i.kind === 'chunk');
     const ks = byId(after.tables.keySentences);
     check('저장: Chunk는 원본 문장·영상·Day와 연결', chunks.length > 0 && chunks.every((c) => ks[c.sentenceId] && c.videoId && (c.dayNumber || c.videoId === 'g01')));
-    check('AI 요청: 학습 자료 5번(영상당 1번) + 대화문 1개 식별자', new Set(tasks.filter((t) => t.task === 'pack').map((t) => t.key)).size === 5 && new Set(tasks.filter((t) => t.task === 'dialogue').map((t) => t.key)).size === 1);
+    check('AI 요청: 일반 영상 pack 1번 + Day 자료 daypack 4번(영상당 1번) + 대화문 1개 식별자', new Set(tasks.filter((t) => t.task === 'pack').map((t) => t.key)).size === 1 && new Set(tasks.filter((t) => t.task === 'daypack').map((t) => t.key)).size === 4 && new Set(tasks.filter((t) => t.task === 'dialogue').map((t) => t.key)).size === 1);
 
     // 기존 데이터 보존
     for (const t of ['videos', 'transcripts', 'reviewStates', 'dialogueProgress', 'studyLogs', 'playlists', 'expressionNotes']) check(`기존 ${t} 그대로`, same(byId(after.tables[t]), byId(before.tables[t])));

@@ -1,4 +1,4 @@
-import type { PrepState } from '@/repositories/contentStore';
+import type { DayExclusionResult, PrepState } from '@/repositories/contentStore';
 import { nextPacificMidnight } from '@/utils/pacific';
 import { computeRows, processVideo, summarizeRows, type PrepDeps, type PrepRow, type PrepStage, type PrepSummary } from './prepRunner';
 
@@ -196,7 +196,9 @@ export function createPrepController(deps: PrepControllerDeps) {
       emit({ status: { kind: 'idle' } });
     },
     /** 새로 등록한 영상·'학습 시작'한 영상을 대기열 앞에 넣고 시작 */
-    async enqueue(videoIds: string[], opts: { manual?: boolean } = {}) {
+    async enqueue(ids: string[], opts: { manual?: boolean } = {}) {
+      // Day 1~100 영상은 이 경로(등록·학습 시작·자막 다시 시도)로 넣지 않는다 — 'Day 자료 만들기'(makeDay)로만
+      const videoIds = await withoutDays(ids);
       if (!videoIds.length) return;
       await deps.store.updatePrep((s) => ({
         ...s,
@@ -214,9 +216,12 @@ export function createPrepController(deps: PrepControllerDeps) {
       void api.start();
     },
     /** '실패만 다시 시도' (videoIds 없으면 실패 전체) */
-    async retryFailed(videoIds?: string[]) {
+    async retryFailed(ids?: string[]) {
+      const videoIds = ids ? await withoutDays(ids) : undefined;
+      if (videoIds && !videoIds.length) return;
       // 전체 다시 시도는 화면에 '실패'로 보이는 영상만 (자막이 생겨 지난 일이 된 자막 단계 실패는 제외)
-      const shown = videoIds ? null : new Set((await refresh()).rows.filter((r) => r.status === 'failed').map((r) => r.video.id));
+      // Day 1~100 영상은 각 영상의 'Day 자료 만들기'로만 다시 보낸다 (전체 다시 시도에 넣지 않음)
+      const shown = videoIds ? null : new Set((await refresh()).rows.filter((r) => r.status === 'failed' && r.series === 'general').map((r) => r.video.id));
       await deps.store.updatePrep((s) => {
         const ids = videoIds ?? Object.entries(s.videos).filter(([id, v]) => v.status === 'failed' && shown!.has(id)).map(([id]) => id);
         const videos = { ...s.videos };
@@ -231,6 +236,46 @@ export function createPrepController(deps: PrepControllerDeps) {
       await clearServerPause();
       void api.start();
     },
+    /**
+     * Day 1~100 영상의 'Day 자료 만들기' — 사용자가 누를 때만 (사용자 작업으로 셈).
+     * 이미 Day 자료가 있으면 아무것도 하지 않는다. 예전 방식(자막·자료) 실패 기록은 지우지 않고 그대로 둔다
+     */
+    async makeDay(videoId: string): Promise<boolean> {
+      const { rows } = await refresh();
+      const row = rows.find((r) => r.video.id === videoId);
+      if (!row || row.series !== 'day' || row.status === 'ready') return false;
+      await deps.store.updatePrep((s) => {
+        const videos = { ...s.videos };
+        const heldNow = { ...(s.held ?? {}) };
+        const hadFailure = videos[videoId]?.stage === 'dayuser';
+        if (hadFailure) delete videos[videoId];
+        delete heldNow[videoId];
+        return {
+          ...s, videos, held: heldNow,
+          queue: s.queue.includes(videoId) ? s.queue : [...s.queue, videoId],
+          manual: [...new Set([...(s.manual ?? []), videoId])],
+          retry: hadFailure ? [...new Set([...s.retry, videoId])] : s.retry,
+        };
+      });
+      await clearServerPause();
+      void api.start();
+      return true;
+    },
+    /**
+     * Day 자료에서 문장 빼기·다시 넣기 (Day 1~100 영상, 사용자 문장만).
+     * 요청이 대기·진행 중이거나 Day 자료가 이미 있으면 바꾸지 않는다. 문장·학습·복습 기록은 건드리지 않음
+     */
+    async setDayExcluded(videoId: string, sentenceId: string, excluded: boolean): Promise<DayExclusionResult | 'busy' | 'not_day'> {
+      const { rows } = await refresh();
+      const row = rows.find((r) => r.video.id === videoId);
+      if (!row || row.series !== 'day') return 'not_day';
+      if (row.status === 'ready') return 'has_material';
+      const running = snapshot.status.kind === 'running' && snapshot.status.videoId === videoId;
+      if (running || row.status === 'queued') return 'busy';
+      const r = await deps.store.setDayExcluded(videoId, sentenceId, excluded);
+      await refresh();
+      return r;
+    },
     /** Gemini 처리 실패로 멈춘 대기열을 사용자가 이어서 (실패한 영상은 다시 보내지 않음) */
     async continueQueue() {
       await clearServerPause();
@@ -242,6 +287,13 @@ export function createPrepController(deps: PrepControllerDeps) {
       if (rows.some((r) => r.status === 'queued')) void api.start();
     },
   };
+
+  async function withoutDays(ids: string[]): Promise<string[]> {
+    if (!ids.length) return ids;
+    const { rows } = await refresh();
+    const days = new Set(rows.filter((r) => r.series === 'day').map((r) => r.video.id));
+    return ids.filter((id) => !days.has(id));
+  }
 
   /** 사용자가 다시 시작하면: 하루 한도 멈춤은 초기화 시각까지 유지, 서버·연결 문제 멈춤은 풀고 다시 시도 */
   async function clearServerPause() {

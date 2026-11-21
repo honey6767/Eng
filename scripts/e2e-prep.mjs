@@ -89,11 +89,11 @@ const seed = (page, day11) =>
           const v = (id, yt, title, i, dur = 300) => ({ id, createdAt: now, updatedAt: now, playlistId: null, youtubeVideoId: yt, title, url: null, thumbnailUrl: null, durationSec: dur, orderIndex: i, randomOrderKey: i / 10, status: 'new', completedAt: null, sources: [{ kind: 'manual', addedAt: now }], channelTitle: null, captionCheck: null, metadataSource: 'manual' });
           const tr = (vid, lines) => ({ id: `tr-${vid}`, createdAt: now, updatedAt: now, videoId: vid, source: 'manual_paste', status: 'success', rawText: lines.join('\n'), segments: lines.map((text, i) => ({ startSec: i * 10, endSec: i * 10 + 9, text })), format: 'timestamped' });
           const vs = tx.objectStore('videos');
-          vs.add(v('d11', 'eNODHkrNuDA', '[Day 11] 필요해 I need 말고', 0));
-          vs.add(v('d12', 'bbbbbbbbbbb', '[Day 12] 좋은 생각이야', 1));
-          vs.add(v('d13', 'ccccccccccc', '[Day 13] 자막 없음', 2));
-          vs.add(v('bad', 'mockFail001', '[Day 14] 실패하는 영상', 3));
-          vs.add(v('long', 'ddddddddddd', '[Day 15] 긴 영상', 4, 32400));
+          vs.add(v('d11', 'eNODHkrNuDA', '[Day 111] 필요해 I need 말고', 0));
+          vs.add(v('d12', 'bbbbbbbbbbb', '[Day 112] 좋은 생각이야', 1));
+          vs.add(v('d13', 'ccccccccccc', '[Day 113] 자막 없음', 2));
+          vs.add(v('bad', 'mockFail001', '[Day 114] 실패하는 영상', 3));
+          vs.add(v('long', 'ddddddddddd', '[Day 115] 긴 영상', 4, 32400));
           const ts = tx.objectStore('transcripts');
           ts.add(tr('d11', day11));
           ts.add(tr('d12', ['Day 12.', '1. That sounds like a good idea.', '2. We should catch up soon.']));
@@ -263,7 +263,7 @@ async function main() {
       check('새 대화문: ✨ 유용한 회화 표현(대화문 출처) 저장 · 같은 요청 안에서 (추가 호출 없음)', ph.some((p) => p.base === 'Same here' && p.source === 'dialogue') && !ph.some((p) => /hit the road|could use|honestly/.test(p.base)), ph.map((p) => p.base).join(', '));
       check('새 대화문: ✨ 위치는 2순위 빈칸 (2단계 핵심 Chunk만은 그대로)', occ.length > 0 && occ.every((o) => (dd.blankPlan.lines[o.lineId] ?? []).includes(2)) && Object.values(dd.blankPlan.lines).some((r) => r.includes(1)));
     }
-    check('저장: 대화문에 빈칸 자료·출처 Day·Chunk 사용', d11 && d11.blankPlan && Object.keys(d11.blankPlan.lines).length === d11.lines.length && d11.sourceDays[0] === 11 && d11.chunkUsages.length > 0);
+    check('저장: 대화문에 빈칸 자료·Chunk 사용 (Day 101 이상은 일반 영상이라 출처 Day 없음)', d11 && d11.blankPlan && Object.keys(d11.blankPlan.lines).length === d11.lines.length && (d11.sourceDays ?? []).length === 0 && d11.chunkUsages.length > 0);
     for (const t of ['videos', 'transcripts', 'reviewStates', 'studyLogs', 'playlists', 'expressionNotes']) {
       const a = byId(after.tables[t]);
       const kept = Object.entries(byId(before.tables[t])).every(([id, r]) => same(a[id], r));
@@ -295,7 +295,7 @@ async function main() {
             const db = req.result;
             const tx = db.transaction(['videos', 'transcripts'], 'readwrite');
             const now = '2026-11-16T09:00:00.000Z';
-            tx.objectStore('videos').add({ id: 'p12', createdAt: now, updatedAt: now, playlistId: null, youtubeVideoId: 'bbbbbbbbbbb', title: '[Day 12] 좋은 생각이야', url: null, thumbnailUrl: null, durationSec: 300, orderIndex: 0, randomOrderKey: 0, status: 'new', completedAt: null, sources: [{ kind: 'manual', addedAt: now }], channelTitle: null, captionCheck: null, metadataSource: 'manual' });
+            tx.objectStore('videos').add({ id: 'p12', createdAt: now, updatedAt: now, playlistId: null, youtubeVideoId: 'bbbbbbbbbbb', title: '[Day 112] 좋은 생각이야', url: null, thumbnailUrl: null, durationSec: 300, orderIndex: 0, randomOrderKey: 0, status: 'new', completedAt: null, sources: [{ kind: 'manual', addedAt: now }], channelTitle: null, captionCheck: null, metadataSource: 'manual' });
             tx.objectStore('transcripts').add({ id: 'tr-p12', createdAt: now, updatedAt: now, videoId: 'p12', source: 'manual_paste', status: 'success', rawText: lines.join('\n'), segments: lines.map((text, i) => ({ startSec: i * 10, endSec: i * 10 + 9, text })), format: 'timestamped' });
             tx.oncomplete = () => {
               db.close();

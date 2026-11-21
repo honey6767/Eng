@@ -99,7 +99,7 @@ async function mockSuite(base) {
   check('비공개/삭제 영상 구분 표시', await textMatches(result, /불러올 수 없는 영상 2개 \(비공개 1 · 삭제 1\)/));
   check('API 사용량 표시 (7 단위)', await textMatches(result, /사용량: 7 단위/));
   await page.screenshot({ path: `${SHOTS}/s2-01-playlist-imported.png`, fullPage: false });
-  check('목록: 실제 120 + 샘플 3', await textMatches(page.getByRole('tab', { name: /^전체/ }), /123/));
+  check('목록: 실제 120 + 샘플 3', await textMatches(page.getByRole('tablist', { name: '학습 상태 필터' }).getByRole('tab', { name: /^전체/ }), /123/));
 
   // 같은 재생목록 재등록
   await register(page, 'https://youtube.com/playlist?list=PLmockPlaylist0000001');
@@ -111,7 +111,7 @@ async function mockSuite(base) {
   check('재생목록에 있는 영상을 개별 URL로 등록 → 출처만 연결', await textMatches(result, /이미 등록된 영상이에요 — 기존 학습 기록은 그대로/));
   await register(page, 'https://www.youtube.com/watch?v=mocksolo001');
   check('새 개별 영상 등록', await textMatches(result, /새 영상을 등록했어요/));
-  check('전체 영상 수 124 (중복 없음)', await textMatches(page.getByRole('tab', { name: /^전체/ }), /124/));
+  check('전체 영상 수 124 (중복 없음)', await textMatches(page.getByRole('tablist', { name: '학습 상태 필터' }).getByRole('tab', { name: /^전체/ }), /124/));
   await register(page, 'https://www.youtube.com/watch?v=mocksolo001');
   check('같은 개별 영상 재등록 → 정보만 갱신', await textMatches(result, /이미 개별 등록된 영상이에요/));
 
@@ -122,9 +122,9 @@ async function mockSuite(base) {
 
   // 출처 필터
   await page.getByLabel('출처 필터').selectOption({ label: '재생목록: [MOCK] 테스트 재생목록' });
-  check('출처 필터: 재생목록 120개', await textMatches(page.getByRole('tab', { name: /^전체/ }), /120/));
+  check('출처 필터: 재생목록 120개', await textMatches(page.getByRole('tablist', { name: '학습 상태 필터' }).getByRole('tab', { name: /^전체/ }), /120/));
   await page.getByLabel('출처 필터').selectOption({ label: '개별 등록 영상' });
-  check('출처 필터: 개별 등록 2개 (중복 연결 포함)', await textMatches(page.getByRole('tab', { name: /^전체/ }), /2/));
+  check('출처 필터: 개별 등록 2개 (중복 연결 포함)', await textMatches(page.getByRole('tablist', { name: '학습 상태 필터' }).getByRole('tab', { name: /^전체/ }), /2/));
   await page.getByLabel('출처 필터').selectOption('all');
 
   // 5. 상세: 제목·길이·출처
@@ -215,7 +215,7 @@ async function mockSuite(base) {
   await page.goto(base);
   check('기존 암기 기록 유지 (외운 대화문 1)', await textMatches(page.getByTestId('stat-외운 대화문'), /^1$/));
   await page.goto(`${base}/videos`);
-  check('전체 영상 = 124', await textMatches(page.getByRole('tab', { name: /^전체/ }), /124/));
+  check('전체 영상 = 124', await textMatches(page.getByRole('tablist', { name: '학습 상태 필터' }).getByRole('tab', { name: /^전체/ }), /124/));
 
   // 샘플 삭제 → 실제 영상 보존
   await page.goto(`${base}/settings`);
@@ -223,7 +223,7 @@ async function mockSuite(base) {
   await page.getByRole('alertdialog').getByRole('button', { name: '샘플 삭제' }).click();
   await page.getByRole('button', { name: '샘플 데이터 다시 넣기' }).waitFor();
   await page.goto(`${base}/videos`);
-  check('샘플 삭제 후 실제 영상 121개 보존', await textMatches(page.getByRole('tab', { name: /^전체/ }), /121/));
+  check('샘플 삭제 후 실제 영상 121개 보존', await textMatches(page.getByRole('tablist', { name: '학습 상태 필터' }).getByRole('tab', { name: /^전체/ }), /121/));
   await page.goto(`${base}/videos/${await page.evaluate(() => '')}`);
   await page.goto(`${base}/videos`);
   await page.getByTestId('video-list').getByText('[MOCK] 테스트 영상 5', { exact: true }).click();
@@ -234,7 +234,7 @@ async function mockSuite(base) {
   await page.getByRole('button', { name: '샘플 데이터 다시 넣기' }).click();
   await page.getByRole('button', { name: '샘플 데이터 삭제' }).waitFor();
   await page.goto(`${base}/videos`);
-  check('샘플 다시 넣기 후 124개 (실제 데이터 그대로)', await textMatches(page.getByRole('tab', { name: /^전체/ }), /124/));
+  check('샘플 다시 넣기 후 124개 (실제 데이터 그대로)', await textMatches(page.getByRole('tablist', { name: '학습 상태 필터' }).getByRole('tab', { name: /^전체/ }), /124/));
 
   // 11. 전체 학습 후 재셔플 — 작은 재생목록으로 새 브라우저에서
   const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -325,7 +325,7 @@ async function limitedSuite(base) {
   const ok = await visible(alert, 15000);
   const msg = ok ? (await alert.textContent()) ?? '' : '';
   check('oEmbed 실패 시 성공으로 표시하지 않고 오류 안내', ok && !/등록했어요/.test(msg), msg.trim());
-  check('실패 시 영상이 저장되지 않음', await textMatches(page.getByRole('tab', { name: /^전체/ }), /3$/));
+  check('실패 시 영상이 저장되지 않음', await textMatches(page.getByRole('tablist', { name: '학습 상태 필터' }).getByRole('tab', { name: /^전체/ }), /3$/));
   await page.goto(`${base}/settings`);
   check('설정: API 키 무료 발급 안내', await visible(page.getByText('YouTube Data API v3', { exact: true }).first()));
   await page.screenshot({ path: `${SHOTS}/s2-07-settings.png`, fullPage: true });

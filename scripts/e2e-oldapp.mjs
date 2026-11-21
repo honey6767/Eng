@@ -9,6 +9,8 @@
  * - 잘못된·누락된 표시로 보내도 우회 불가, 정확한 사용자 표시만 사용자 작업
  * - 15초 간격, Google 한도 초과 시 전체 차단은 구버전 앱에도 그대로
  * - 구버전 앱의 Gemini 처리 실패 동작 (그 영상만 실패, 다음 영상으로 계속, 실패 영상 자동 재요청 없음)
+ * - 2단계: Day 1~100 영상의 학습 자료 요청(pack·daypack·content)은 구버전 앱이 보내도 Gemini 없이 거절 (day_manual_only, HTTP 409)
+ *   (자막 추출 요청은 영상 ID·길이만 와서 Day인지 알 수 없음 — 자동 몫 6회 안에서만 가능, 단위 테스트에서 확인)
  * - 기존 학습 데이터·DB 버전 그대로
  */
 import { createRequire } from 'node:module';
@@ -90,8 +92,14 @@ const dumpDb = (page) =>
       }),
   );
 
-// Day 1~9 (자막 있음, 자료 1회씩). Day 3은 가짜 Gemini가 처리 실패로 끝내는 영상
-const VIDEOS = Array.from({ length: 9 }, (_, i) => ({ id: `d${i + 1}`, yt: i === 2 ? 'mockFail001' : `oldAppVid0${i + 1}`, title: `[Day ${i + 1}] 구버전 시험 ${i + 1}` }));
+// 일반 영상 9개 (Day 101~109 — 1~100 밖이라 일반, 자막 있음, 자료 1회씩). 세 번째는 가짜 Gemini가 처리 실패로 끝내는 영상
+// + Day 1·2 영상 (자막 있음) — 구버전 앱이 자동으로 자료를 요청해도 서버가 거절해야 함
+const VIDEOS = [
+  ...Array.from({ length: 9 }, (_, i) => ({ id: `d${i + 1}`, yt: i === 2 ? 'mockFail001' : `oldAppVid0${i + 1}`, title: `[Day ${101 + i}] 구버전 시험 ${i + 1}` })),
+  { id: 'day1', yt: 'oldDayVid01', title: '[Day 1] Day 영상 1' },
+  { id: 'day2', yt: 'oldDayVid02', title: '[Day 2] Day 영상 2' },
+];
+const DAY_YT = ['oldDayVid01', 'oldDayVid02'];
 
 const seed = (page, videos) =>
   page.evaluate(
@@ -188,6 +196,12 @@ async function main() {
       await waitFor(async () => sends.some((s) => s.videoId === `oldAppVid0${id.slice(1)}` && s.state === 'succeeded'), 120, 500);
     }
     check('구버전 앱 버튼 요청 2건 처리 (표시 없이 보냄)', createdIds().length === 2 && appSends().every((s) => !s.hasOrigin), createdIds().join(','));
+    // Day 1 영상에서 구버전 앱 버튼 → 서버가 Gemini 없이 거절
+    await page.goto(`${BASE}/videos/day1`);
+    await page.getByTestId('video-prep-enqueue').click();
+    await waitFor(async () => sends.some((s) => s.videoId === 'oldDayVid01' && s.code), 60, 500);
+    const dayBtn = sends.filter((s) => s.videoId === 'oldDayVid01');
+    check('구버전 앱 Day 1 버튼 요청 → 409 day_manual_only (Gemini 호출 없음)', dayBtn.length > 0 && dayBtn.every((s) => s.status === 409 && s.code === 'day_manual_only' && !s.interactionId), dayBtn.map((s) => `${s.task}:${s.status}:${s.code}`).join(','));
 
     // ── 2. 구버전 앱 '기존 영상 자료 만들기 시작' ──
     await page.goto(`${BASE}/extraction`);
@@ -196,7 +210,10 @@ async function main() {
     const settled = await waitFor(async () => ['oldAppVid07', 'oldAppVid08', 'oldAppVid09'].every((v) => sends.some((s) => s.videoId === v && s.code)), 600, 500);
     await waitFor(async () => /대기 0/.test((await page.getByTestId('prep-counts').innerText().catch(() => '')) || ''), 60, 500);
     await page.waitForTimeout(2000);
+    await waitFor(async () => DAY_YT.every((v) => sends.some((s) => s.videoId === v && s.code)), 60, 500);
     const created = createdIds();
+    const daySends = sends.filter((s) => DAY_YT.includes(s.videoId));
+    check('구버전 앱 대기열의 Day 1·2 자료 요청은 모두 409 day_manual_only, Gemini 생성 0', DAY_YT.every((v) => daySends.some((s) => s.videoId === v)) && daySends.every((s) => s.status === 409 && s.code === 'day_manual_only' && !s.interactionId), daySends.map((s) => `${s.videoId}:${s.task}:${s.code}`).join(','));
     check('구버전 앱의 모든 요청은 자동으로 세어 Gemini 생성은 하루 자동 몫 6번까지', settled && created.length === 6 && created.join(',') === 'oldAppVid01,oldAppVid02,mockFail001,oldAppVid04,oldAppVid05,oldAppVid06', created.join(','));
     const blocked = sends.filter((s) => ['oldAppVid07', 'oldAppVid08', 'oldAppVid09'].includes(s.videoId));
     check('7번째부터는 Gemini 호출 없이 auto_cap (HTTP 429)', blocked.length >= 3 && blocked.every((s) => s.code === 'auto_cap' && s.status === 429 && !s.interactionId), blocked.map((s) => `${s.videoId}:${s.status}:${s.code}`).join(','));
@@ -209,10 +226,10 @@ async function main() {
     // 구버전 앱의 Gemini 처리 실패 동작
     const failSends = sends.filter((s) => s.videoId === 'mockFail001');
     const afterFail = sends.findIndex((s) => s.videoId === 'oldAppVid04');
-    check('구버전 앱: 처리 실패(Day 3)는 그 영상만 실패, 다음 영상으로 계속 (멈추지 않음)', failSends.some((s) => s.code === 'gemini_failed') && afterFail > sends.findIndex((s) => s.videoId === 'mockFail001' && s.code === 'gemini_failed'));
+    check('구버전 앱: 처리 실패(세 번째 영상)는 그 영상만 실패, 다음 영상으로 계속 (멈추지 않음)', failSends.some((s) => s.code === 'gemini_failed') && afterFail > sends.findIndex((s) => s.videoId === 'mockFail001' && s.code === 'gemini_failed'));
     check('구버전 앱: 실패한 영상을 자동으로 다시 생성하지 않음', new Set(sends.filter((s) => s.videoId === 'mockFail001' && s.interactionId).map((s) => s.interactionId)).size === 1, `Gemini 작업 ${new Set(sends.filter((s) => s.videoId === 'mockFail001' && s.interactionId).map((s) => s.interactionId)).size}개`);
     const counts = await page.getByTestId('prep-counts').innerText();
-    check('구버전 앱 화면: auto_cap 영상은 실패로 표시됨 (구버전은 이 코드를 모름)', /실패 4/.test(counts), counts);
+    check('구버전 앱 화면: auto_cap·day_manual_only 영상은 실패로 표시됨 (구버전은 이 코드를 모름)', /실패 6/.test(counts), counts);
     await page.screenshot({ path: `${SHOTS}/oldapp-01.png`, fullPage: true });
 
     // ── 3. 구버전 앱 '실패만 다시 시도' — 표시 없음 → 자동 몫 → 막힘 ──
@@ -221,7 +238,7 @@ async function main() {
     await waitFor(async () => sends.slice(n0).length >= 4, 120, 500);
     await page.waitForTimeout(3000);
     const retried = sends.slice(n0);
-    check('구버전 앱 다시 시도도 자동 몫으로 막힘 (Gemini 생성 없음)', retried.length > 0 && retried.every((s) => !s.interactionId && (s.code === 'auto_cap' || s.state === 'pending')) && createdIds().length === 6, retried.map((s) => `${s.videoId}:${s.code ?? s.state}`).join(','));
+    check('구버전 앱 다시 시도도 자동 몫·Day 보호로 막힘 (Gemini 생성 없음)', retried.length > 0 && retried.every((s) => !s.interactionId && (s.code === 'auto_cap' || s.code === 'day_manual_only' || s.state === 'pending')) && createdIds().length === 6, retried.map((s) => `${s.videoId}:${s.code ?? s.state}`).join(','));
 
     // ── 4. 조작·누락된 표시로 직접 보내기 ──
     const tricks = [
@@ -240,6 +257,16 @@ async function main() {
       if (!(r.status === 429 && r.body.code === 'auto_cap' && !r.created)) trickOut.push('← 우회!');
     }
     check('누락·잘못된·서로 맞지 않는 표시는 모두 자동으로 → 우회 불가', !trickOut.includes('← 우회!'), trickOut.join(' / '));
+    // Day 1~100 자료 요청: 표시 없음·자동·잘못된 표시 → 409 (기록·사용량 없음). 1~100 밖(Day 101)은 Day 보호 대상 아님
+    const dayBody = (extra) => ({ task: 'daypack', videoId: 'dayDirect01', title: '[Day 50] x', seriesKind: 'day', dayNumber: 50, sentences: [{ number: 1, text: 'I could use a break.', meaningKo: '', chunks: [] }], promptVersion: 'dp1', ...extra });
+    const dayTricks = [];
+    for (const extra of [{}, { origin: 'auto' }, { origin: 'USER' }, { origin: 'user', auto: true }]) {
+      const r = await direct(page, dayBody(extra));
+      dayTricks.push(`${JSON.stringify(extra)}:${r.status}:${r.body.code ?? r.body.state}`);
+    }
+    const packDay = await direct(page, { task: 'pack', videoId: 'dayDirect02', title: '[Day 100] x', seriesKind: 'day', dayNumber: 100, transcript: 'I could use a break. You could use some rest.', promptVersion: 'p1' });
+    dayTricks.push(`pack Day100:${packDay.status}:${packDay.body.code}`);
+    check('Day 1~100 자료를 표시 없이·조작해 보내도 409 day_manual_only', dayTricks.every((t) => t.endsWith(':409:day_manual_only')), dayTricks.join(' / '));
     const okUser = await direct(page, { videoId: 'userDirect1', durationSec: 60, promptVersion: 'v1', origin: 'user' });
     check('정확한 사용자 표시(origin: user)만 사용자 작업으로 통과', okUser.created, `${okUser.status}:${okUser.body.state}`);
 

@@ -4,6 +4,7 @@ import { createId } from '@/utils/id';
 import { nowISO } from '@/utils/date';
 import { normalizeExpressionKey } from '@/utils/text';
 import { findExpressionSpan, type TextSpan } from '@/utils/expressionSpan';
+import { DAY_EXCLUSIONS_META_KEY, DAY_SENTENCE_CHARS, DAY_SENTENCE_MAX, excludedSetOf, parseDayExclusions, userSentencesOf } from '@/services/days/daySeries';
 
 /**
  * 3단계 — 핵심 문장 5개 관리
@@ -38,22 +39,43 @@ export interface AddKeySentenceInput {
 /** 공백(줄바꿈·연속 공백)만 정리하고 글자는 그대로 둔다 */
 export const cleanOriginal = (text: string) => text.replace(/\s+/g, ' ').trim();
 
-export async function addKeySentence(repos: Repositories, videoId: string, input: AddKeySentenceInput): Promise<KeySentence> {
+/**
+ * opts.day: Day 1~100 영상 — Day 자료 재료 문장으로 최대 20개.
+ * 개수·중복·번호는 사용자가 넣은 문장(직접 입력·자막에서 고름)끼리만 본다 (예전 AI 추출 문장은 Day 재료가 아니므로 세지 않음).
+ * 영어 원문은 자르지 않는다 — 500자가 넘으면 저장하지 않는다.
+ */
+export async function addKeySentence(repos: Repositories, videoId: string, input: AddKeySentenceInput, opts: { day?: boolean } = {}): Promise<KeySentence> {
   const video = await repos.videos.get(videoId);
   if (!video) throw new KeySentenceError('video_not_found', '영상을 찾을 수 없습니다.');
   const english = cleanOriginal(input.english);
   if (!english) throw new KeySentenceError('empty', '영어 문장을 입력해 주세요.');
+  if (opts.day && english.length > DAY_SENTENCE_CHARS) throw new KeySentenceError('limit', `Day 자료 문장은 ${DAY_SENTENCE_CHARS}자까지예요 (지금 ${english.length}자). 원문을 자르지 않으려고 저장하지 않았어요.`);
 
-  const existing = await repos.keySentences.listByVideo(videoId);
-  if (existing.length >= KEY_SENTENCE_COUNT) {
-    throw new KeySentenceError('limit', `핵심 문장은 영상당 ${KEY_SENTENCE_COUNT}개까지 선정할 수 있습니다.`);
-  }
+  const all = await repos.keySentences.listByVideo(videoId);
   const key = normalizeExpressionKey(english);
-  if (existing.some((s) => normalizeExpressionKey(s.english) === key)) {
-    throw new KeySentenceError('duplicate', '이미 핵심 문장으로 선정한 문장입니다.');
+  let order: number;
+  if (opts.day) {
+    // Day: 개수는 Day 자료에 실제로 쓰는 문장(뺀 문장 제외)만 20개까지. 뺀 문장은 개수 제한 없이 그대로 둔다
+    const mine = userSentencesOf(all);
+    const excluded = excludedSetOf(parseDayExclusions(await repos.meta.get(DAY_EXCLUSIONS_META_KEY)), videoId);
+    const dup = mine.find((s) => normalizeExpressionKey(s.english) === key);
+    if (dup) throw new KeySentenceError('duplicate', excluded.has(dup.id) ? '이미 있는 문장이에요 (Day 자료에서 뺀 상태). 그 문장의 ‘Day 자료에 다시 넣기’를 눌러 주세요.' : '이미 핵심 문장으로 선정한 문장입니다.');
+    if (mine.filter((s) => !excluded.has(s.id)).length >= DAY_SENTENCE_MAX) {
+      throw new KeySentenceError('limit', `Day 자료에 쓰는 핵심 문장은 ${DAY_SENTENCE_MAX}개까지예요. 문장을 ‘Day 자료에서 빼기’ 하면 더 넣을 수 있어요.`);
+    }
+    const used = new Set(mine.map((s) => s.order));
+    order = 1;
+    while (used.has(order)) order++;
+  } else {
+    if (all.length >= KEY_SENTENCE_COUNT) {
+      throw new KeySentenceError('limit', `핵심 문장은 영상당 ${KEY_SENTENCE_COUNT}개까지 선정할 수 있습니다.`);
+    }
+    if (all.some((s) => normalizeExpressionKey(s.english) === key)) {
+      throw new KeySentenceError('duplicate', '이미 핵심 문장으로 선정한 문장입니다.');
+    }
+    const used = new Set(all.map((s) => s.order));
+    order = [1, 2, 3, 4, 5].find((n) => !used.has(n)) ?? all.length + 1;
   }
-  const used = new Set(existing.map((s) => s.order));
-  const order = [1, 2, 3, 4, 5].find((n) => !used.has(n)) ?? existing.length + 1;
 
   const now = nowISO();
   const sentence: KeySentence = {
@@ -94,11 +116,27 @@ export async function updateKeySentenceDetails(
   });
 }
 
+/**
+ * Day 영상의 선정 취소 보호 — Day 자료가 실제로 참조하는 문장만 (참조가 끊기면 Chunk 활용 사례·대화 원문 출처가 사라진 문장을 가리키게 됨)
+ * - day: Day 1~100 영상 화면에서 부를 때만 true (일반 영상은 예전 규칙 그대로)
+ * - linkedIds: 이 영상의 학습 대상(Chunk)이 연결한 문장 id (sentenceId·활용 사례) — 화면이 넘겨준다
+ */
+export interface RemovalOptions {
+  day?: boolean;
+  linkedIds?: ReadonlySet<string>;
+}
+
 /** 선정 취소가 불가능한 이유 (가능하면 null) */
-export async function getRemovalBlocker(repos: Repositories, sentence: KeySentence): Promise<string | null> {
+export async function getRemovalBlocker(repos: Repositories, sentence: KeySentence, opts: RemovalOptions = {}): Promise<string | null> {
   const dialogues = await repos.dialogues.listByVideo(sentence.videoId);
   if (dialogues.some((d) => d.lines.some((l) => l.segments.some((seg) => seg.keySentenceId === sentence.id)))) {
     return '대화문에서 사용 중인 문장이라 선정을 취소할 수 없습니다.';
+  }
+  if (opts.day && dialogues.some((d) => d.lines.some((l) => l.sourceSentenceId === sentence.id))) {
+    return 'Day 대화문의 원문 출처로 연결된 문장이라 선정을 취소할 수 없습니다.';
+  }
+  if (opts.day && opts.linkedIds?.has(sentence.id)) {
+    return 'Day 자료의 Chunk(활용 사례)와 연결된 문장이라 선정을 취소할 수 없습니다.';
   }
   if (sentence.correctCount > 0 || sentence.wrongCount > 0 || sentence.status !== 'not_started') {
     return '학습 기록이 있는 문장이라 선정을 취소할 수 없습니다.';
@@ -113,10 +151,10 @@ export async function getRemovalBlocker(repos: Repositories, sentence: KeySenten
  * 잘못 고른 문장의 선정 취소. 학습·복습 기록이나 대화문 사용이 있으면 거부한다.
  * 연결된 표현 레코드는 지우지 않고 이 문장 출처만 뺀다.
  */
-export async function removeKeySentence(repos: Repositories, id: string): Promise<void> {
+export async function removeKeySentence(repos: Repositories, id: string, opts: RemovalOptions = {}): Promise<void> {
   const s = await repos.keySentences.get(id);
   if (!s) throw new KeySentenceError('not_found', '핵심 문장을 찾을 수 없습니다.');
-  const blocker = await getRemovalBlocker(repos, s);
+  const blocker = await getRemovalBlocker(repos, s, opts);
   if (blocker) throw new KeySentenceError('locked', blocker);
   for (const exprId of s.expressionIds) {
     await repos.expressions.removeSourceRef(exprId, { videoId: s.videoId, sentenceId: s.id });

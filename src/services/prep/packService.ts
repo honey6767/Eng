@@ -11,6 +11,7 @@ import { normalizeExpressionKey } from '@/utils/text';
 import { chunkLabel, matchAllParts, matchParts, partsFrom, wordsOf } from '@/utils/chunkMatch';
 import { isSafeBase, locateChunk, parsePatternFields, patternDetail } from '@/utils/chunkBase';
 import { phraseSpansByLine, validateUsefulPhrases } from '@/services/phrases/usefulPhrases';
+import { includedDaySentences } from '@/services/days/daySeries';
 import { contentChunkId, planContent, seriesOf, transcriptText, validateContent, type ContentChunk, type ContentResult } from '@/services/content/contentService';
 
 /**
@@ -60,6 +61,39 @@ export function buildDayPackRequest(video: Video, day: DayAssignment | undefined
     ...(taughtHints.length ? { taughtHints } : {}),
     promptVersion: AI_DAYPACK_PROMPT_VERSION,
   };
+}
+
+/**
+ * Day 1~100 영상의 Day 자료 요청 — 사용자가 직접 입력하거나 자막에서 고른 핵심 문장만 (사용자가 정한 순서, 1번부터)
+ * - AI가 뽑은 문장·저장된 자막·자막 분석 힌트는 보내지 않는다
+ * - 영어 원문은 자르거나 고치지 않는다 (길면 보내기 전에 거절 — daySentenceProblem)
+ */
+export function buildDayUserRequest(video: Video, day: DayAssignment | undefined, sentences: KeySentence[], excluded: ReadonlySet<string> = new Set()): AiDayPackRequest {
+  const s = seriesOf(video, day);
+  const L = DAYPACK_LIMITS;
+  return {
+    task: 'daypack',
+    videoId: video.youtubeVideoId!,
+    title: video.title.slice(0, CONTENT_LIMITS.titleChars),
+    seriesKind: s.seriesKind,
+    dayNumber: s.dayNumber,
+    // Day 자료에서 뺀 문장은 보내지 않는다 (번호도 건너뜀)
+    sentences: includedDaySentences(sentences, excluded).map((x, i) => ({ number: i + 1, text: x.english, meaningKo: (x.korean ?? '').slice(0, L.sentenceChars), chunks: [] })),
+    promptVersion: AI_DAYPACK_PROMPT_VERSION,
+  };
+}
+
+/** 요청 때 보낸 문장 번호 → 지금의 사용자 문장 id. 그 사이 문장이 바뀌었으면(추가·삭제·수정·순서·빼기/다시 넣기) null */
+export function daySentenceMap(sent: { number: number; text: string }[], sentences: KeySentence[], excluded: ReadonlySet<string> = new Set()): Map<number, string> | null {
+  const now = includedDaySentences(sentences, excluded);
+  if (now.length !== sent.length) return null;
+  const map = new Map<number, string>();
+  for (const [i, x] of now.entries()) {
+    const s = sent[i];
+    if (!s || s.number !== i + 1 || s.text !== x.english) return null;
+    map.set(s.number, x.id);
+  }
+  return map;
 }
 
 // ─────────────────────────────────────────────
@@ -320,6 +354,8 @@ export interface PackContext {
   expressionIdByKey: Map<string, string>;
   now: string;
   newId: () => string;
+  /** Day 자료(사용자 문장): 요청 문장 번호 → 사용자 문장 id. 있으면 AI 문장 대신 이것으로 연결 */
+  sentenceIdByNumber?: Map<number, string>;
 }
 
 export interface PackPlan {
@@ -374,6 +410,8 @@ export function planPack(ctx: PackContext): PackPlan {
     byKey = c.expressionIdByKey;
     idByNumber = c.sentenceIdByNumber;
     allSentences.push(...c.sentences);
+  } else if (ctx.sentenceIdByNumber) {
+    idByNumber = new Map(ctx.sentenceIdByNumber);
   } else {
     for (const s of aiSentencesOf(ctx.existingSentences)) if (!idByNumber.has(s.aiNumber ?? s.order)) idByNumber.set(s.aiNumber ?? s.order, s.id);
   }

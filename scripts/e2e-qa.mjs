@@ -147,6 +147,14 @@ async function waitFor(fn, tries = 120, ms = 1000) {
 
 const card = (page, text) => page.locator('[data-testid="content-chunk"], [data-testid="core-chunk"]').filter({ has: page.locator(`[data-testid="chunk-base"]:text-is("${text}"), .en:text-is("${text}")`) }).first();
 
+/** 2단계: Day 1~100 영상의 예전 AI 추출 문장·자료(Day 대화문 없음)는 '예전 AI 추출 문장 (참고)'로 접혀 있다 → 펼쳐서 확인 */
+async function openOldAi(page) {
+  const d = page.getByTestId('old-ai-sentences');
+  if (await d.count().catch(() => 0)) {
+    if (!(await d.evaluate((el) => el.open))) await d.locator(':scope > summary').click();
+  }
+}
+
 async function main() {
   const server = await startServer();
   const browser = await chromium.launch();
@@ -156,6 +164,8 @@ async function main() {
     const { ctx, page } = await openSeeded(browser, { key: true, failed502: true }, sends, errors);
     const before = await dumpDb(page);
     await page.goto(`${BASE}/videos/d11`);
+    await page.getByTestId('day-material').waitFor();
+    await openOldAi(page);
     await page.getByTestId('core-chunks').waitFor();
     await page.waitForTimeout(1500);
 
@@ -212,8 +222,12 @@ async function main() {
     await page.waitForTimeout(800);
     check('질문 기록 화면 없음 (주소로 들어가도 열리지 않음)', (await page.getByTestId('ai-questions-page').count()) === 0);
     await page.goto(`${BASE}/videos/d11`);
+    await page.getByTestId('day-material').waitFor();
+    await openOldAi(page);
     await page.getByTestId('core-chunks').waitFor();
     await page.reload();
+    await page.getByTestId('day-material').waitFor();
+    await openOldAi(page);
     await page.getByTestId('core-chunks').waitFor();
     await page.waitForTimeout(3000);
     check('새로고침해도 AI 요청 없음', sends.length === 0, JSON.stringify(sends.map((s) => s.task)));
@@ -249,6 +263,8 @@ async function main() {
     // ── 휴대폰 화면 ──
     const phone = await openSeeded(browser, { key: true, device: 'iPhone 13' }, [], errors);
     await phone.page.goto(`${BASE}/videos/d11`);
+    await phone.page.getByTestId('day-material').waitFor();
+    await openOldAi(phone.page);
     await phone.page.getByTestId('core-chunks').waitFor();
     await phone.page.getByTestId('chunk-pattern').first().waitFor();
     check('휴대폰: Chunk·교체 패턴 화면 가로 넘침 없음', await phone.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));

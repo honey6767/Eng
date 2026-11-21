@@ -1,4 +1,5 @@
 import type { StudyDatabase } from '@/db/database';
+import { DAY_EXCLUSIONS_META_KEY, excludedSetOf, parseDayExclusions, type DayExclusions } from '@/services/days/daySeries';
 import type { AiTaskRequest } from '@/types/aiApi';
 import type { DayAssignment, Dialogue, DialogueProgress, Expression, ExtractionDraft, ExtractionJob, KeySentence, LearningItem, ReviewState, Transcript, Video } from '@/types/models';
 import { hasContent, type ContentContext, type ContentPlan } from '@/services/content/contentService';
@@ -19,7 +20,8 @@ export const META_PREP = 'prepState';
 
 export interface PrepVideoState {
   status: 'failed' | 'skipped';
-  stage: 'transcript' | 'pack' | 'daypack';
+  /** dayuser: Day 1~100 영상의 Day 자료 (사용자 문장) */
+  stage: 'transcript' | 'pack' | 'daypack' | 'dayuser';
   error: { code: string; message: string; httpStatus: number | null };
   attempts: number;
   updatedAt: string;
@@ -59,7 +61,12 @@ export interface PrepOverview {
   dialogues: Dialogue[];
   jobs: ExtractionJob[];
   drafts: ExtractionDraft[];
+  /** Day 자료에서 뺀 문장 (appMeta 'dayExclusions', 없으면 빈 값) */
+  dayExclusions: DayExclusions;
 }
+
+/** 뺀 문장 바꾸기 결과 — ok 말고는 아무것도 바꾸지 않음 */
+export type DayExclusionResult = 'ok' | 'not_found' | 'not_user_sentence' | 'has_material';
 
 export interface AiTaskState {
   requestId: string;
@@ -107,6 +114,15 @@ export interface ContentStore {
   updatePrep(fn: (s: PrepState) => PrepState): Promise<PrepState>;
   readPrepOverview(): Promise<PrepOverview>;
   /** 공통 Chunk·Day 대화문 저장 — 추가만. 이미 Day 대화문이 있으면 null */
+  /** Day 정리 목록 (읽기 전용 — 영상 목록의 Day/일반 구분용) */
+  listDayAssignments(): Promise<DayAssignment[]>;
+  /** 이 영상에서 Day 자료에서 뺀 문장 id */
+  getDayExcluded(videoId: string): Promise<Set<string>>;
+  /**
+   * Day 자료에서 빼기·다시 넣기 — appMeta 'dayExclusions' 기록만 바꾼다 (문장·학습·복습 기록은 그대로).
+   * 사용자 문장만, 그 영상에 Day 자료(AI Day 대화문)가 아직 없을 때만. 요청 대기·진행 중 확인은 대기열이 한다
+   */
+  setDayExcluded(videoId: string, sentenceId: string, excluded: boolean): Promise<DayExclusionResult>;
   applyPack(videoId: string, plan: (ctx: Omit<PackContext, 'content' | 'pack' | 'requestId' | 'now' | 'newId' | 'dayNumber'>) => PackPlan): Promise<PackPlan | null>;
   readDialogueStudy(dialogueId: string): Promise<{ dialogue: Dialogue; progress: DialogueProgress | undefined; sentences: KeySentence[] } | null>;
   /** 이 대화문의 암기 진도만 저장 */
@@ -186,7 +202,7 @@ export function createContentStore(db: StudyDatabase): ContentStore {
         return next;
       }),
     readPrepOverview: () =>
-      db.transaction('r', [db.videos, db.transcripts, db.dayAssignments, db.keySentences, db.learningItems, db.dialogues, db.extractionJobs, db.extractionDrafts], async () => ({
+      db.transaction('r', [db.videos, db.transcripts, db.dayAssignments, db.keySentences, db.learningItems, db.dialogues, db.extractionJobs, db.extractionDrafts, db.appMeta], async () => ({
         videos: await db.videos.toArray(),
         transcripts: await db.transcripts.toArray(),
         days: await db.dayAssignments.toArray(),
@@ -195,7 +211,26 @@ export function createContentStore(db: StudyDatabase): ContentStore {
         dialogues: await db.dialogues.toArray(),
         jobs: await db.extractionJobs.toArray(),
         drafts: await db.extractionDrafts.toArray(),
+        dayExclusions: parseDayExclusions((await db.appMeta.get(DAY_EXCLUSIONS_META_KEY))?.value),
       })),
+    listDayAssignments: () => db.dayAssignments.toArray(),
+    getDayExcluded: async (videoId) => excludedSetOf(parseDayExclusions((await db.appMeta.get(DAY_EXCLUSIONS_META_KEY))?.value), videoId),
+    setDayExcluded: (videoId, sentenceId, excluded) =>
+      db.transaction('rw', [db.appMeta, db.keySentences, db.dialogues], async (): Promise<DayExclusionResult> => {
+        const s = await db.keySentences.get(sentenceId);
+        if (!s || s.videoId !== videoId) return 'not_found';
+        if (s.origin === 'ai_extracted') return 'not_user_sentence';
+        if (hasDayDialogue(await db.dialogues.where('videoId').equals(videoId).toArray(), videoId)) return 'has_material';
+        const all = parseDayExclusions((await db.appMeta.get(DAY_EXCLUSIONS_META_KEY))?.value);
+        const ids = new Set(all[videoId] ?? []);
+        if (excluded) ids.add(sentenceId);
+        else ids.delete(sentenceId);
+        const next = { ...all };
+        if (ids.size) next[videoId] = [...ids];
+        else delete next[videoId];
+        await db.appMeta.put({ key: DAY_EXCLUSIONS_META_KEY, value: next });
+        return 'ok';
+      }),
     applyPack: (videoId, plan) =>
       db.transaction('rw', [db.videos, db.keySentences, db.expressions, db.learningItems, db.dialogues], async () => {
         const video = await db.videos.get(videoId);

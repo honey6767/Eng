@@ -85,6 +85,17 @@ export function requestOrigin(raw: unknown): 'user' | 'auto' {
   return b.origin === 'user' && (b.auto === undefined || b.auto === false) ? 'user' : 'auto';
 }
 
+/** Day 1~100 시리즈 범위 (앱의 src/services/days/daySeries.ts와 같은 기준) */
+export const DAY_SERIES_RANGE = { min: 1, max: 100 } as const;
+export const DAY_MANUAL_ONLY_MESSAGE = 'Day 1~100 영상은 자동으로 학습 자료를 만들지 않아요. 앱을 새로 고친 뒤 Day 영상 화면에서 핵심 문장을 넣고 ‘Day 자료 만들기’를 눌러 주세요.';
+
+/** 자동 요청을 받지 않는 작업: Day 1~100 영상의 학습 자료(pack·daypack·content). 자막 추출(extract)은 영상 ID·길이만 와서 구분할 수 없다 */
+export function isDayManualOnly(req: AiTaskRequest): boolean {
+  if (req.task !== 'pack' && req.task !== 'daypack' && req.task !== 'content') return false;
+  const n = req.dayNumber;
+  return req.seriesKind === 'day' && typeof n === 'number' && Number.isInteger(n) && n >= DAY_SERIES_RANGE.min && n <= DAY_SERIES_RANGE.max;
+}
+
 /** Gemini 한도 초과 신호 (RESOURCE_EXHAUSTED · 429 · quota) — 작업 실패 상세나 거절 메시지에서 */
 export function isQuotaSignal(text: string): boolean {
   return /RESOURCE_EXHAUSTED|\b429\b|quota|rate.?limit|exceeded your current/i.test(text);
@@ -126,6 +137,7 @@ function fail(requestId: string | null, code: AiFailureCode, message: string, co
 const FAILURE_HTTP: Partial<Record<AiFailureCode, number>> = {
   daily_cap: 429,
   auto_cap: 429,
+  day_manual_only: 409,
   gemini_quota: 429,
   too_long: 413,
   gemini_not_configured: 503,
@@ -230,6 +242,9 @@ async function handleInner(input: { idempotencyKey: string | null; body: unknown
   const cached = store.getResult(workKey);
   if (cached) return cachedResult({ key: workKey }, cached, workKey);
   if (existing && !canRecreate(existing, t, retryFailed)) return continueRow(existing, deps, t);
+  // Day 1~100 영상의 학습 자료는 사용자가 누른 요청만 — 자동(또는 표시 없는 예전 앱) 요청은 Gemini를 부르지 않고 거절.
+  // 기록·사용량을 남기지 않는다 (같은 내용을 사용자가 누르면 그대로 진행)
+  if (auto && isDayManualOnly(req)) return fail(key, 'day_manual_only', DAY_MANUAL_ONLY_MESSAGE, false, FAILURE_HTTP.day_manual_only);
 
   const date = pacificDate(t);
   const base: LedgerRow = {

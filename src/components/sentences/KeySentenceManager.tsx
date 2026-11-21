@@ -19,6 +19,8 @@ import {
   updateKeySentenceDetails,
 } from '@/services/keySentenceService';
 import { normalizeExpressionKey } from '@/utils/text';
+import { DAY_SENTENCE_CHARS, DAY_SENTENCE_MAX } from '@/services/days/daySeries';
+import { DayExclusionToggle } from '@/components/prep/PrepStatus';
 import { formatTimestamp, parseTimestamp } from '@/utils/date';
 import type { TextSpan } from '@/utils/expressionSpan';
 import { LEARNING_STATUS } from '@/utils/labels';
@@ -42,6 +44,10 @@ export function KeySentenceManager({
   dialogues,
   expressions,
   onSeek,
+  day = false,
+  linkedIds,
+  excludedIds,
+  hasMaterial = false,
 }: {
   video: Video;
   transcript: Transcript | undefined;
@@ -49,20 +55,44 @@ export function KeySentenceManager({
   dialogues: Dialogue[];
   expressions: Expression[];
   onSeek?: (sec: number) => void;
+  /** Day 1~100 영상: Day 자료 재료 문장 (1~20개) */
+  day?: boolean;
+  /** Day 영상: Day 자료의 Chunk가 연결한 문장 id (선정 취소 보호) */
+  linkedIds?: ReadonlySet<string>;
+  /** Day 영상: Day 자료에서 뺀 문장 id (appMeta 'dayExclusions') */
+  excludedIds?: ReadonlySet<string>;
+  /** Day 영상: Day 자료가 이미 있음 (빼기·다시 넣기 버튼 숨김) */
+  hasMaterial?: boolean;
 }) {
   const sorted = [...sentences].sort((a, b) => a.order - b.order);
-  const remaining = KEY_SENTENCE_COUNT - sentences.length;
+  const max = day ? DAY_SENTENCE_MAX : KEY_SENTENCE_COUNT;
+  // Day: 개수 제한은 Day 자료에 실제로 쓰는 문장(뺀 문장 제외)만
+  const counted = day && excludedIds ? sentences.filter((s) => !excludedIds.has(s.id)) : sentences;
+  const excludedCount = sentences.length - counted.length;
+  const remaining = max - counted.length;
 
   return (
     <div className="space-y-4">
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-bold">
-            핵심 문장 <span data-testid="key-sentence-count">{sentences.length}</span> / {KEY_SENTENCE_COUNT}
+            핵심 문장 <span data-testid="key-sentence-count">{counted.length}</span> / {max}
+            {excludedCount > 0 && <span className="ml-1.5 text-sm font-semibold text-muted" data-testid="day-excluded-count">· 뺀 문장 {excludedCount}</span>}
           </h3>
-          {remaining === 0 ? <Badge tone="ok">선정 완료</Badge> : <Badge tone="warn">{remaining}개 더 선정</Badge>}
+          {day ? (
+            <Badge tone={counted.length ? 'ok' : 'warn'}>{counted.length ? `Day 자료 재료 ${counted.length}개` : '1개 이상 입력'}</Badge>
+          ) : remaining === 0 ? (
+            <Badge tone="ok">선정 완료</Badge>
+          ) : (
+            <Badge tone="warn">{remaining}개 더 선정</Badge>
+          )}
         </div>
-        <ProgressBar value={(sentences.length / KEY_SENTENCE_COUNT) * 100} className="mt-2" label="핵심 문장 선정 진행률" />
+        <ProgressBar value={(counted.length / max) * 100} className="mt-2" label="핵심 문장 선정 진행률" />
+        {day && (
+          <p className="mt-2 text-sm text-muted">
+            직접 입력하거나 자막에서 고른 문장(1~{DAY_SENTENCE_MAX}개)만 Day 자료 재료가 돼요. 예전에 AI가 뽑은 문장은 쓰지 않아요. ‘Day 자료에서 빼기’를 누른 문장은 문장·학습 기록은 그대로 두고 Day 자료 요청에서만 빠져요 (개수에도 세지 않음).
+          </p>
+        )}
         <p className="mt-2 text-sm text-muted">
           영상에서 고른 영어 문장은 <b className="text-ink">원문 그대로</b> 저장하며, 저장한 뒤에는 고칠 수 없습니다. 번역·상황·핵심 표현은
           언제든 수정할 수 있어요.
@@ -73,13 +103,13 @@ export function KeySentenceManager({
         <ol className="space-y-3">
           {sorted.map((s) => (
             <li key={s.id}>
-              <SentenceCard sentence={s} dialogues={dialogues} expressions={expressions} onSeek={video.youtubeVideoId ? onSeek : undefined} />
+              <SentenceCard sentence={s} dialogues={dialogues} expressions={expressions} onSeek={video.youtubeVideoId ? onSeek : undefined} day={day} linkedIds={linkedIds} excluded={!!excludedIds?.has(s.id)} hasMaterial={hasMaterial} />
             </li>
           ))}
         </ol>
       )}
 
-      {remaining > 0 && <AddSentencePanel video={video} transcript={transcript} sentences={sentences} />}
+      {remaining > 0 && <AddSentencePanel video={video} transcript={transcript} sentences={sentences} day={day} />}
 
       <AiAssistCard video={video} sentences={sorted} expressions={expressions} />
     </div>
@@ -93,25 +123,33 @@ function SentenceCard({
   dialogues,
   expressions,
   onSeek,
+  day,
+  linkedIds,
+  excluded = false,
+  hasMaterial = false,
 }: {
   sentence: KeySentence;
   dialogues: Dialogue[];
   expressions: Expression[];
   onSeek?: (sec: number) => void;
+  day: boolean;
+  linkedIds?: ReadonlySet<string>;
+  excluded?: boolean;
+  hasMaterial?: boolean;
 }) {
   const confirm = useConfirm();
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
   const [spanFor, setSpanFor] = useState<string | null>(null);
-  const blocker = useLiveData(() => getRemovalBlocker(repos, s), [s.id, s.updatedAt, dialogues.length]);
+  const blocker = useLiveData(() => getRemovalBlocker(repos, s, { day, linkedIds }), [s.id, s.updatedAt, dialogues.length, day, linkedIds?.has(s.id)]);
   const usedIn = dialogues.find((d) => d.lines.some((l) => l.segments.some((seg) => seg.keySentenceId === s.id)));
   const linked = s.expressionIds.map((id) => expressions.find((e) => e.id === id)).filter((e): e is Expression => !!e);
   const spans = resolveSpans(s, expressions);
   const st = LEARNING_STATUS[s.status];
 
   return (
-    <Card className="p-4" data-testid="key-sentence-card">
+    <Card className={`p-4 ${excluded ? 'opacity-70' : ''}`} data-testid="key-sentence-card" data-excluded={day ? String(excluded) : undefined}>
       <div className="flex gap-3">
         <span className="grid size-7 shrink-0 place-items-center rounded-full bg-key text-sm font-bold text-key-ink">{s.order}</span>
         <div className="min-w-0 flex-1">
@@ -122,6 +160,12 @@ function SentenceCard({
               <span className="sr-only">원문 잠김</span>
             </span>
           </div>
+          {day && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              {excluded && <Badge tone="warn">Day 자료에서 뺌</Badge>}
+              <DayExclusionToggle videoId={s.videoId} sentenceId={s.id} excluded={excluded} hasMaterial={hasMaterial} />
+            </div>
+          )}
 
           {editing ? (
             <DetailsEditor sentence={s} onDone={() => setEditing(false)} />
@@ -233,7 +277,7 @@ function SentenceCard({
                   });
                   if (!ok) return;
                   try {
-                    await removeKeySentence(repos, s.id);
+                    await removeKeySentence(repos, s.id, { day, linkedIds });
                     toast('선정을 취소했어요');
                   } catch (e) {
                     toast(errorMessage(e), 'error');
@@ -373,7 +417,7 @@ function SpanEditor({
 
 // ─────────────────────────────────────────────
 
-function AddSentencePanel({ video, transcript, sentences }: { video: Video; transcript: Transcript | undefined; sentences: KeySentence[] }) {
+function AddSentencePanel({ video, transcript, sentences, day }: { video: Video; transcript: Transcript | undefined; sentences: KeySentence[]; day: boolean }) {
   const segments = transcript?.status === 'success' ? transcript.segments : [];
   const [mode, setMode] = useState<'transcript' | 'manual'>(segments.length > 0 ? 'transcript' : 'manual');
 
@@ -403,20 +447,20 @@ function AddSentencePanel({ video, transcript, sentences }: { video: Video; tran
       </div>
       {mode === 'transcript' ? (
         segments.length > 0 ? (
-          <TranscriptPicker video={video} segments={segments} sentences={sentences} />
+          <TranscriptPicker video={video} segments={segments} sentences={sentences} day={day} />
         ) : (
           <p className="mt-3 rounded-xl bg-canvas p-3 text-sm text-muted">
             저장된 자막이 없어요. <b className="text-ink">자막</b> 탭에서 자막을 붙여넣거나, <b className="text-ink">직접 입력</b>으로 문장을 추가하세요.
           </p>
         )
       ) : (
-        <ManualSentenceForm video={video} />
+        <ManualSentenceForm video={video} day={day} />
       )}
     </Card>
   );
 }
 
-function useAddSentence(video: Video) {
+function useAddSentence(video: Video, day = false) {
   const confirm = useConfirm();
   const toast = useToast();
   return async (input: { english: string; korean: string; situation: string; timestampSec: number | null; origin: 'transcript' | 'manual' }) => {
@@ -427,7 +471,7 @@ function useAddSentence(video: Video) {
     });
     if (!ok) return false;
     try {
-      await addKeySentence(repos, video.id, input);
+      await addKeySentence(repos, video.id, input, { day });
       toast('핵심 문장을 추가했어요');
       return true;
     } catch (e) {
@@ -441,12 +485,14 @@ function TranscriptPicker({
   video,
   segments,
   sentences,
+  day,
 }: {
   video: Video;
   segments: Transcript['segments'];
   sentences: KeySentence[];
+  day: boolean;
 }) {
-  const add = useAddSentence(video);
+  const add = useAddSentence(video, day);
   const [range, setRange] = useState<[number, number] | null>(null);
   const [trim, setTrim] = useState<TextSpan | null>(null);
   const [korean, setKorean] = useState('');
@@ -518,6 +564,7 @@ function TranscriptPicker({
             <p className="en mt-0.5 text-[17px] font-semibold" data-testid="pending-english">
               {english}
             </p>
+            {day && <DayLengthNote english={english} />}
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="번역 (선택)">
@@ -533,7 +580,7 @@ function TranscriptPicker({
             </Button>
             <Button
               size="sm"
-              disabled={!english.trim()}
+              disabled={!english.trim() || (day && tooLongForDay(english))}
               onClick={async () => {
                 const ok = await add({ english, korean, situation, timestampSec: segments[range[0]].startSec, origin: 'transcript' });
                 if (ok) reset();
@@ -548,8 +595,8 @@ function TranscriptPicker({
   );
 }
 
-function ManualSentenceForm({ video }: { video: Video }) {
-  const add = useAddSentence(video);
+function ManualSentenceForm({ video, day }: { video: Video; day: boolean }) {
+  const add = useAddSentence(video, day);
   const [english, setEnglish] = useState('');
   const [korean, setKorean] = useState('');
   const [situation, setSituation] = useState('');
@@ -562,6 +609,7 @@ function ManualSentenceForm({ video }: { video: Video }) {
       <Field label="영어 문장 (영상 원문 그대로)" hint="저장한 뒤에는 고칠 수 없어요. 철자와 구두점까지 영상과 같게 입력해 주세요.">
         <TextArea value={english} onChange={(e) => setEnglish(e.target.value)} rows={2} className="en" aria-label="영어 문장" />
       </Field>
+      {day && <DayLengthNote english={english} />}
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="번역 (선택)">
           <TextInput value={korean} onChange={(e) => setKorean(e.target.value)} aria-label="번역 입력" />
@@ -576,7 +624,7 @@ function ManualSentenceForm({ video }: { video: Video }) {
       <div className="flex justify-end">
         <Button
           size="sm"
-          disabled={!english.trim() || timeInvalid}
+          disabled={!english.trim() || timeInvalid || (day && tooLongForDay(english))}
           onClick={async () => {
             const ok = await add({ english, korean, situation, timestampSec: sec, origin: 'manual' });
             if (ok) {
@@ -591,5 +639,19 @@ function ManualSentenceForm({ video }: { video: Video }) {
         </Button>
       </div>
     </div>
+  );
+}
+
+/** Day 자료 문장 길이 (저장할 때와 같은 기준: 공백만 정리한 원문) */
+const tooLongForDay = (english: string) => cleanOriginal(english).length > DAY_SENTENCE_CHARS;
+
+/** Day 영상: 500자를 넘으면 저장 버튼을 막고 이유를 바로 보여 준다 (원문은 자르지 않음) */
+function DayLengthNote({ english }: { english: string }) {
+  const n = cleanOriginal(english).length;
+  if (n <= DAY_SENTENCE_CHARS) return null;
+  return (
+    <p role="alert" className="mt-1 text-sm text-danger" data-testid="day-length-error">
+      Day 자료 문장은 {DAY_SENTENCE_CHARS}자까지예요 (지금 {n}자). 원문을 자르지 않으므로 이대로는 저장할 수 없어요 — 문장을 나눠서 넣어 주세요.
+    </p>
   );
 }

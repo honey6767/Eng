@@ -10,7 +10,7 @@
  *    - 앱을 열고 기다려도 실패한 작업을 자동으로 다시 요청하지 않음 (AI 요청 0)
  *    - 저장 데이터 그대로
  * 2) 강사 표현 기록도 없을 때: 공통 부분으로 추정 (추정이라고 표시)
- * 3) 결과를 아직 못 받은 요청이 남아 있을 때: 같은 요청 식별자·예전 요청 내용(dp1)으로 이어서 확인만
+ * 3) 결과를 아직 못 받은 요청이 남아 있을 때: 2단계부터 Day 1~100은 자동 처리하지 않으므로 이어서 보내지 않고 기록만 그대로 보관
  */
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
@@ -141,6 +141,14 @@ async function openSeeded(browser, opts, sends, errors) {
   return { ctx, page };
 }
 
+/** 2단계: Day 1~100 영상의 예전 AI 추출 문장·자료(Day 대화문 없음)는 '예전 AI 추출 문장 (참고)'로 접혀 있다 → 펼쳐서 확인 */
+async function openOldAi(page) {
+  const d = page.getByTestId('old-ai-sentences');
+  if (await d.count().catch(() => 0)) {
+    if (!(await d.evaluate((el) => el.open))) await d.locator(':scope > summary').click();
+  }
+}
+
 async function main() {
   const server = await startServer();
   const browser = await chromium.launch();
@@ -151,6 +159,8 @@ async function main() {
     const { ctx, page } = await openSeeded(browser, { key: true, failed502: true }, sends, errors);
     const before = await dumpDb(page);
     await page.goto(`${BASE}/videos/d11`);
+    await page.getByTestId('day-material').waitFor();
+    await openOldAi(page);
     await page.getByTestId('core-chunks').waitFor();
     const core = await page.getByTestId('core-chunks').innerText();
     const coreLabel = await page.locator('[data-testid="core-chunk"] .en').first().innerText();
@@ -188,7 +198,9 @@ async function main() {
     await page.getByTestId('prep-status').waitFor();
     await page.waitForTimeout(8000);
     const failText = (await page.getByTestId('prep-failed').count()) ? await page.getByTestId('prep-failed').innerText() : '';
-    check('HTTP 502 실패는 실패 목록에 그대로 (자동 재시도 안 함)', /HTTP 502/.test(failText) && /gemini_failed/.test(failText), failText.split('\n').slice(0, 3).join(' / '));
+    // 2단계: Day 1~100 영상의 예전 방식(daypack) 실패 기록은 지우지 않고 보관만 — 일반 영상 실패 목록·'실패만 다시 시도'에는 넣지 않음 (기록 보존은 아래에서 확인)
+    check('Day 11 예전 HTTP 502 실패: 일반 실패 목록에 넣지 않음 (자동 재시도 안 함)', !/필요해 I need 말고/.test(failText), failText.split('\n').slice(0, 3).join(' / '));
+    check('자료 생성 화면: Day 1~100 별도 집계 (Day 11 = 문장 입력 전)', /Day 1~100 · 완료 0 · 문장 입력 전 1/.test(await page.getByTestId('prep-day-counts').innerText()));
     await page.reload();
     await page.getByTestId('prep-status').waitFor();
     await page.waitForTimeout(5000);
@@ -204,6 +216,8 @@ async function main() {
     const sends2 = [];
     const c2 = await openSeeded(browser, { key: false }, sends2, errors);
     await c2.page.goto(`${BASE}/videos/d11`);
+    await c2.page.getByTestId('day-material').waitFor();
+    await openOldAi(c2.page);
     await c2.page.getByTestId('core-chunks').waitFor();
     check('강사 표현 기록이 없으면 공통 부분 could use로 추정 (추정이라고 표시)', (await c2.page.locator('[data-testid="core-chunk"]').getAttribute('data-basis')) === 'common' && /추정/.test(await c2.page.getByTestId('core-inferred').innerText()) && /활용 사례 5개/.test(await c2.page.getByTestId('core-occurrences').innerText()));
     const extra2 = await c2.page.locator('[data-testid="extra-chunks"] [data-testid="content-chunk"] > div > span.en').allInnerTexts();
@@ -221,8 +235,10 @@ async function main() {
     await c3.page.getByTestId('prep-status').waitFor();
     await c3.page.waitForTimeout(6000);
     const keys = [...new Set(sends3.map((s) => s.key))];
-    check('남은 요청은 같은 요청 식별자로 이어서 (새 식별자 없음)', sends3.length > 0 && keys.length === 1 && keys[0] === STORED_REQ, `${sends3.length}회 · ${keys.join(',')}`);
-    check('이어서 보낼 때 예전 요청 내용(dp1) 그대로 · 다시 생성 표시 없음', sends3.every((s) => s.promptVersion === 'dp1' && !s.retry));
+    // 2단계: 예전 방식(AI 문장·자막으로 만든 daypack)의 남은 요청은 Day 1~100이라 자동으로 이어서 확인하지 않는다 — 요청 기록은 지우지 않고 그대로
+    check('Day 11 예전 방식 남은 요청: 자동으로 보내지 않음 (AI 요청 0, 새 식별자 없음)', sends3.length === 0 && keys.length === 0, `${sends3.length}회`);
+    const meta3 = await c3.page.evaluate(() => new Promise((res) => { const r = indexedDB.open('my-english-study'); r.onsuccess = () => { const g = r.result.transaction('appMeta').objectStore('appMeta').get('aiTasks'); g.onsuccess = () => res(g.result?.value ?? null); }; }));
+    check('남은 요청 기록(같은 요청 식별자·dp1)은 그대로 보관', meta3?.['daypack:d11']?.requestId === STORED_REQ && meta3['daypack:d11'].status === 'sent' && meta3['daypack:d11'].body.promptVersion === 'dp1');
     await c3.ctx.close();
 
     check('브라우저 오류 없음', errors.length === 0, errors.slice(0, 3).join(' | '));

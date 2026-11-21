@@ -2,7 +2,9 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useState } from 'react';
 import { contentStore, extractionStore, repos } from '@/repositories';
 import { StudyContentPanel } from '@/components/content/StudyContentPanel';
-import { VideoPrepStatus } from '@/components/prep/PrepStatus';
+import { DayMaterialCard, VideoPrepStatus } from '@/components/prep/PrepStatus';
+import { daySeriesOf, userSentencesOf } from '@/services/days/daySeries';
+import { dayUserRecordOf, dayViewOf } from '@/services/days/dayView';
 import { useLiveData } from '@/hooks/useLiveData';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
@@ -46,7 +48,7 @@ export function VideoDetailPage() {
   const data = useLiveData(async () => {
     const video = await repos.videos.get(id);
     if (!video) return null;
-    const [transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems, contentCtx] = await Promise.all([
+    const [transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems, contentCtx, dayTask, dayExcluded] = await Promise.all([
       repos.transcripts.getByVideo(id),
       repos.expressionNotes.listByVideo(id),
       repos.keySentences.listByVideo(id),
@@ -56,18 +58,26 @@ export function VideoDetailPage() {
       repos.expressions.list(),
       extractionStore.listLearningItems(id),
       contentStore.readVideo(id),
+      // Day 자료 요청 기록 (읽기만) — 그때 보낸 문장 번호로 자료를 보여 준다
+      contentStore.getTask(`dayuser:${id}`),
+      // Day 자료에서 뺀 문장 (appMeta 'dayExclusions', 읽기만)
+      contentStore.getDayExcluded(id),
     ]);
-    return { video, transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems, day: contentCtx?.day };
+    return { video, transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems, day: contentCtx?.day, dayRecord: dayUserRecordOf(dayTask), dayExcluded };
   }, [id]);
 
   if (data === undefined) return <Loading />;
   if (data === null) return <NotFoundPage message="영상을 찾을 수 없어요." />;
 
-  const { video, transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems, day } = data;
+  const { video, transcript, notes, sentences, dialogues, composition, playlists, expressions, learningItems, day, dayRecord, dayExcluded } = data;
   // AI가 뽑은 핵심 표현 (B1-d로 자동 적용된 것) — 기존 표현 노트와 따로 보여 준다
   const aiItems = learningItems.filter((li) => li.origin === 'ai_extracted' && (li.kind === 'key' || li.kind === 'chunk'));
   // 직접 고른 핵심 문장(5개 선정 화면)과 AI 원문 문장은 따로 보여 준다
   const manualSentences = sentences.filter((s) => s.origin !== 'ai_extracted');
+  // Day 1~100 영상: 사용자 문장으로 만드는 Day 자료 (예전 AI 추출 문장은 참고로 접어 둠)
+  const series = daySeriesOf(video, day);
+  const isDay = !video.isSample && series.isDay;
+  const dayView = isDay ? dayViewOf(sentences, learningItems, dialogues, dayRecord, dayExcluded) : null;
   const seekTo = (sec: number) => {
     setSeek({ sec, nonce: Date.now() });
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -200,13 +210,38 @@ export function VideoDetailPage() {
           <ExpressionNotesPanel video={video} notes={notes} sentences={sentences} expressions={expressions} />
         </div>
       )}
-      {tab === 'sentences' && !video.isSample && (
+      {tab === 'sentences' && isDay && dayView && (
+        <div className="mb-4 space-y-4" data-testid="day-video">
+          <DayMaterialCard videoId={video.id} dayNumber={series.dayNumber!} sentences={sentences} hasMaterial={dayView.hasMaterial} excludedIds={dayExcluded} />
+          {dayView.mode === 'old_ai' ? (
+            // 예전 방식으로 이미 만든 Day 자료 — 그대로 보여 준다 (다시 만들거나 바꾸지 않음)
+            <StudyContentPanel video={video} day={day} sentences={sentences} items={learningItems} expressions={expressions} dialogues={dialogues} onSeek={video.youtubeVideoId ? seekTo : undefined} />
+          ) : (
+            dayView.mode === 'user' && (
+              <StudyContentPanel video={video} day={day} sentences={sentences} items={dayView.userItems} expressions={expressions} dialogues={dialogues} numbering={dayView.numbering} onSeek={video.youtubeVideoId ? seekTo : undefined} />
+            )
+          )}
+          <section data-testid="day-sentences">
+            <KeySentenceManager video={video} transcript={transcript} sentences={manualSentences} dialogues={dialogues} expressions={expressions} onSeek={seekTo} day linkedIds={dayView.linkedIds} excludedIds={dayExcluded} hasMaterial={dayView.hasMaterial} />
+          </section>
+          {dayView.mode !== 'old_ai' && dayView.aiSentences.length > 0 && (
+            <details className="rounded-2xl border border-line p-3" data-testid="old-ai-sentences">
+              <summary className="cursor-pointer text-sm font-semibold text-muted">예전 AI 추출 문장 (참고) {dayView.aiSentences.length}개</summary>
+              <p className="mt-2 text-xs text-subtle">예전에 AI가 뽑아 둔 문장이에요. 지우거나 고치지 않고 그대로 보관하며, Day 자료 재료로는 쓰지 않아요.</p>
+              <div className="mt-3">
+                <StudyContentPanel video={video} day={day} sentences={dayView.aiSentences} items={dayView.oldItems} expressions={expressions} dialogues={[]} onSeek={video.youtubeVideoId ? seekTo : undefined} />
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+      {tab === 'sentences' && !video.isSample && !isDay && (
         <div className="mb-4 space-y-4">
           <VideoPrepStatus videoId={video.id} />
           <StudyContentPanel video={video} day={day} sentences={sentences} items={learningItems} expressions={expressions} dialogues={dialogues} onSeek={video.youtubeVideoId ? seekTo : undefined} />
         </div>
       )}
-      {tab === 'sentences' && !video.isSample && (
+      {tab === 'sentences' && !video.isSample && !isDay && (
         <details className="mt-2" data-testid="manual-sentences">
           <summary className="cursor-pointer text-sm font-semibold text-muted">직접 고른 핵심 문장 (예전 방식) {manualSentences.length}개</summary>
           <div className="mt-3">
@@ -236,8 +271,9 @@ export function VideoDetailPage() {
       )}
       {tab === 'dialogues' && (
         <div className="space-y-4">
-          {!video.isSample && !dialogues.some((d) => d.generatedBy === 'ai' && d.kind === 'original') && <VideoPrepStatus videoId={video.id} />}
-          <DialogueList dialogues={dialogues} composition={composition} sentences={sentences} />
+          {!video.isSample && !isDay && !dialogues.some((d) => d.generatedBy === 'ai' && d.kind === 'original') && <VideoPrepStatus videoId={video.id} />}
+          {isDay && dayView && !dayView.hasMaterial && <DayMaterialCard videoId={video.id} dayNumber={series.dayNumber!} sentences={sentences} hasMaterial={false} excludedIds={dayExcluded} />}
+          <DialogueList dialogues={dialogues} composition={composition} sentences={sentences} numbering={dayView?.mode === 'user' ? dayView.numbering : undefined} />
         </div>
       )}
       {tab === 'transcript' && (
@@ -294,10 +330,13 @@ function DialogueList({
   dialogues,
   composition,
   sentences,
+  numbering,
 }: {
   dialogues: Dialogue[];
   composition: DialogueComposition | undefined;
   sentences: KeySentence[];
+  /** Day 자료(사용자 문장): 요청 때의 문장 번호 */
+  numbering?: Map<string, number>;
 }) {
   if (dialogues.length === 0) {
     return (
@@ -317,7 +356,7 @@ function DialogueList({
         핵심 문장 {sentences.length}개를 대화문 {dialogues.length}개로 구성했습니다.
       </p>
       {dialogues.filter((d) => d.generatedBy === 'ai').map((d) => (
-        <DayDialogueInline key={d.id} dialogue={d} sentences={sentences} />
+        <DayDialogueInline key={d.id} dialogue={d} sentences={sentences} numbering={numbering} />
       ))}
       {dialogues.filter((d) => d.generatedBy !== 'ai').map((d) => {
         const keyCount = d.lines.flatMap((l) => l.segments).filter((s) => s.kind === 'key').length;
@@ -352,12 +391,15 @@ function DialogueList({
 }
 
 /** Day 통합 대화문 — 영상 화면에서 바로 읽고 암기로 이어 간다 */
-function DayDialogueInline({ dialogue, sentences }: { dialogue: Dialogue; sentences: KeySentence[] }) {
+function DayDialogueInline({ dialogue, sentences, numbering }: { dialogue: Dialogue; sentences: KeySentence[]; numbering?: Map<string, number> }) {
   const [showKorean, setShowKorean] = useState(true);
   const useful = useUseful(dialogue);
   const [openRef, setOpenRef] = useState<string | null>(null);
   const used = new Set(dialogue.lines.map((l) => l.sourceSentenceId).filter(Boolean));
-  const ai = sentences.filter((s) => s.origin === 'ai_extracted' || used.has(s.id)).sort((a, b) => (a.aiNumber ?? a.order) - (b.aiNumber ?? b.order));
+  // 사용자 문장으로 만든 Day 자료면 그 문장들(1번부터), 예전 자료면 AI 원문 문장
+  const fromUser = sentences.some((s) => s.origin !== 'ai_extracted' && used.has(s.id));
+  const ai = fromUser ? (numbering?.size ? sentences.filter((s) => numbering.has(s.id)).sort((a, b) => numbering.get(a.id)! - numbering.get(b.id)!) : userSentencesOf(sentences)) : sentences.filter((s) => s.origin === 'ai_extracted' || used.has(s.id)).sort((a, b) => (a.aiNumber ?? a.order) - (b.aiNumber ?? b.order));
+  const numberOf = (s: KeySentence, i: number) => (fromUser ? (numbering?.get(s.id) ?? i + 1) : (s.aiNumber ?? s.order));
   return (
     <Card className="space-y-3 p-4" data-testid="day-dialogue">
       <div className="flex flex-wrap items-center gap-2">
@@ -385,11 +427,11 @@ function DayDialogueInline({ dialogue, sentences }: { dialogue: Dialogue; senten
         <div className="rounded-xl bg-canvas p-3 text-sm" data-testid="source-map">
           <p className="mb-1 text-xs font-semibold text-subtle">원문 문장 연결</p>
           <ul className="space-y-0.5">
-            {ai.map((s) => {
+            {ai.map((s, idx) => {
               const lineNos = dialogue.lines.filter((l) => l.sourceSentenceId === s.id).map((l) => l.order);
               return (
                 <li key={s.id} className={lineNos.length ? '' : 'text-subtle'}>
-                  <b>{s.aiNumber ?? s.order}</b> <span className="en">{s.english}</span> → {lineNos.length ? `대화 ${lineNos.join(', ')}번째 줄` : '대화에 쓰지 않음'}
+                  <b>{numberOf(s, idx)}</b> <span className="en">{s.english}</span> → {lineNos.length ? `대화 ${lineNos.join(', ')}번째 줄` : '대화에 쓰지 않음'}
                 </li>
               );
             })}

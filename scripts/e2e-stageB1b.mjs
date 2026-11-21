@@ -81,9 +81,9 @@ const seedVideos = (page) =>
           const now = '2026-11-15T09:00:00.000Z';
           const v = (id, yt, title, dur, i) => ({ id, createdAt: now, updatedAt: now, playlistId: null, youtubeVideoId: yt, title, url: null, thumbnailUrl: null, durationSec: dur, orderIndex: i, randomOrderKey: i / 10, status: 'new', completedAt: null, sources: [{ kind: 'manual', addedAt: now }], channelTitle: null, captionCheck: null, metadataSource: 'manual' });
           const vs = tx.objectStore('videos');
-          vs.add(v('e2e-v1', 'eNODHkrNuDA', '[Day 11] 필요해 I need 말고', 295, 0));
-          vs.add(v('e2e-v2', 'bbbbbbbbbbb', '[Day 12] 두 번째 영상', 240, 1));
-          vs.add(v('e2e-v3', 'ccccccccccc', '[Day 13] 자막 있는 영상', 260, 2));
+          vs.add(v('e2e-v1', 'eNODHkrNuDA', '[Day 111] 필요해 I need 말고', 295, 0));
+          vs.add(v('e2e-v2', 'bbbbbbbbbbb', '[Day 112] 두 번째 영상', 240, 1));
+          vs.add(v('e2e-v3', 'ccccccccccc', '[Day 113] 자막 있는 영상', 260, 2));
           vs.add(v('e2e-v4', 'ddddddddddd', '긴 강의 9시간', 32400, 3));
           tx.objectStore('transcripts').add({ id: 'e2e-tr3', createdAt: now, updatedAt: now, videoId: 'e2e-v3', source: 'manual_paste', status: 'success', rawText: 'hello', segments: [], format: 'plain' });
           tx.oncomplete = () => {

@@ -1,4 +1,4 @@
-import { parseDayNumber } from '@/db/upgradeV2toV3';
+import { daySeriesOf } from '@/services/days/daySeries';
 import { AI_CONTENT_PROMPT_VERSION, CONTENT_LIMITS, type AiContentRequest, type SeriesKind } from '@/types/aiApi';
 import type { ChunkDetail, DayAssignment, Expression, KeySentence, LearningItem, Transcript, Video } from '@/types/models';
 import { normalizeExpressionKey } from '@/utils/text';
@@ -32,10 +32,10 @@ export interface ContentResult {
   notes: string;
 }
 
-/** Day 시리즈인지: Day 정리에서 정한 번호 → 제목의 Day 번호 순으로 본다 */
+/** Day 시리즈인지 — Day 1~100 판별 규칙(daySeriesOf)과 같다: 확정된 Day 번호 → 제목의 [Day N], 1~100만 Day */
 export function seriesOf(video: Video, day: DayAssignment | undefined): { seriesKind: SeriesKind; dayNumber: number | null } {
-  const n = day?.dayNumber ?? parseDayNumber(video.title);
-  return n ? { seriesKind: 'day', dayNumber: n } : { seriesKind: 'general', dayNumber: null };
+  const s = daySeriesOf(video, day);
+  return s.isDay ? { seriesKind: 'day', dayNumber: s.dayNumber } : { seriesKind: 'general', dayNumber: null };
 }
 
 const mmss = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;

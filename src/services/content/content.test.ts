@@ -18,12 +18,18 @@ const newId = () => `gen-${++seq}`;
 const uuid = () => `00000000-0000-4000-8000-${String(++seq).padStart(12, '0')}`;
 
 /** 서버(장부 + 가짜 Gemini)를 그대로 거치는 클라이언트 — 요청이 몇 번 나갔는지 센다 */
-function serverClient() {
+/**
+ * asUser(기본): 이 파일의 문장·Chunk 만들기(generateContent)는 화면에서 부르지 않는 예전 기능이라 요청 유형 표시가 없다.
+ * Day 1~100 영상 자료는 서버가 사용자 요청만 받으므로, 픽스처를 만들 때는 사용자가 누른 것처럼 표시를 붙인다.
+ * asUser=false로 두면 예전 앱과 같은 요청(표시 없음)이 그대로 간다.
+ */
+function serverClient(asUser = true) {
   const gemini = createMockGemini();
   const store = memoryLedgerStore();
   const sent: { key: string; body: AiTaskRequest }[] = [];
   const client: AiClient = {
-    async extract(key, body): Promise<AiTransportResult> {
+    async extract(key, raw): Promise<AiTransportResult> {
+      const body = asUser && !(raw as { origin?: string }).origin ? ({ ...raw, origin: 'user' } as unknown as AiTaskRequest) : raw;
       sent.push({ key, body });
       const r = await handleAiExtract({ idempotencyKey: key, body }, { store, gemini, caps: { ...DEFAULT_AI_CAPS, minGapMs: 0 }, now: () => Date.parse(T) });
       return { kind: 'response', httpStatus: r.status, body: r.body };
@@ -87,6 +93,20 @@ describe('학습 콘텐츠: 원문 문장 + 문장 속 Chunk', () => {
     const again = await generateContent({ ...deps(db, client), newId: uuid }, 'v11', () => {});
     expect(again.phase).toBe('already');
     expect(gemini.createCalls).toHaveLength(1);
+  });
+
+  it('Day 1~100 영상: 표시 없는(자동·예전 앱) 문장·Chunk 요청은 서버가 Gemini 없이 거절 (day_manual_only)', async () => {
+    const { db } = createTestRepos();
+    await seedVideo(db, 'v11', '[Day 11] 필요해', DAY11);
+    const { client, gemini } = serverClient(false);
+    const out = await generateContent({ ...deps(db, client), newId: uuid }, 'v11', () => {});
+    expect(out).toMatchObject({ phase: 'failed', code: 'day_manual_only', httpStatus: 409 });
+    expect(gemini.createCalls).toHaveLength(0);
+    expect(await db.keySentences.count()).toBe(0);
+    // Day 101 이상은 일반 영상 → 자동 요청도 그대로 진행
+    await seedVideo(db, 'v101', '[Day 101] 일반', DAY11);
+    expect(await generateContent({ ...deps(db, client), newId: uuid }, 'v101', () => {})).toMatchObject({ phase: 'succeeded' });
+    expect(gemini.createCalls).toEqual(['content:v101xxxxxxx']);
   });
 
   it('일반 영상은 번호 대신 맥락으로 고른다 (general 요청)', async () => {

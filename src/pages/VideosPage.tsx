@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
-import { repos } from '@/repositories';
+import { contentStore, repos } from '@/repositories';
+import { daySeriesOf } from '@/services/days/daySeries';
 import { useLiveData } from '@/hooks/useLiveData';
 import { useToast } from '@/hooks/useToast';
 import { useYouTubeStatus } from '@/hooks/useYouTubeStatus';
@@ -28,19 +29,29 @@ const FILTERS: { key: VideoStatus | 'all'; label: string }[] = [
   { key: 'completed', label: '완료' },
 ];
 const PAGE = 30;
+type SeriesFilter = 'all' | 'day' | 'general';
+const SERIES_FILTERS: { key: SeriesFilter; label: string }[] = [
+  { key: 'all', label: '전체' },
+  { key: 'day', label: 'Day 1~100' },
+  { key: 'general', label: '일반 영상' },
+];
 
 export function VideosPage() {
   const { status, refresh } = useYouTubeStatus();
   const [filter, setFilter] = useState<VideoStatus | 'all'>('all');
   const [sourceFilter, setSourceFilter] = useState<string>('all');
+  // Day 1~100 / 일반 영상 / 전체 (기본: 전체)
+  const [seriesFilter, setSeriesFilter] = useState<SeriesFilter>('all');
   const [limit, setLimit] = useState(PAGE);
 
   const data = useLiveData(async () => {
-    const [videos, playlists, sentences] = await Promise.all([
+    const [videos, playlists, sentences, days] = await Promise.all([
       repos.videos.list(),
       repos.playlists.list(),
       repos.keySentences.list(),
+      contentStore.listDayAssignments(),
     ]);
+    const dayOf = new Map(days.map((d) => [d.videoId, d]));
     const ts = await Promise.all(videos.map((v) => repos.transcripts.getByVideo(v.id)));
     return {
       playlists,
@@ -48,6 +59,8 @@ export function VideosPage() {
         video: v,
         transcript: ts[i],
         sentenceCount: sentences.filter((s) => s.videoId === v.id).length,
+        // 샘플은 Day 시리즈로 보지 않는다
+        series: v.isSample ? { isDay: false, dayNumber: null } : daySeriesOf(v, dayOf.get(v.id)),
       })),
     };
   }, []);
@@ -55,7 +68,8 @@ export function VideosPage() {
   if (!data) return <Loading />;
   const playlistById = new Map(data.playlists.map((p) => [p.id, p]));
 
-  const bySource = data.rows.filter(({ video }) => {
+  const bySeries = data.rows.filter((r) => seriesFilter === 'all' || (seriesFilter === 'day') === r.series.isDay);
+  const bySource = bySeries.filter(({ video }) => {
     if (sourceFilter === 'all') return true;
     if (sourceFilter === 'manual') return video.sources?.some((s) => s.kind === 'manual');
     if (sourceFilter === 'sample') return video.isSample;
@@ -91,6 +105,27 @@ export function VideosPage() {
 
       <section>
         <SectionTitle action={<span className="text-sm text-muted">{rows.length}개</span>}>영상 목록</SectionTitle>
+        <div className="mb-2 flex gap-1.5 overflow-x-auto" role="tablist" aria-label="Day·일반 영상 필터" data-testid="series-filter">
+          {SERIES_FILTERS.map((f) => {
+            const count = f.key === 'all' ? data.rows.length : data.rows.filter((r) => (f.key === 'day') === r.series.isDay).length;
+            const active = seriesFilter === f.key;
+            return (
+              <button
+                key={f.key}
+                role="tab"
+                aria-selected={active}
+                data-series={f.key}
+                onClick={() => {
+                  setSeriesFilter(f.key);
+                  setLimit(PAGE);
+                }}
+                className={`h-9 shrink-0 rounded-full px-3.5 text-sm font-semibold transition-colors ${active ? 'bg-brand text-white' : 'border border-line bg-surface text-muted hover:text-ink'}`}
+              >
+                {f.label} <span className="ml-0.5 opacity-70">{count}</span>
+              </button>
+            );
+          })}
+        </div>
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
           <div className="flex gap-1.5 overflow-x-auto" role="tablist" aria-label="학습 상태 필터">
             {FILTERS.map((f) => {
@@ -143,7 +178,7 @@ export function VideosPage() {
         ) : (
           <>
             <ul className="grid gap-3 md:grid-cols-2" data-testid="video-list">
-              {rows.slice(0, limit).map(({ video, transcript, sentenceCount }) => {
+              {rows.slice(0, limit).map(({ video, transcript, sentenceCount, series }) => {
                 const st = VIDEO_STATUS[video.status];
                 const tsKey = transcript?.status ?? 'none';
                 const manual = video.sources?.some((s) => s.kind === 'manual');
@@ -156,6 +191,7 @@ export function VideosPage() {
                         <div className="flex min-w-0 flex-1 flex-col">
                           <div className="flex flex-wrap gap-1">
                             <Badge tone={st.tone}>{st.label}</Badge>
+                            {series.isDay && <Badge tone="brand">Day {series.dayNumber}</Badge>}
                             {video.isSample && <Badge>샘플</Badge>}
                             {manual && !video.isSample && <Badge tone="info">개별 등록</Badge>}
                           </div>

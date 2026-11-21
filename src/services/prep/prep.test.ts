@@ -46,14 +46,16 @@ const DAY11 = ['Welcome to Day 11.', '1. I could seriously use a cup of coffee r
 describe('학습 자료 자동 생성 대기열', () => {
   it('새 영상 등록 → 자동 대기열 → 자막(AI) → 문장·Chunk·공통 Chunk·Day 대화문·빈칸 자료 저장', async () => {
     const { db } = createTestRepos();
-    await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 11] 필요해');
+    await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 111] 필요해');
     const { client, gemini } = server();
     const pc = device(db, client);
     await pc.enqueue(['v1']);
     await pc.start();
     expect(gemini.createCalls).toEqual(['eNODHkrNuDA', 'pack:eNODHkrNuDA']);
     const d = (await db.dialogues.where('videoId').equals('v1').toArray())[0];
-    expect(d).toMatchObject({ kind: 'original', generatedBy: 'ai', sourceDays: [11] });
+    // Day 101 이상은 일반 영상 (Day 1~100은 자동 준비 대상이 아님 — 아래 'Day 1~100' 테스트)
+    expect(d).toMatchObject({ kind: 'original', generatedBy: 'ai' });
+    expect(d.sourceDays ?? []).toEqual([]);
     expect(d.lines.every((l) => l.korean)).toBe(true);
     expect(Object.keys(d.blankPlan!.lines)).toHaveLength(d.lines.length);
     expect(await db.learningItems.where('kind').equals('core').count()).toBe(1);
@@ -62,21 +64,22 @@ describe('학습 자료 자동 생성 대기열', () => {
 
   it('공통 Chunk could … use: could seriously use · could really use도 같은 Chunk로 연결, 대화 속 여러 번 표시, 원문 출처 연결', async () => {
     const { db } = createTestRepos();
-    await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 11] 필요해', { transcript: DAY11 });
+    await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 111] 필요해', { transcript: DAY11 });
     const { client } = server();
     const pc = device(db, client);
     await pc.enqueue(['v1']);
     await pc.start();
     const core = (await db.learningItems.where('kind').equals('core').toArray())[0];
     expect(core.chunk?.parts).toEqual(['could', 'use']);
-    expect(core.occurrences!.map((o) => o.surface)).toEqual(['could seriously use', 'could use', 'could use', 'could really use']);
+    // 일반 영상: 가짜 Gemini가 맥락으로 문장을 고른다 (Day 영상처럼 번호로 고르지 않음)
+    expect(core.occurrences!.map((o) => o.surface)).toEqual(['could seriously use', 'could use', 'could use']);
     const d = (await db.dialogues.where('videoId').equals('v1').toArray())[0];
     const marked = d.lines.flatMap((l) => l.segments).filter((s) => s.kind === 'key' && s.learningItemId === core.id).map((s) => s.text.toLowerCase());
-    expect(marked.filter((t) => t === 'could').length).toBeGreaterThanOrEqual(4);
+    expect(marked.filter((t) => t === 'could').length).toBeGreaterThanOrEqual(3);
     expect(d.chunkUsages![0]).toMatchObject({ text: 'could … use', learningItemId: core.id });
     const ks = await db.keySentences.where('videoId').equals('v1').toArray();
     expect(d.lines.filter((l) => l.sourceSentenceId).every((l) => ks.some((s) => s.id === l.sourceSentenceId))).toBe(true);
-    expect(d.lines.filter((l) => l.sourceSentenceId)).toHaveLength(4);
+    expect(d.lines.filter((l) => l.sourceSentenceId).length).toBeGreaterThanOrEqual(3);
     // 빈칸 자료: 핵심 Chunk 단어는 1순위
     const first = d.lines.find((l) => /seriously/.test(l.segments.map((s) => s.text).join(' ')))!;
     expect(d.blankPlan!.lines[first.id].filter((r) => r === 1)).toHaveLength(2); // could, use (seriously는 아님)
@@ -84,7 +87,7 @@ describe('학습 자료 자동 생성 대기열', () => {
 
   it('누락분만: 문장이 이미 있으면 daypack만 (기존 문장·Chunk는 그대로), 대화문까지 있으면 요청 없음', async () => {
     const { db } = createTestRepos();
-    await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 11] 필요해', { transcript: DAY11 });
+    await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 111] 필요해', { transcript: DAY11 });
     await db.keySentences.add({ id: 'ks-old-1', createdAt: T, updatedAt: T, videoId: 'v1', order: 1, english: 'I could seriously use a cup of coffee right now.', korean: '기존', expressionIds: [], situation: '', timestampSec: 10, status: 'learning', correctCount: 2, wrongCount: 0, origin: 'ai_extracted', aiNumber: 1, selected: true });
     await db.keySentences.add({ id: 'ks-old-2', createdAt: T, updatedAt: T, videoId: 'v1', order: 2, english: 'We could use some help.', korean: '기존2', expressionIds: [], situation: '', timestampSec: 20, status: 'not_started', correctCount: 0, wrongCount: 0, origin: 'ai_extracted', aiNumber: 2 });
     const before = await db.keySentences.toArray();
@@ -104,8 +107,8 @@ describe('학습 자료 자동 생성 대기열', () => {
 
   it('기존 영상은 수동 시작 전에는 처리하지 않고, 시작하면 Day 번호 순으로 차례로', async () => {
     const { db } = createTestRepos();
-    await seedVideo(db, 'd12', 'bbbbbbbbbbb', '[Day 12] b', { transcript: ['1. That sounds like a plan.'], order: 0 });
-    await seedVideo(db, 'd2', 'ccccccccccc', '[Day 2] a', { transcript: ['1. I could use a break.'], order: 1 });
+    await seedVideo(db, 'd12', 'bbbbbbbbbbb', '[Day 112] b', { transcript: ['1. That sounds like a plan.'], order: 0 });
+    await seedVideo(db, 'd2', 'ccccccccccc', '[Day 102] a', { transcript: ['1. I could use a break.'], order: 1 });
     await seedVideo(db, 'g1', 'ddddddddddd', 'Small talk', { transcript: ['It was no big deal.'], order: 2 });
     const { client, gemini } = server();
     const pc = device(db, client);
@@ -120,7 +123,7 @@ describe('학습 자료 자동 생성 대기열', () => {
 
   it('하루 상한에 닿으면 멈추고, 초기화 시각 뒤 다시 열면 이어서', async () => {
     const { db } = createTestRepos();
-    for (let i = 1; i <= 3; i++) await seedVideo(db, `d${i}`, `vid0000000${i}`, `[Day ${i}] x`, { transcript: [`1. I could use a break ${i}.`] });
+    for (let i = 1; i <= 3; i++) await seedVideo(db, `d${i}`, `vid0000000${i}`, `[Day 10${i}] x`, { transcript: [`1. I could use a break ${i}.`] });
     let t = Date.parse(T);
     const { client, gemini } = server({ dailyVideoSec: 6 * 3600, dailyRequests: 2, maxVideoSec: 1800 }, () => t);
     const pc = device(db, client, () => new Date(t));
@@ -142,8 +145,8 @@ describe('학습 자료 자동 생성 대기열', () => {
 
   it('Gemini 처리 실패: 그 영상만 실패(자동 재시도 없음) + 대기열 멈춤(앱을 다시 열어도 유지) → 이어서 만들기로 나머지 진행, 실패만 다시 시도 (첫 요청에만 retryFailed)', async () => {
     const { db } = createTestRepos();
-    await seedVideo(db, 'bad', 'mockFail001', '[Day 1] bad', { transcript: ['1. I could use a break.'] });
-    await seedVideo(db, 'ok', 'okokokokoko', '[Day 2] ok', { transcript: ['1. I could use a break.'] });
+    await seedVideo(db, 'bad', 'mockFail001', '[Day 101] bad', { transcript: ['1. I could use a break.'] });
+    await seedVideo(db, 'ok', 'okokokokoko', '[Day 102] ok', { transcript: ['1. I could use a break.'] });
     const { client, gemini, sent } = server();
     const pc = device(db, client);
     await pc.startAll();
@@ -173,8 +176,8 @@ describe('학습 자료 자동 생성 대기열', () => {
 
   it('자동 준비 몫(실제 요청 수 기준): 다 쓰면 자동 영상만 멈추고, 사용자가 넣은 영상은 계속 — 초기화 뒤 자동 영상 이어서', async () => {
     const { db } = createTestRepos();
-    for (let i = 1; i <= 3; i++) await seedVideo(db, `a${i}`, `autoVid000${i}`, `[Day ${i}] auto`, { transcript: [`1. I could use a break ${i}.`] });
-    await seedVideo(db, 'm1', 'manualVid01', '[Day 9] manual', { transcript: ['1. I could really use some help.'] });
+    for (let i = 1; i <= 3; i++) await seedVideo(db, `a${i}`, `autoVid000${i}`, `[Day 10${i}] auto`, { transcript: [`1. I could use a break ${i}.`] });
+    await seedVideo(db, 'm1', 'manualVid01', '[Day 109] manual', { transcript: ['1. I could use some help.'] });
     let t = Date.parse(T);
     const { client, gemini, sent } = server({ dailyVideoSec: 6 * 3600, dailyRequests: 10, maxVideoSec: 1800, dailyAutoRequests: 2 }, () => t);
     const pc = device(db, client, () => new Date(t));
@@ -200,8 +203,8 @@ describe('학습 자료 자동 생성 대기열', () => {
 
   it('자막 단계에서 자동 몫을 다 써도: 그 영상은 사용자가 누르면 바로 자막부터 진행 (초기화 시각까지 묶이지 않음)', async () => {
     const { db } = createTestRepos();
-    await seedVideo(db, 'h1', 'hasTrans001', '[Day 1] has', { transcript: ['1. I could use a break.'] });
-    await seedVideo(db, 'n2', 'noTrans0002', '[Day 2] none');
+    await seedVideo(db, 'h1', 'hasTrans001', '[Day 101] has', { transcript: ['1. I could use a break.'] });
+    await seedVideo(db, 'n2', 'noTrans0002', '[Day 102] none');
     const { client, gemini } = server({ dailyVideoSec: 6 * 3600, dailyRequests: 10, maxVideoSec: 1800, dailyAutoRequests: 1 });
     const pc = device(db, client);
     await pc.startAll();
@@ -216,8 +219,8 @@ describe('학습 자료 자동 생성 대기열', () => {
 
   it('Google 한도 초과로 보류: 대기열 멈춤 → 초기화 뒤 그 영상을 먼저 1번만 이어서 → 또 보류되면 실패로 두고 더 보내지 않음', async () => {
     const { db } = createTestRepos();
-    await seedVideo(db, 'q', 'mockExhaus1', '[Day 1] quota', { transcript: ['1. I could use a break.'] });
-    await seedVideo(db, 'o', 'otherVideo1', '[Day 2] other', { transcript: ['1. I could use a break.'] });
+    await seedVideo(db, 'q', 'mockExhaus1', '[Day 101] quota', { transcript: ['1. I could use a break.'] });
+    await seedVideo(db, 'o', 'otherVideo1', '[Day 102] other', { transcript: ['1. I could use a break.'] });
     let t = Date.parse(T);
     const { client, gemini } = server({ dailyVideoSec: 6 * 3600, dailyRequests: 10, maxVideoSec: 1800 }, () => t);
     const pc = device(db, client, () => new Date(t));
@@ -282,7 +285,7 @@ describe('학습 자료 자동 생성 대기열', () => {
 
   it('자막 단계가 아닌 실패(문장·Chunk 등)는 그대로 실패로 남는다', async () => {
     const { db } = createTestRepos();
-    await seedVideo(db, 'bad', 'mockFail003', '[Day 1] bad', { transcript: ['1. I could use a break.'] });
+    await seedVideo(db, 'bad', 'mockFail003', '[Day 101] bad', { transcript: ['1. I could use a break.'] });
     const { client } = server();
     const pc = device(db, client);
     await pc.startAll();
@@ -293,7 +296,7 @@ describe('학습 자료 자동 생성 대기열', () => {
   it('여러 기기: 다른 기기가 같은 영상을 처리해도 Gemini 생성은 1번 (서버 보관 결과 재사용), 학습 기록은 기기별', async () => {
     const A = createTestRepos().db;
     const B = createTestRepos().db;
-    for (const db of [A, B]) await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 11] 필요해', { transcript: DAY11 });
+    for (const db of [A, B]) await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 111] 필요해', { transcript: DAY11 });
     const { client, gemini } = server();
     const pa = device(A, client);
     const pb = device(B, client);
@@ -310,7 +313,7 @@ describe('학습 자료 자동 생성 대기열', () => {
 
   it('앱이 닫혀 중단돼도 같은 요청 식별자로 이어서 확인 (새로 생성하지 않음)', async () => {
     const { db } = createTestRepos();
-    await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 11] 필요해', { transcript: DAY11 });
+    await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 111] 필요해', { transcript: DAY11 });
     const { client, gemini, sent } = server();
     // 첫 기기 세션: 요청을 보낸 직후 앱이 닫힘 (조회 전에 멈춤)
     const ac = new AbortController();
@@ -394,7 +397,7 @@ describe('핵심 Chunk(강사가 가르친 표현)와 추가 덩어리 표현(AI
 
   it('저장: 새 추가 표현은 chunkRole=extra, 대화문에서 kind=extra·빈칸 2순위, 핵심 Chunk는 kind=core·1순위', async () => {
     const { db } = createTestRepos();
-    await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 11] 필요해', { transcript: ['Today\'s expression is could use.', ...sentences.map((s) => `${s.number}. ${s.text}`)] });
+    await seedVideo(db, 'v1', 'eNODHkrNuDA', '[Day 111] 필요해', { transcript: ['Today\'s expression is could use.', ...sentences.map((s) => `${s.number}. ${s.text}`)] });
     const { client } = server();
     await device(db, client).enqueue(['v1']);
     await device(db, client).start();

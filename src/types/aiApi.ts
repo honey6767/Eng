@@ -158,6 +158,8 @@ export type AiFailureCode =
   | 'expired'
   /** 같은 식별자에 다른 요청 내용 */
   | 'key_conflict'
+  /** Day 1~100 영상의 자료는 사용자가 누른 요청만 (자동 요청 거절, Gemini 호출 안 함 — 예전 앱 보호) */
+  | 'day_manual_only'
   | 'bad_request'
   | 'ledger_unavailable';
 

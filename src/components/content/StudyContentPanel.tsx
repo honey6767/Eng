@@ -48,6 +48,7 @@ export function StudyContentPanel({
   expressions,
   dialogues,
   onSeek,
+  numbering,
 }: {
   video: Video;
   day: DayAssignment | undefined;
@@ -56,6 +57,8 @@ export function StudyContentPanel({
   expressions: Expression[];
   dialogues: Dialogue[];
   onSeek?: (sec: number) => void;
+  /** Day 자료(사용자 문장): 요청 때의 문장 번호 (1번부터, 사용자가 정한 순서). 주면 이 문장들을 모두 이 번호로 보여 준다 */
+  numbering?: Map<string, number>;
 }) {
   const [onlySelected, setOnlySelected] = useState(false);
   const series = seriesOf(video, day);
@@ -67,11 +70,13 @@ export function StudyContentPanel({
   const coreParts = patterns.map((p) => p.parts);
   const hasCore = patterns.length > 0;
   const linkedIds = new Set([...items.filter((i) => i.kind === 'chunk').map((c) => c.sentenceId), ...cores.flatMap((c) => (c.occurrences ?? []).map((o) => o.sentenceId))].filter(Boolean));
-  const shown = sentences
-    .filter((s) => s.origin === 'ai_extracted' || linkedIds.has(s.id))
-    .sort((a, b) => (a.aiNumber ?? a.order) - (b.aiNumber ?? b.order) || a.order - b.order);
+  const shown = numbering
+    ? sentences.filter((s) => numbering.has(s.id)).sort((a, b) => numbering.get(a.id)! - numbering.get(b.id)!)
+    : sentences
+        .filter((s) => s.origin === 'ai_extracted' || linkedIds.has(s.id))
+        .sort((a, b) => (a.aiNumber ?? a.order) - (b.aiNumber ?? b.order) || a.order - b.order);
   const byId = new Map(shown.map((s) => [s.id, s]));
-  const numberOf = new Map(shown.map((s) => [s.id, s.aiNumber ?? s.order]));
+  const numberOf = new Map(shown.map((s) => [s.id, numbering?.get(s.id) ?? s.aiNumber ?? s.order]));
   // 핵심 Chunk 카드 — 저장된 핵심 Chunk, 또는 예전 기준 자료에서 화면에서만 추론한 핵심 Chunk
   const cards = patterns.map((p) => {
     const variants = variantsByCore.get(p.id) ?? [];
@@ -225,14 +230,17 @@ export function StudyContentPanel({
             return (
               <li key={s.id} className="rounded-2xl border border-line p-3.5" data-testid="content-sentence">
                 <div className="flex items-start gap-2.5">
-                  <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-brand text-sm font-bold text-white">{s.aiNumber ?? s.order}</span>
+                  <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-brand text-sm font-bold text-white">{numberOf.get(s.id)}</span>
                   <div className="min-w-0 flex-1">
                     <p className="en text-[17px] font-semibold leading-snug text-ink">
                       <HighlightedText text={s.english} cores={coreParts} chunks={own.map((c) => extraViewOf(c, exprById.get(c.expressionId)).parts)} />
                     </p>
                     {s.korean && <p className="mt-0.5 text-sm text-muted">{s.korean}</p>}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <SelectToggle on={!!s.selected} label="암기할 문장" testId="select-sentence" disabled={s.origin !== 'ai_extracted'} onChange={(v) => void contentStore.setSentenceSelected(s.id, v)} />
+                      {/* '암기할 문장' 표시는 예전부터 AI 문장에만 저장된다. Day 자료(사용자 문장) 화면에서는 누를 수 없는 버튼을 보여 주지 않는다 */}
+                      {!(numbering && s.origin !== 'ai_extracted') && (
+                        <SelectToggle on={!!s.selected} label="암기할 문장" testId="select-sentence" disabled={s.origin !== 'ai_extracted'} onChange={(v) => void contentStore.setSentenceSelected(s.id, v)} />
+                      )}
                       {s.origin !== 'ai_extracted' && <Badge>직접 고른 핵심 문장</Badge>}
                       {s.timestampSec != null && onSeek && (
                         <button type="button" className="text-xs text-brand underline underline-offset-2" onClick={() => onSeek(s.timestampSec!)}>

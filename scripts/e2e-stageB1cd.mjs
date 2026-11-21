@@ -83,11 +83,11 @@ const seed = (page) =>
           const now = '2026-11-15T09:00:00.000Z';
           const v = (id, yt, title, dur, i) => ({ id, createdAt: now, updatedAt: now, playlistId: null, youtubeVideoId: yt, title, url: null, thumbnailUrl: null, durationSec: dur, orderIndex: i, randomOrderKey: i / 10, status: 'new', completedAt: null, sources: [{ kind: 'manual', addedAt: now }], channelTitle: null, captionCheck: null, metadataSource: 'manual' });
           const vs = tx.objectStore('videos');
-          vs.add(v('cd-ok', 'aaaaaaaaaaa', '[Day 11] 보통 영상', 295, 0));
-          vs.add(v('cd-low', 'mockLow0001', '[Day 12] 전사 부족', 300, 1));
-          vs.add(v('cd-fail', 'mockFail001', '[Day 13] AI 실패', 240, 2));
+          vs.add(v('cd-ok', 'aaaaaaaaaaa', '[Day 111] 보통 영상', 295, 0));
+          vs.add(v('cd-low', 'mockLow0001', '[Day 112] 전사 부족', 300, 1));
+          vs.add(v('cd-fail', 'mockFail001', '[Day 113] AI 실패', 240, 2));
           vs.add(v('cd-over', 'mockOver001', '보너스 영상', 200, 3));
-          vs.add(v('cd-has', 'hhhhhhhhhhh', '[Day 15] 자막 있음', 260, 4));
+          vs.add(v('cd-has', 'hhhhhhhhhhh', '[Day 115] 자막 있음', 260, 4));
           vs.add(v('cd-long', 'lllllllllll', '긴 강의', 32400, 5));
           tx.objectStore('transcripts').add({ id: 'cd-tr-has', createdAt: now, updatedAt: now, videoId: 'cd-has', source: 'manual_paste', status: 'success', rawText: 'hello', segments: [], format: 'plain' });
           tx.objectStore('expressions').add({ id: 'cd-ex-mine', createdAt: now, updatedAt: now, normalizedKey: 'could use', text: 'could use', meaningKo: '내가 적은 뜻', sourceRefs: [], isFavorite: true, isMarkedDifficult: true });
@@ -199,7 +199,7 @@ async function main() {
     const after4 = await dumpDb(page);
     const days = Object.fromEntries(after4.tables.dayAssignments.map((d) => [d.videoId, d]));
     check('제안 모두 확정 + 번호 없는 영상 직접 입력', ['cd-ok', 'cd-low', 'cd-fail', 'cd-has'].every((v) => days[v]?.status === 'confirmed') && days['cd-over']?.dayNumber === 14 && days['cd-over']?.status === 'confirmed');
-    check('확정하면 그 영상의 학습 대상이 Day로', after4.tables.learningItems.filter((l) => l.videoId === 'cd-ok').every((l) => l.sourceType === 'day' && l.dayNumber === 11));
+    check('확정하면 그 영상의 학습 대상이 Day로', after4.tables.learningItems.filter((l) => l.videoId === 'cd-ok').every((l) => l.sourceType === 'day' && l.dayNumber === 111));
 
     // ── 5. 기존 데이터 보존 ──
     const pk = (t, r) => String(t === 'appMeta' ? r.key : r.id);
